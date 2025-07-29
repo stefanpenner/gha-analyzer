@@ -1,13 +1,51 @@
+#!/usr/bin/env node
+
+/**
+ * GitHub Actions Performance Profiler
+ * 
+ * Analyzes GitHub Actions workflow performance and generates Chrome Tracing format
+ * output for visualization in Perfetto.dev or Chrome DevTools.
+ * 
+ * Features:
+ * - Timeline visualization of jobs and steps
+ * - Performance metrics and analysis
+ * - Critical path identification
+ * - Clickable links to GitHub Actions and PRs
+ * - Chrome Tracing format for advanced analysis
+ * 
+ * Usage: node main.mjs <pr_url> [github_token]
+ *        GITHUB_TOKEN environment variable can be used instead of token argument
+ * 
+ * @author GitHub Actions Performance Team
+ * @version 1.0.0
+ */
+
 import fs, { writeFileSync } from 'fs';
 import url from 'url';
 
-const GITHUB_TOKEN = process.argv[3];
+// =============================================================================
+// CONFIGURATION AND VALIDATION
+// =============================================================================
+
+const GITHUB_TOKEN = process.argv[3] || process.env.GITHUB_TOKEN;
 if (!GITHUB_TOKEN) {
-  console.error('Usage: node script.mjs <pr_url> <token>');
+  console.error('Usage: node main.mjs <pr_url> [token]');
+  console.error('');
+  console.error('GitHub token can be provided as:');
+  console.error('  1. Command line argument: node main.mjs <pr_url> <token>');
+  console.error('  2. Environment variable: export GITHUB_TOKEN=<token>');
   process.exit(1);
 }
 
-// Helper functions
+// =============================================================================
+// UTILITY FUNCTIONS
+// =============================================================================
+
+/**
+ * Parses a GitHub PR URL and extracts owner, repo, and PR number
+ * @param {string} prUrl - GitHub PR URL
+ * @returns {Object} - {owner, repo, prNumber}
+ */
 function parsePRUrl(prUrl) {
   const parsed = new URL(prUrl);
   const pathParts = parsed.pathname.split('/').filter(Boolean);
@@ -22,6 +60,11 @@ function parsePRUrl(prUrl) {
   };
 }
 
+/**
+ * Makes authenticated requests to GitHub API
+ * @param {string} url - API endpoint URL
+ * @returns {Promise<Object>} - JSON response
+ */
 async function fetchWithAuth(url) {
   const headers = {
     Authorization: `token ${GITHUB_TOKEN}`,
@@ -84,6 +127,14 @@ async function fetchWithPagination(url) {
   return allItems;
 }
 
+// =============================================================================
+// METRICS AND DATA PROCESSING
+// =============================================================================
+
+/**
+ * Initializes metrics tracking object
+ * @returns {Object} - Empty metrics object
+ */
 function initializeMetrics() {
   return {
     totalRuns: 0,
@@ -115,7 +166,25 @@ function findEarliestTimestamp(allRuns) {
   return earliest;
 }
 
-async function processWorkflowRun(run, runIndex, processId, earliestTime, metrics, traceEvents, jobStartTimes, jobEndTimes) {
+// =============================================================================
+// TRACE EVENT PROCESSING
+// =============================================================================
+
+/**
+ * Processes a workflow run and generates trace events
+ * @param {Object} run - GitHub workflow run object
+ * @param {number} runIndex - Index of the run
+ * @param {number} processId - Process ID for trace events
+ * @param {number} earliestTime - Earliest timestamp for normalization
+ * @param {Object} metrics - Metrics tracking object
+ * @param {Array} traceEvents - Array to store trace events
+ * @param {Array} jobStartTimes - Array to track job start times
+ * @param {Array} jobEndTimes - Array to track job end times
+ * @param {string} owner - Repository owner
+ * @param {string} repo - Repository name
+ * @param {string} prNumber - PR number
+ */
+async function processWorkflowRun(run, runIndex, processId, earliestTime, metrics, traceEvents, jobStartTimes, jobEndTimes, owner, repo, prNumber) {
   console.error(`Processing run ${run.id}: ${run.name || 'unnamed'}...`);
   
   // Update run metrics
@@ -160,6 +229,8 @@ async function processWorkflowRun(run, runIndex, processId, earliestTime, metric
   
   // Add workflow run event on overview thread
   const workflowUrl = `https://github.com/${run.repository.owner.login}/${run.repository.name}/actions/runs/${run.id}`;
+  const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+  
   traceEvents.push({
     name: `Workflow: ${run.name || `Run ${run.id}`}`,
     ph: 'X',
@@ -175,17 +246,21 @@ async function processWorkflowRun(run, runIndex, processId, earliestTime, metric
       duration_ms: runDurationMs,
       job_count: jobs.length,
       url: workflowUrl,
+      github_url: workflowUrl,
+      pr_url: prUrl,
+      pr_number: prNumber,
+      repository: `${owner}/${repo}`
     }
   });
   
   // Process jobs (each job gets its own thread with steps)
   for (const [jobIndex, job] of jobs.entries()) {
     const jobThreadId = jobIndex + 10; // Start from thread 10 to keep workflow overview first
-    await processJob(job, jobIndex, run, jobThreadId, processId, earliestTime, runStartTs, runEndTs, metrics, traceEvents, jobStartTimes, jobEndTimes);
+    await processJob(job, jobIndex, run, jobThreadId, processId, earliestTime, runStartTs, runEndTs, metrics, traceEvents, jobStartTimes, jobEndTimes, prUrl);
   }
 }
 
-async function processJob(job, jobIndex, run, jobThreadId, processId, earliestTime, runStartTs, runEndTs, metrics, traceEvents, jobStartTimes, jobEndTimes) {
+async function processJob(job, jobIndex, run, jobThreadId, processId, earliestTime, runStartTs, runEndTs, metrics, traceEvents, jobStartTimes, jobEndTimes, prUrl) {
   if (!job.started_at || !job.completed_at) {
     console.error(`  Skipping job ${job.name} - missing timing data`);
     return;
@@ -259,17 +334,20 @@ async function processJob(job, jobIndex, run, jobThreadId, processId, earliestTi
       step_count: job.steps.length,
       url: jobUrl,
       github_url: jobUrl,
+      pr_url: prUrl,
+      pr_number: prUrl.split('/').pop(),
+      repository: prUrl.split('/').slice(-4, -2).join('/'),
       job_id: job.id
     }
   });
   
   // Process steps on the same thread as the job
   for (const step of job.steps) {
-    processStep(step, job, run, jobThreadId, processId, earliestTime, jobStartTs, jobEndTs, metrics, traceEvents);
+    processStep(step, job, run, jobThreadId, processId, earliestTime, jobStartTs, jobEndTs, metrics, traceEvents, prUrl);
   }
 }
 
-function processStep(step, job, run, jobThreadId, processId, earliestTime, jobStartTs, jobEndTs, metrics, traceEvents) {
+function processStep(step, job, run, jobThreadId, processId, earliestTime, jobStartTs, jobEndTs, metrics, traceEvents, prUrl) {
   if (!step.started_at || !step.completed_at) return;
   
   // Update step metrics
@@ -318,6 +396,9 @@ function processStep(step, job, run, jobThreadId, processId, earliestTime, jobSt
       job_name: job.name,
       url: stepUrl,
       github_url: stepUrl,
+      pr_url: prUrl,
+      pr_number: prUrl.split('/').pop(),
+      repository: prUrl.split('/').slice(-4, -2).join('/'),
       step_number: step.number
     }
   });
@@ -443,6 +524,16 @@ function analyzeSlowSteps(metrics, limit = 5) {
     .slice(0, limit);
 }
 
+// =============================================================================
+// VISUALIZATION AND OUTPUT
+// =============================================================================
+
+/**
+ * Creates a clickable terminal link using ANSI escape sequences
+ * @param {string} url - URL to link to
+ * @param {string} text - Display text (defaults to URL)
+ * @returns {string} - ANSI formatted clickable link
+ */
 function makeClickableLink(url, text = null) {
   // ANSI escape sequence for clickable links (OSC 8)
   // Format: \u001b]8;;URL\u0007TEXT\u001b]8;;\u0007
@@ -625,11 +716,49 @@ function outputResults(owner, repo, prNumber, branchName, headSha, metrics, trac
   
   // Use already generated performance analysis data
 
+  // Add trace naming metadata at the beginning
+  const traceTitle = `GitHub Actions: ${owner}/${repo} PR #${prNumber}`;
+  const tracePrUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+  const traceActionsUrl = `https://github.com/${owner}/${repo}/actions`;
+  
+  const traceMetadata = [
+    {
+      name: 'trace_metadata',
+      ph: 'M',
+      pid: 0,
+      tid: 0,
+      ts: 0,
+      args: {
+        name: traceTitle,
+        trace_name: traceTitle,
+        title: traceTitle,
+        pr_url: tracePrUrl,
+        github_url: tracePrUrl,
+        actions_url: traceActionsUrl,
+        repository: `${owner}/${repo}`,
+        pr_number: prNumber,
+        branch: branchName,
+        commit: headSha
+      }
+    },
+    {
+      name: 'process_name', 
+      ph: 'M',
+      pid: 0,
+              args: { 
+          name: traceTitle,
+          url: tracePrUrl,
+          github_url: tracePrUrl
+        }
+    }
+  ];
+
   // Output JSON for Perfetto
   const output = {
     displayTimeUnit: 'ms',
-    traceEvents: traceEvents.sort((a, b) => a.ts - b.ts),
+    traceEvents: [...traceMetadata, ...traceEvents.sort((a, b) => a.ts - b.ts)],
     otherData: {
+      trace_title: traceTitle,
       pr_number: prNumber,
       head_sha: headSha,
       branch_name: branchName,
@@ -717,6 +846,13 @@ function getStepIcon(stepName, conclusion) {
   return '▶️'; // Default step icon
 }
 
+// =============================================================================
+// MAIN EXECUTION
+// =============================================================================
+
+/**
+ * Main function that orchestrates the entire profiling process
+ */
 async function main() {
   // Parse PR URL and validate inputs
   const prUrl = process.argv[2];
@@ -756,7 +892,7 @@ async function main() {
   // Process each workflow run (each run gets its own process)
   for (const [runIndex, run] of allRuns.entries()) {
     const workflowProcessId = runIndex + 1;
-    await processWorkflowRun(run, runIndex, workflowProcessId, earliestTime, metrics, traceEvents, jobStartTimes, jobEndTimes);
+    await processWorkflowRun(run, runIndex, workflowProcessId, earliestTime, metrics, traceEvents, jobStartTimes, jobEndTimes, owner, repo, prNumber);
   }
 
   // Generate concurrency counter events (use process 1 for global metrics)

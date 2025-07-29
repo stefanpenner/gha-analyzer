@@ -2,12 +2,44 @@
   "name": "github-actions-profiler",
   "version": "1.0.0",
   "type": "module",
-  "description": "GitHub Actions performance profiler with Perfetto trace output",
+  "description": "Analyze GitHub Actions workflow performance and generate Chrome Tracing format output for Perfetto.dev visualization",
   "main": "main.mjs",
-  "license": "MIT",
+  "bin": {
+    "github-actions-profiler": "./main.mjs"
+  },
   "scripts": {
+    "start": "node main.mjs",
     "test": "node --test test/*.test.mjs",
-    "test:watch": "node --test --watch test/*.test.mjs"
+    "test:watch": "node --test --watch test/*.test.mjs",
+    "test:helpers": "node --test test/helpers.test.mjs",
+    "test:integration": "node --test test/main.test.mjs",
+    "lint": "echo 'No linter configured - consider adding ESLint'",
+    "clean": "rm -f *.json trace-*.json output-*.json"
+  },
+  "keywords": [
+    "github-actions",
+    "performance",
+    "profiling",
+    "chrome-tracing",
+    "perfetto",
+    "ci-cd",
+    "devtools",
+    "analysis",
+    "visualization",
+    "workflow"
+  ],
+  "author": "GitHub Actions Performance Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/github-actions-profiler.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/github-actions-profiler/issues"
+  },
+  "homepage": "https://github.com/your-org/github-actions-profiler#readme",
+  "engines": {
+    "node": ">=18.0.0"
   },
   "dependencies": {},
   "devDependencies": {
