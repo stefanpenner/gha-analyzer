@@ -1,0 +1,16 @@
+{
+  "name": "github-actions-profiler",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "GitHub Actions performance profiler with Perfetto trace output",
+  "main": "main.mjs",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "test:watch": "node --test --watch test/*.test.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "nock": "^13.4.0"
+  }
+} 
