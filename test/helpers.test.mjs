@@ -185,11 +185,14 @@ describe('Helper Functions', () => {
         totalSteps: 0,
         failedSteps: 0,
         jobDurations: [],
+        jobNames: [],
+        jobUrls: [],
         stepDurations: [],
         runnerTypes: new Set(),
         totalDuration: 0,
         longestJob: { name: '', duration: 0 },
-        shortestJob: { name: '', duration: Infinity }
+        shortestJob: { name: '', duration: Infinity },
+        jobTimeline: []
       };
     }
 
@@ -433,11 +436,11 @@ describe('Helper Functions', () => {
     test('should identify slowest steps correctly', () => {
       const metrics = {
         stepDurations: [
-          { name: '📥 Checkout code', duration: 2000 },
-          { name: '🧪 Run tests', duration: 45000 },
-          { name: '⚙️ Setup Node.js', duration: 8000 },
-          { name: '🔨 Build app', duration: 25000 },
-          { name: '📤 Upload artifacts', duration: 3000 }
+          { name: '📥 Checkout code', duration: 2000, url: 'url1', jobName: 'setup' },
+          { name: '🧪 Run tests', duration: 45000, url: 'url2', jobName: 'test' },
+          { name: '⚙️ Setup Node.js', duration: 8000, url: 'url3', jobName: 'setup' },
+          { name: '🔨 Build app', duration: 25000, url: 'url4', jobName: 'build' },
+          { name: '📤 Upload artifacts', duration: 3000, url: 'url5', jobName: 'deploy' }
         ]
       };
 
@@ -446,6 +449,8 @@ describe('Helper Functions', () => {
       assert.strictEqual(slowSteps.length, 3);
       assert.strictEqual(slowSteps[0].name, '🧪 Run tests');
       assert.strictEqual(slowSteps[0].duration, 45000);
+      assert.strictEqual(slowSteps[0].url, 'url2');
+      assert.strictEqual(slowSteps[0].jobName, 'test');
       assert.strictEqual(slowSteps[1].name, '🔨 Build app');
       assert.strictEqual(slowSteps[1].duration, 25000);
       assert.strictEqual(slowSteps[2].name, '⚙️ Setup Node.js');
@@ -455,11 +460,11 @@ describe('Helper Functions', () => {
     test('should respect limit parameter', () => {
       const metrics = {
         stepDurations: [
-          { name: 'Step 1', duration: 1000 },
-          { name: 'Step 2', duration: 2000 },
-          { name: 'Step 3', duration: 3000 },
-          { name: 'Step 4', duration: 4000 },
-          { name: 'Step 5', duration: 5000 }
+          { name: 'Step 1', duration: 1000, url: 'url1', jobName: 'job1' },
+          { name: 'Step 2', duration: 2000, url: 'url2', jobName: 'job2' },
+          { name: 'Step 3', duration: 3000, url: 'url3', jobName: 'job3' },
+          { name: 'Step 4', duration: 4000, url: 'url4', jobName: 'job4' },
+          { name: 'Step 5', duration: 5000, url: 'url5', jobName: 'job5' }
         ]
       };
 
@@ -498,6 +503,134 @@ describe('Helper Functions', () => {
       
       // Empty string falls back to URL due to || operator
       assert.strictEqual(result, `\u001b]8;;${url}\u0007${url}\u001b]8;;\u0007`);
+    });
+  });
+
+  describe('findOverlappingJobs', () => {
+    function findOverlappingJobs(jobs) {
+      const overlaps = [];
+      for (let i = 0; i < jobs.length; i++) {
+        for (let j = i + 1; j < jobs.length; j++) {
+          const job1 = jobs[i];
+          const job2 = jobs[j];
+          
+          // Check if jobs overlap in time
+          if (job1.startTime < job2.endTime && job2.startTime < job1.endTime) {
+            overlaps.push([job1, job2]);
+          }
+        }
+      }
+      return overlaps;
+    }
+
+    test('should find overlapping jobs', () => {
+      const jobs = [
+        { name: 'Job1', startTime: 1000, endTime: 3000 },
+        { name: 'Job2', startTime: 2000, endTime: 4000 }, // Overlaps with Job1
+        { name: 'Job3', startTime: 5000, endTime: 6000 }  // No overlap
+      ];
+      
+      const overlaps = findOverlappingJobs(jobs);
+      assert.strictEqual(overlaps.length, 1);
+      assert.strictEqual(overlaps[0][0].name, 'Job1');
+      assert.strictEqual(overlaps[0][1].name, 'Job2');
+    });
+
+    test('should handle no overlaps', () => {
+      const jobs = [
+        { name: 'Job1', startTime: 1000, endTime: 2000 },
+        { name: 'Job2', startTime: 3000, endTime: 4000 },
+        { name: 'Job3', startTime: 5000, endTime: 6000 }
+      ];
+      
+      const overlaps = findOverlappingJobs(jobs);
+      assert.strictEqual(overlaps.length, 0);
+    });
+  });
+
+  describe('findCriticalPath', () => {
+    function findCriticalPath(jobs) {
+      if (jobs.length === 0) return [];
+      
+      // For pipelines without explicit dependencies, the critical path is approximated as:
+      // The path from pipeline start to end that represents the longest blocking duration
+      
+      // Sort jobs by start time
+      const sortedByStart = [...jobs].sort((a, b) => a.startTime - b.startTime);
+      const pipelineStart = sortedByStart[0].startTime;
+      const pipelineEnd = Math.max(...sortedByStart.map(job => job.endTime));
+      
+      // Find the job that ends latest (likely the bottleneck)
+      const bottleneckJob = sortedByStart.reduce((longest, job) => 
+        job.endTime > longest.endTime ? job : longest
+      );
+      
+      // Simple heuristic: if one job dominates the timeline, it's likely the critical path
+      const bottleneckDuration = bottleneckJob.endTime - bottleneckJob.startTime;
+      const totalPipelineDuration = pipelineEnd - pipelineStart;
+      
+      // If the bottleneck job takes up most of the pipeline duration, it's the critical path
+      if (bottleneckDuration > totalPipelineDuration * 0.7) {
+        return [bottleneckJob];
+      }
+      
+      // Otherwise, find the longest sequential chain (original algorithm as fallback)
+      let criticalPath = [sortedByStart[0]];
+      
+      for (let i = 1; i < sortedByStart.length; i++) {
+        const currentJob = sortedByStart[i];
+        const lastInPath = criticalPath[criticalPath.length - 1];
+        
+        // If this job starts after the last one ends, it could be in the critical path
+        if (currentJob.startTime >= lastInPath.endTime) {
+          criticalPath.push(currentJob);
+        }
+      }
+      
+      return criticalPath;
+    }
+
+    test('should find dominant job as critical path', () => {
+      const jobs = [
+        { name: 'FastJob1', startTime: 1000, endTime: 2000 },
+        { name: 'FastJob2', startTime: 2000, endTime: 3000 },
+        { name: 'DominantJob', startTime: 1500, endTime: 10000 }, // Takes 85% of pipeline time
+        { name: 'FastJob3', startTime: 3000, endTime: 4000 }
+      ];
+      
+      const criticalPath = findCriticalPath(jobs);
+      assert.strictEqual(criticalPath.length, 1);
+      assert.strictEqual(criticalPath[0].name, 'DominantJob');
+    });
+
+    test('should find sequential critical path when no dominant job', () => {
+      const jobs = [
+        { name: 'Job1', startTime: 1000, endTime: 2000 },
+        { name: 'Job2', startTime: 2000, endTime: 3000 }, // Sequential after Job1
+        { name: 'Job3', startTime: 1500, endTime: 2500 }  // Overlaps, not in critical path
+      ];
+      
+      const criticalPath = findCriticalPath(jobs);
+      assert.strictEqual(criticalPath.length, 2);
+      assert.strictEqual(criticalPath[0].name, 'Job1');
+      assert.strictEqual(criticalPath[1].name, 'Job2');
+    });
+
+    test('should handle single job', () => {
+      const jobs = [
+        { name: 'Job1', startTime: 1000, endTime: 2000 }
+      ];
+      
+      const criticalPath = findCriticalPath(jobs);
+      assert.strictEqual(criticalPath.length, 1);
+      assert.strictEqual(criticalPath[0].name, 'Job1');
+    });
+
+    test('should handle empty jobs array', () => {
+      const jobs = [];
+      
+      const criticalPath = findCriticalPath(jobs);
+      assert.strictEqual(criticalPath.length, 0);
     });
   });
 }); 

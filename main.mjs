@@ -12,7 +12,7 @@ function parsePRUrl(prUrl) {
   const parsed = new URL(prUrl);
   const pathParts = parsed.pathname.split('/').filter(Boolean);
   if (pathParts.length !== 4 || pathParts[2] !== 'pull') {
-    console.error('Invalid PR URL');
+    console.error(`Invalid ${makeClickableLink(prUrl, 'PR URL')}`);
     process.exit(1);
   }
   return {
@@ -37,9 +37,12 @@ async function fetchWithAuth(url) {
   return response.json();
 }
 
-function extractPRInfo(prData) {
+function extractPRInfo(prData, prUrl = null) {
   if (!prData.head || !prData.base) {
-    console.error('Invalid PR response - missing head or base information');
+    const errorMsg = prUrl 
+      ? `Invalid ${makeClickableLink(prUrl, 'PR')} response - missing head or base information`
+      : 'Invalid PR response - missing head or base information';
+    console.error(errorMsg);
     process.exit(1);
   }
   return {
@@ -97,7 +100,8 @@ function initializeMetrics() {
     runnerTypes: new Set(),
     totalDuration: 0,
     longestJob: { name: '', duration: 0 },
-    shortestJob: { name: '', duration: Infinity }
+    shortestJob: { name: '', duration: Infinity },
+    jobTimeline: []
   };
 }
 
@@ -223,13 +227,22 @@ async function processJob(job, jobIndex, run, jobThreadId, processId, earliestTi
   // Track for concurrency
   jobStartTimes.push({ ts: jobStartTs, type: 'start' });
   jobEndTimes.push({ ts: jobEndTs, type: 'end' });
+  const jobIcon = job.conclusion === 'success' ? '✅' : job.conclusion === 'failure' ? '❌' : '⏸️';
+  const jobUrl = job.html_url || `https://github.com/${run.repository.owner.login}/${run.repository.name}/actions/runs/${run.id}/job/${job.id}`;
+
+  // Add to timeline for visualization
+  metrics.jobTimeline.push({
+    name: job.name,
+    startTime: jobStartTs,
+    endTime: jobEndTs,
+    conclusion: job.conclusion,
+    url: jobUrl
+  });
   
   // Add thread metadata for this job
-  const jobIcon = job.conclusion === 'success' ? '✅' : job.conclusion === 'failure' ? '❌' : '⏸️';
   addThreadMetadata(traceEvents, processId, jobThreadId, `${jobIcon} ${job.name}`, jobIndex + 10);
   
   // Add job event (this shows the overall job duration)
-  const jobUrl = job.html_url || `https://github.com/${run.repository.owner.login}/${run.repository.name}/actions/runs/${run.id}/job/${job.id}`;
   traceEvents.push({
     name: `Job: ${job.name}`,
     ph: 'X',
@@ -280,14 +293,16 @@ function processStep(step, job, run, jobThreadId, processId, earliestTime, jobSt
   const stepIcon = getStepIcon(step.name, step.conclusion);
   const stepCategory = categorizeStep(step.name);
   
+  // Add step event  
+  const stepUrl = job.html_url || `https://github.com/${run.repository.owner.login}/${run.repository.name}/actions/runs/${run.id}/job/${job.id}`;
+  
   // Update metrics
   metrics.stepDurations.push({
     name: `${stepIcon} ${step.name}`,
-    duration: stepDurationMs
+    duration: stepDurationMs,
+    url: stepUrl,
+    jobName: job.name
   });
-  
-  // Add step event  
-  const stepUrl = job.html_url || `https://github.com/${run.repository.owner.login}/${run.repository.name}/actions/runs/${run.id}/job/${job.id}`;
   traceEvents.push({
     name: `${stepIcon} ${step.name}`,
     ph: 'X',
@@ -404,21 +419,6 @@ function calculateFinalMetrics(metrics, totalRuns, jobStartTimes, jobEndTimes) {
   };
 }
 
-function generateRecommendations(metrics, finalMetrics) {
-  const recommendations = [];
-  
-
-  if (metrics.longestJob.duration > finalMetrics.avgJobDuration * 3 && finalMetrics.avgJobDuration > 0) {
-    recommendations.push({
-      title: "Investigate Slowest Job",
-      description: `"${metrics.longestJob.name}" takes ${(metrics.longestJob.duration/1000).toFixed(1)}s`,
-      impact: "MEDIUM"
-    });
-  }
-  
-  return recommendations;
-}
-
 function analyzeSlowJobs(metrics, limit = 5) {
   // Create job data with names and durations
   const jobData = [];
@@ -450,7 +450,124 @@ function makeClickableLink(url, text = null) {
   return `\u001b]8;;${url}\u0007${displayText}\u001b]8;;\u0007`;
 }
 
-function outputResults(owner, repo, prNumber, branchName, headSha, metrics, recommendations, traceEvents) {
+function generateTimelineVisualization(metrics, repoActionsUrl) {
+  if (!metrics.jobTimeline || metrics.jobTimeline.length === 0) {
+    return '';
+  }
+
+  const timeline = metrics.jobTimeline;
+  const maxDuration = Math.max(...timeline.map(job => job.endTime - job.startTime));
+  const scale = 60; // Terminal width for timeline bars
+  
+  console.error(`\n${makeClickableLink(repoActionsUrl, 'Pipeline Timeline')} (${timeline.length} jobs):`);
+  console.error('┌' + '─'.repeat(scale + 2) + '┐');
+  
+  // Sort jobs by start time to show execution order
+  const sortedJobs = [...timeline].sort((a, b) => a.startTime - b.startTime);
+  const earliestStart = sortedJobs[0].startTime;
+  const latestEnd = Math.max(...sortedJobs.map(job => job.endTime));
+  const totalDuration = latestEnd - earliestStart;
+  
+  sortedJobs.forEach((job, index) => {
+    const relativeStart = job.startTime - earliestStart;
+    const duration = job.endTime - job.startTime;
+    const durationSec = duration / 1000000; // Convert microseconds to seconds
+    
+    // Calculate positions in the timeline
+    const startPos = Math.floor((relativeStart / totalDuration) * scale);
+    const barLength = Math.max(1, Math.floor((duration / totalDuration) * scale));
+    
+    // Create the timeline bar with better formatting
+    const padding = ' '.repeat(Math.max(0, startPos));
+    const statusIcon = job.conclusion === 'success' ? '█' : job.conclusion === 'failure' ? '▓' : '░';
+    const actualBarLength = Math.max(1, barLength);
+    const bar = statusIcon.repeat(actualBarLength);
+    const remaining = ' '.repeat(Math.max(0, scale - startPos - actualBarLength));
+    
+    // Job name with clickable link and duration
+    const jobLink = job.url ? makeClickableLink(job.url, job.name) : job.name;
+    const timeInfo = `${durationSec.toFixed(1)}s`;
+    
+    console.error(`│${padding}${bar}${remaining}  │ ${jobLink} (${timeInfo})`);
+  });
+  
+  console.error('└' + '─'.repeat(scale + 2) + '┘');
+  
+  // Timeline legend
+  console.error('Legend: █ Success  ▓ Failed  ░ Cancelled/Skipped');
+  
+  // Show concurrency insights
+  const overlappingJobs = findOverlappingJobs(sortedJobs);
+  if (overlappingJobs.length > 0) {
+    console.error(`Concurrent execution detected: ${overlappingJobs.length} overlapping job pairs`);
+  }
+  
+  // Show critical path (longest sequential chain)
+  const criticalPath = findCriticalPath(sortedJobs);
+  if (criticalPath.length > 1) {
+    const criticalDuration = criticalPath.reduce((sum, job) => sum + (job.endTime - job.startTime), 0) / 1000000;
+    console.error(`Critical path: ${criticalPath.length} jobs, ${criticalDuration.toFixed(1)}s total`);
+  }
+}
+
+function findOverlappingJobs(jobs) {
+  const overlaps = [];
+  for (let i = 0; i < jobs.length; i++) {
+    for (let j = i + 1; j < jobs.length; j++) {
+      const job1 = jobs[i];
+      const job2 = jobs[j];
+      
+      // Check if jobs overlap in time
+      if (job1.startTime < job2.endTime && job2.startTime < job1.endTime) {
+        overlaps.push([job1, job2]);
+      }
+    }
+  }
+  return overlaps;
+}
+
+function findCriticalPath(jobs) {
+  if (jobs.length === 0) return [];
+  
+  // For pipelines without explicit dependencies, the critical path is approximated as:
+  // The path from pipeline start to end that represents the longest blocking duration
+  
+  // Sort jobs by start time
+  const sortedByStart = [...jobs].sort((a, b) => a.startTime - b.startTime);
+  const pipelineStart = sortedByStart[0].startTime;
+  const pipelineEnd = Math.max(...sortedByStart.map(job => job.endTime));
+  
+  // Find the job that ends latest (likely the bottleneck)
+  const bottleneckJob = sortedByStart.reduce((longest, job) => 
+    job.endTime > longest.endTime ? job : longest
+  );
+  
+  // Simple heuristic: if one job dominates the timeline, it's likely the critical path
+  const bottleneckDuration = bottleneckJob.endTime - bottleneckJob.startTime;
+  const totalPipelineDuration = pipelineEnd - pipelineStart;
+  
+  // If the bottleneck job takes up most of the pipeline duration, it's the critical path
+  if (bottleneckDuration > totalPipelineDuration * 0.7) {
+    return [bottleneckJob];
+  }
+  
+  // Otherwise, find the longest sequential chain (original algorithm as fallback)
+  let criticalPath = [sortedByStart[0]];
+  
+  for (let i = 1; i < sortedByStart.length; i++) {
+    const currentJob = sortedByStart[i];
+    const lastInPath = criticalPath[criticalPath.length - 1];
+    
+    // If this job starts after the last one ends, it could be in the critical path
+    if (currentJob.startTime >= lastInPath.endTime) {
+      criticalPath.push(currentJob);
+    }
+  }
+  
+  return criticalPath;
+}
+
+function outputResults(owner, repo, prNumber, branchName, headSha, metrics, traceEvents) {
   // Simple completion message
   console.error(`\n✅ Generated ${traceEvents.length} trace events • Open in Perfetto.dev for analysis`);
   
@@ -465,11 +582,14 @@ function outputResults(owner, repo, prNumber, branchName, headSha, metrics, reco
   const headerCommitUrl = `https://github.com/${owner}/${repo}/commit/${headSha}`;
   console.error(`Commit: ${makeClickableLink(headerCommitUrl, headSha.substring(0, 8))}`);
   console.error(`Analysis: ${metrics.totalRuns} runs • ${metrics.totalJobs} jobs (peak concurrency: ${metrics.maxConcurrency}) • ${metrics.totalSteps} steps`);
-  console.error(`Success Rate: ${metrics.successRate}% workflows, ${metrics.jobSuccessRate}% jobs`);
+  console.error(`Success Rate: ${metrics.successRate}% workflows, ${metrics.jobSuccessRate}% jobs ran.`);
   
   // Generate and show slowest jobs analysis
   const repoActionsUrl = `https://github.com/${owner}/${repo}/actions`;
   console.error(`\n${makeClickableLink(repoActionsUrl, 'Performance Analysis')}:`);
+  
+  // Show timeline visualization
+  generateTimelineVisualization(metrics, repoActionsUrl);
   
   const slowJobs = analyzeSlowJobs(metrics, 5);
   if (slowJobs.length > 0) {
@@ -484,15 +604,10 @@ function outputResults(owner, repo, prNumber, branchName, headSha, metrics, reco
   if (slowSteps.length > 0) {
     console.error(`\n${makeClickableLink(repoActionsUrl, 'Slowest Steps')}:`);
     slowSteps.forEach((step, i) => {
-      console.error(`  ${i + 1}. ${(step.duration / 1000).toFixed(1)}s - ${step.name}`);
-    });
-  }
-
-  if (recommendations.length > 0) {
-    console.error(`\n${makeClickableLink(repoActionsUrl, 'Recommendations')}:`);
-    recommendations.forEach((rec, i) => {
-      console.error(`  ${i + 1}. ${rec.title} (${rec.impact} impact)`);
-      console.error(`     ${rec.description}`);
+      const jobInfo = step.jobName ? ` (in ${step.jobName})` : '';
+      const fullDescription = `${step.name}${jobInfo}`;
+      const stepLink = step.url ? makeClickableLink(step.url, fullDescription) : fullDescription;
+      console.error(`  ${i + 1}. ${(step.duration / 1000).toFixed(1)}s - ${stepLink}`);
     });
   }
   
@@ -529,7 +644,17 @@ function outputResults(owner, repo, prNumber, branchName, headSha, metrics, reco
         })),
         slowest_steps: slowSteps.map(step => ({
           name: step.name,
-          duration_seconds: (step.duration / 1000).toFixed(1)
+          duration_seconds: (step.duration / 1000).toFixed(1),
+          url: step.url,
+          job_name: step.jobName
+        })),
+        timeline: metrics.jobTimeline.map(job => ({
+          name: job.name,
+          start_time: job.startTime,
+          end_time: job.endTime,
+          duration_seconds: ((job.endTime - job.startTime) / 1000000).toFixed(1),
+          conclusion: job.conclusion,
+          url: job.url
         }))
       },
       github_urls: {
@@ -608,7 +733,7 @@ async function main() {
   console.error(`Analyzing ${makeClickableLink(`https://github.com/${owner}/${repo}`, `${owner}/${repo}`)} ${makeClickableLink(analyzingPrUrl, `PR #${prNumber}`)}...`);
   
   const prData = await fetchWithAuth(`${baseUrl}/pulls/${prNumber}`);
-  const { branchName, headSha } = extractPRInfo(prData);
+  const { branchName, headSha } = extractPRInfo(prData, analyzingPrUrl);
   
   const allRuns = await fetchWorkflowRuns(baseUrl, headSha);
   if (allRuns.length === 0) {
@@ -640,11 +765,9 @@ async function main() {
   // Calculate final metrics
   const finalMetrics = calculateFinalMetrics(metrics, allRuns.length, jobStartTimes, jobEndTimes);
 
-  // Generate recommendations
-  const recommendations = generateRecommendations(metrics, finalMetrics);
-
+ 
   // Output results
-  outputResults(owner, repo, prNumber, branchName, headSha, finalMetrics, recommendations, traceEvents);
+  outputResults(owner, repo, prNumber, branchName, headSha, finalMetrics, traceEvents);
 }
 
 main();
