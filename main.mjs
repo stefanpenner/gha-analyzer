@@ -27,13 +27,63 @@ import url from 'url';
 // CONFIGURATION AND VALIDATION
 // =============================================================================
 
-const GITHUB_TOKEN = process.argv[3] || process.env.GITHUB_TOKEN;
-if (!GITHUB_TOKEN) {
-  console.error('Usage: node main.mjs <pr_url> [token]');
+// Parse command line arguments
+const args = process.argv.slice(2);
+let prUrl = null;
+let githubToken = null;
+let perfettoOutputFile = null;
+
+// Parse arguments
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i];
+  
+  if (arg === '--perfetto' || arg === '-p') {
+    if (i + 1 >= args.length) {
+      console.error('Error: --perfetto flag requires a filename');
+      console.error('Usage: node main.mjs <pr_url> [--perfetto <filename>] [token]');
+      process.exit(1);
+    }
+    perfettoOutputFile = args[i + 1];
+    i++; // Skip the filename in next iteration
+  } else if (arg.startsWith('--')) {
+    console.error(`Error: Unknown flag ${arg}`);
+    console.error('Usage: node main.mjs <pr_url> [--perfetto <filename>] [token]');
+    process.exit(1);
+  } else if (!prUrl) {
+    prUrl = arg;
+  } else if (!githubToken) {
+    githubToken = arg;
+  } else {
+    console.error('Error: Too many arguments');
+    console.error('Usage: node main.mjs <pr_url> [--perfetto <filename>] [token]');
+    process.exit(1);
+  }
+}
+
+// Validate required arguments
+if (!prUrl) {
+  console.error('Usage: node main.mjs <pr_url> [--perfetto <filename>] [token]');
+  console.error('');
+  console.error('Arguments:');
+  console.error('  <pr_url>                    GitHub PR URL to analyze');
+  console.error('  --perfetto <filename>       Output Perfetto trace to file (optional)');
+  console.error('  <token>                     GitHub token (optional if GITHUB_TOKEN env var is set)');
+  console.error('');
+  console.error('Examples:');
+  console.error('  node main.mjs https://github.com/owner/repo/pull/123');
+  console.error('  node main.mjs https://github.com/owner/repo/pull/123 --perfetto trace.json');
+  console.error('  node main.mjs https://github.com/owner/repo/pull/123 --perfetto trace.json <token>');
   console.error('');
   console.error('GitHub token can be provided as:');
   console.error('  1. Command line argument: node main.mjs <pr_url> <token>');
   console.error('  2. Environment variable: export GITHUB_TOKEN=<token>');
+  process.exit(1);
+}
+
+const GITHUB_TOKEN = githubToken || process.env.GITHUB_TOKEN;
+if (!GITHUB_TOKEN) {
+  console.error('Error: GitHub token is required');
+  console.error('Set GITHUB_TOKEN environment variable or provide as command line argument');
   process.exit(1);
 }
 
@@ -658,65 +708,8 @@ function findCriticalPath(jobs) {
   return criticalPath;
 }
 
-function outputResults(owner, repo, prNumber, branchName, headSha, metrics, traceEvents) {
-  // Simple completion message
-  console.error(`\n✅ Generated ${traceEvents.length} trace events • Open in Perfetto.dev for analysis`);
-  
-  // Professional summary report
-  console.error(`\n${'='.repeat(60)}`);
-  const repoUrl = `https://github.com/${owner}/${repo}`;
-  console.error(`📊 ${makeClickableLink(repoUrl, 'GitHub Actions Performance Report')}`);
-  console.error(`${'='.repeat(60)}`);
-  console.error(`Repository: ${makeClickableLink(repoUrl, `${owner}/${repo}`)}`);
-  const headerPrUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
-  console.error(`Pull Request: ${makeClickableLink(headerPrUrl, `#${prNumber}`)} (${branchName})`);
-  const headerCommitUrl = `https://github.com/${owner}/${repo}/commit/${headSha}`;
-  console.error(`Commit: ${makeClickableLink(headerCommitUrl, headSha.substring(0, 8))}`);
-  console.error(`Analysis: ${metrics.totalRuns} runs • ${metrics.totalJobs} jobs (peak concurrency: ${metrics.maxConcurrency}) • ${metrics.totalSteps} steps`);
-  console.error(`Success Rate: ${metrics.successRate}% workflows, ${metrics.jobSuccessRate}% jobs ran.`);
-  
-  // Generate and show slowest jobs analysis
-  const repoActionsUrl = `https://github.com/${owner}/${repo}/actions`;
-  console.error(`\n${makeClickableLink(repoActionsUrl, 'Performance Analysis')}:`);
-  
-  // Show timeline visualization
-  generateTimelineVisualization(metrics, repoActionsUrl);
-  
-  const slowJobs = analyzeSlowJobs(metrics, 5);
-  if (slowJobs.length > 0) {
-    console.error(`\n${makeClickableLink(repoActionsUrl, 'Slowest Jobs')}:`);
-    slowJobs.forEach((job, i) => {
-      const jobLink = job.url ? makeClickableLink(job.url, job.name) : job.name;
-      console.error(`  ${i + 1}. ${(job.duration / 1000).toFixed(1)}s - ${jobLink}`);
-    });
-  }
-
-  const slowSteps = analyzeSlowSteps(metrics, 5);
-  if (slowSteps.length > 0) {
-    console.error(`\n${makeClickableLink(repoActionsUrl, 'Slowest Steps')}:`);
-    slowSteps.forEach((step, i) => {
-      const jobInfo = step.jobName ? ` (in ${step.jobName})` : '';
-      const fullDescription = `${step.name}${jobInfo}`;
-      const stepLink = step.url ? makeClickableLink(step.url, fullDescription) : fullDescription;
-      console.error(`  ${i + 1}. ${(step.duration / 1000).toFixed(1)}s - ${stepLink}`);
-    });
-  }
-  
-  console.error(`\nLinks:`);
-  const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
-  const actionsUrl = `https://github.com/${owner}/${repo}/actions`;
-  const commitUrl = `https://github.com/${owner}/${repo}/commit/${headSha}`;
-  const perfettoUrl = `https://perfetto.dev`;
-  
-  console.error(`• PR: ${makeClickableLink(prUrl)}`);
-  console.error(`• Actions: ${makeClickableLink(actionsUrl)}`);
-  console.error(`• Commit: ${makeClickableLink(commitUrl)}`);
-  console.error(`• Trace Analysis: ${makeClickableLink(perfettoUrl)}`);
-  console.error(`${'='.repeat(60)}`);
-  
-  // Use already generated performance analysis data
-
-  // Add trace naming metadata at the beginning
+function outputResults(owner, repo, prNumber, branchName, headSha, metrics, traceEvents, perfettoOutputFile = null) {
+  // Generate the trace data
   const traceTitle = `GitHub Actions: ${owner}/${repo} PR #${prNumber}`;
   const tracePrUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
   const traceActionsUrl = `https://github.com/${owner}/${repo}/actions`;
@@ -745,61 +738,116 @@ function outputResults(owner, repo, prNumber, branchName, headSha, metrics, trac
       name: 'process_name', 
       ph: 'M',
       pid: 0,
-              args: { 
-          name: traceTitle,
-          url: tracePrUrl,
-          github_url: tracePrUrl
-        }
+      args: { 
+        name: traceTitle,
+        url: tracePrUrl,
+        github_url: tracePrUrl
+      }
     }
   ];
 
-  // Output JSON for Perfetto
-  const output = {
-    displayTimeUnit: 'ms',
-    traceEvents: [...traceMetadata, ...traceEvents.sort((a, b) => a.ts - b.ts)],
-    otherData: {
-      trace_title: traceTitle,
-      pr_number: prNumber,
-      head_sha: headSha,
-      branch_name: branchName,
-      total_runs: metrics.totalRuns,
-      success_rate: `${metrics.successRate}%`,
-      total_events: traceEvents.length,
-      performance_analysis: {
-        slowest_jobs: slowJobs.map(job => ({
-          name: job.name,
-          duration_seconds: (job.duration / 1000).toFixed(1),
-          url: job.url
-        })),
-        slowest_steps: slowSteps.map(step => ({
-          name: step.name,
-          duration_seconds: (step.duration / 1000).toFixed(1),
-          url: step.url,
-          job_name: step.jobName
-        })),
-        timeline: metrics.jobTimeline.map(job => ({
-          name: job.name,
-          start_time: job.startTime,
-          end_time: job.endTime,
-          duration_seconds: ((job.endTime - job.startTime) / 1000000).toFixed(1),
-          conclusion: job.conclusion,
-          url: job.url
-        }))
-      },
-      github_urls: {
-        pr: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
-        actions: `https://github.com/${owner}/${repo}/actions`,
-        commit: `https://github.com/${owner}/${repo}/commit/${headSha}`,
-        repository: `https://github.com/${owner}/${repo}`
-      }
-    }
-  };
+  const slowJobs = analyzeSlowJobs(metrics, 5);
+  const slowSteps = analyzeSlowSteps(metrics, 5);
+
+  // Output CLI analysis to stdout (default behavior)
+  console.log(`\n${'='.repeat(60)}`);
+  const repoUrl = `https://github.com/${owner}/${repo}`;
+  console.log(`📊 GitHub Actions Performance Report`);
+  console.log(`${'='.repeat(60)}`);
+  console.log(`Repository: ${owner}/${repo}`);
+  const headerPrUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+  console.log(`Pull Request: #${prNumber} (${branchName})`);
+  const headerCommitUrl = `https://github.com/${owner}/${repo}/commit/${headSha}`;
+  console.log(`Commit: ${headSha.substring(0, 8)}`);
+  console.log(`Analysis: ${metrics.totalRuns} runs • ${metrics.totalJobs} jobs (peak concurrency: ${metrics.maxConcurrency}) • ${metrics.totalSteps} steps`);
+  console.log(`Success Rate: ${metrics.successRate}% workflows, ${metrics.jobSuccessRate}% jobs ran.`);
   
-  try {
-    console.log(JSON.stringify(output, null, 2));
-  } catch (error) {
-    console.error('JSON validation failed:', error);
-    process.exit(1);
+  // Show timeline visualization
+  const repoActionsUrl = `https://github.com/${owner}/${repo}/actions`;
+  generateTimelineVisualization(metrics, repoActionsUrl);
+  
+  if (slowJobs.length > 0) {
+    console.log(`\nSlowest Jobs:`);
+    slowJobs.forEach((job, i) => {
+      console.log(`  ${i + 1}. ${(job.duration / 1000).toFixed(1)}s - ${job.name}`);
+    });
+  }
+
+  if (slowSteps.length > 0) {
+    console.log(`\nSlowest Steps:`);
+    slowSteps.forEach((step, i) => {
+      const jobInfo = step.jobName ? ` (in ${step.jobName})` : '';
+      const fullDescription = `${step.name}${jobInfo}`;
+      console.log(`  ${i + 1}. ${(step.duration / 1000).toFixed(1)}s - ${fullDescription}`);
+    });
+  }
+  
+  console.log(`\nLinks:`);
+  const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+  const actionsUrl = `https://github.com/${owner}/${repo}/actions`;
+  const commitUrl = `https://github.com/${owner}/${repo}/commit/${headSha}`;
+  const perfettoUrl = `https://perfetto.dev`;
+  
+  console.log(`• PR: ${prUrl}`);
+  console.log(`• Actions: ${actionsUrl}`);
+  console.log(`• Commit: ${commitUrl}`);
+  console.log(`• Trace Analysis: ${perfettoUrl}`);
+  console.log(`${'='.repeat(60)}`);
+
+  // Output Perfetto JSON if requested
+  if (perfettoOutputFile) {
+    const output = {
+      displayTimeUnit: 'ms',
+      traceEvents: [...traceMetadata, ...traceEvents.sort((a, b) => a.ts - b.ts)],
+      otherData: {
+        trace_title: traceTitle,
+        pr_number: prNumber,
+        head_sha: headSha,
+        branch_name: branchName,
+        total_runs: metrics.totalRuns,
+        success_rate: `${metrics.successRate}%`,
+        total_events: traceEvents.length,
+        performance_analysis: {
+          slowest_jobs: slowJobs.map(job => ({
+            name: job.name,
+            duration_seconds: (job.duration / 1000).toFixed(1),
+            url: job.url
+          })),
+          slowest_steps: slowSteps.map(step => ({
+            name: step.name,
+            duration_seconds: (step.duration / 1000).toFixed(1),
+            url: step.url,
+            job_name: step.jobName
+          })),
+          timeline: metrics.jobTimeline.map(job => ({
+            name: job.name,
+            start_time: job.startTime,
+            end_time: job.endTime,
+            duration_seconds: ((job.endTime - job.startTime) / 1000000).toFixed(1),
+            conclusion: job.conclusion,
+            url: job.url
+          }))
+        },
+        github_urls: {
+          pr: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
+          actions: `https://github.com/${owner}/${repo}/actions`,
+          commit: `https://github.com/${owner}/${repo}/commit/${headSha}`,
+          repository: `https://github.com/${owner}/${repo}`
+        }
+      }
+    };
+    
+    try {
+      writeFileSync(perfettoOutputFile, JSON.stringify(output, null, 2));
+      console.log(`\n✅ Perfetto trace saved to: ${perfettoOutputFile}`);
+      console.log(`🌐 Open in Perfetto: ${perfettoUrl}`);
+    } catch (error) {
+      console.error(`Error writing to ${perfettoOutputFile}:`, error);
+      process.exit(1);
+    }
+  } else {
+    console.log(`\n✅ Generated ${traceEvents.length} trace events`);
+    console.log(`💡 Use --perfetto <filename> to save trace for Perfetto analysis`);
   }
 }
 
@@ -854,13 +902,6 @@ function getStepIcon(stepName, conclusion) {
  * Main function that orchestrates the entire profiling process
  */
 async function main() {
-  // Parse PR URL and validate inputs
-  const prUrl = process.argv[2];
-  if (!prUrl || !GITHUB_TOKEN) {
-    console.error('Usage: node script.mjs <pr_url> <token>');
-    process.exit(1);
-  }
-
   const { owner, repo, prNumber } = parsePRUrl(prUrl);
   const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
   
@@ -901,9 +942,8 @@ async function main() {
   // Calculate final metrics
   const finalMetrics = calculateFinalMetrics(metrics, allRuns.length, jobStartTimes, jobEndTimes);
 
- 
   // Output results
-  outputResults(owner, repo, prNumber, branchName, headSha, finalMetrics, traceEvents);
+  outputResults(owner, repo, prNumber, branchName, headSha, finalMetrics, traceEvents, perfettoOutputFile);
 }
 
 main();

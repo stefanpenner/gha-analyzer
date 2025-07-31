@@ -80,7 +80,7 @@ chmod +x main.mjs
 
 ## 📖 Usage
 
-### Basic Usage
+### Basic Usage (CLI Output)
 
 #### With Environment Variable (Recommended)
 ```bash
@@ -93,17 +93,35 @@ node main.mjs https://github.com/owner/repo/pull/123
 node main.mjs https://github.com/owner/repo/pull/123 <github_token>
 ```
 
-### With Output Redirection
+### Perfetto Trace Output
+
+#### Save Perfetto Trace to File
 ```bash
-# Save trace to file (using environment variable)
+# Save trace to file with --perfetto flag
 export GITHUB_TOKEN=ghp_your_token_here
-node main.mjs https://github.com/owner/repo/pull/123 > trace.json
+node main.mjs https://github.com/owner/repo/pull/123 --perfetto trace.json
 
-# View analysis in terminal while saving trace
-node main.mjs https://github.com/owner/repo/pull/123 2>&1 > trace.json
+# With custom filename
+node main.mjs https://github.com/owner/repo/pull/123 --perfetto my-trace.json
 
-# Or with command line token
-node main.mjs https://github.com/owner/repo/pull/123 <token> > trace.json
+# With command line token
+node main.mjs https://github.com/owner/repo/pull/123 --perfetto trace.json <token>
+```
+
+### Command Line Options
+
+```bash
+node main.mjs <pr_url> [--perfetto <filename>] [token]
+
+Arguments:
+  <pr_url>                    GitHub PR URL to analyze
+  --perfetto <filename>       Output Perfetto trace to file (optional)
+  <token>                     GitHub token (optional if GITHUB_TOKEN env var is set)
+
+Examples:
+  node main.mjs https://github.com/owner/repo/pull/123
+  node main.mjs https://github.com/owner/repo/pull/123 --perfetto trace.json
+  node main.mjs https://github.com/owner/repo/pull/123 --perfetto trace.json <token>
 ```
 
 ### GitHub Token Setup
