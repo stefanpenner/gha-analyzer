@@ -1,6 +1,13 @@
 # GitHub Actions Performance Profiler
 
-Analyze GitHub Actions workflow performance and generate Chrome Tracing format output for [Perfetto.dev](https://perfetto.dev) visualization.
+Analyze GitHub Actions workflow performance and generate Chrome Tracing format output for [ui.Perfetto.dev](https://ui.perfetto.dev) visualization.
+
+## Features
+
+- Timeline visualization with job duration bars
+- Critical path analysis and bottleneck identification  
+- Interactive terminal output with clickable links
+- Chrome Tracing format for ui.Perfetto.dev analysis
 
 ## TODO
 - [ ] release as npm module, so it can be used via npx
@@ -10,13 +17,6 @@ Analyze GitHub Actions workflow performance and generate Chrome Tracing format o
 - [ ] explore ability to compare multiple runs and provide deeper repo-wide insights
 - [ ] explore ability to make this a GHA action itself, so that all PR can surface these details
 - [ ] ???
-
-## Features
-
-- Timeline visualization with job duration bars
-- Critical path analysis and bottleneck identification  
-- Interactive terminal output with clickable links
-- Chrome Tracing format for Perfetto.dev analysis
 
 ## 📊 Sample Output
 
@@ -141,7 +141,7 @@ node main.mjs https://github.com/owner/repo/pull/123
 
 ### Opening Traces
 1. Generate trace: `node main.mjs <pr_url> > trace.json`
-2. Open [Perfetto.dev](https://perfetto.dev)
+2. Open [ui.Perfetto.dev](https://ui.perfetto.dev)
 3. Click "Open trace file" and select `trace.json`
 
 ### Perfetto Features
@@ -234,6 +234,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 🙏 Acknowledgments
 
-- [Perfetto](https://perfetto.dev) for the excellent tracing visualization
+- [UI.Perfetto](https://ui.perfetto.dev) for the excellent tracing visualization
 - [GitHub Actions API](https://docs.github.com/en/rest/actions) for workflow data
 - Chrome DevTools team for the tracing format specification 
