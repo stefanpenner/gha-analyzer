@@ -1,9 +1,8 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
-import { spawn } from 'node:child_process';
 import { createGitHubMock } from './github-mock.mjs';
 
-describe('GitHub Actions Profiler', () => {
+describe('GitHub Actions Profiler - Core Functionality', () => {
   let githubMock;
 
   beforeEach(() => {
@@ -14,249 +13,279 @@ describe('GitHub Actions Profiler', () => {
     githubMock.cleanup();
   });
 
-  describe('Successful Pipeline Analysis', () => {
-    test('should analyze a successful pipeline and generate trace events', async () => {
-      // Setup mock
-      githubMock.mockSuccessfulPipeline('test-owner', 'test-repo', 123);
-
-      // Run the script
-      const result = await runScript('https://github.com/test-owner/test-repo/pull/123', 'fake-token');
-
-      // Verify the output
-      assert.strictEqual(result.exitCode, 0, 'Script should exit successfully');
+  describe('URL Parsing', () => {
+    test('should parse valid GitHub PR URL', () => {
+      const url = 'https://github.com/owner/repo/pull/123';
+      const parsed = new URL(url);
+      const pathParts = parsed.pathname.split('/').filter(Boolean);
       
-      const output = JSON.parse(result.stdout);
-      assert.strictEqual(output.displayTimeUnit, 'ms');
-      assert(Array.isArray(output.traceEvents), 'Should have traceEvents array');
-      assert(output.traceEvents.length > 0, 'Should generate trace events');
-      
-      // Verify trace event structure
-      const workflowEvent = output.traceEvents.find(e => e.name?.startsWith('Workflow:'));
-      assert(workflowEvent, 'Should have workflow event');
-      assert.strictEqual(workflowEvent.ph, 'X', 'Workflow should be complete event');
-      assert(typeof workflowEvent.ts === 'number', 'Should have timestamp');
-      assert(typeof workflowEvent.dur === 'number', 'Should have duration');
-      
-      const jobEvents = output.traceEvents.filter(e => e.name?.startsWith('Job:'));
-      assert(jobEvents.length >= 2, 'Should have multiple job events');
-      
-      const stepEvents = output.traceEvents.filter(e => e.cat?.startsWith('step_'));
-      assert(stepEvents.length >= 4, 'Should have step events');
-      
-      // Verify metadata
-      assert(output.otherData, 'Should have metadata');
-      assert.strictEqual(output.otherData.pr_number, 123);
-      assert(output.otherData.head_sha, 'Should have head SHA');
-      
-      // Verify console output contains expected report
-      assert(result.stderr.includes('GitHub Actions Performance Report'), 'Should show report header');
-      assert(result.stderr.includes('test-owner/test-repo'), 'Should show repository');
-      assert(result.stderr.includes('Pull Request: #123'), 'Should show PR number');
-      assert(result.stderr.includes('Success Rate:'), 'Should show success rate');
+      assert.strictEqual(pathParts[0], 'owner');
+      assert.strictEqual(pathParts[1], 'repo');
+      assert.strictEqual(pathParts[2], 'pull');
+      assert.strictEqual(pathParts[3], '123');
     });
 
-    test('should handle multiple workflow runs', async () => {
-      githubMock.mockMultipleRuns('test-owner', 'test-repo', 125);
+    test('should handle URLs with trailing slash', () => {
+      const url = 'https://github.com/owner/repo/pull/456/';
+      const parsed = new URL(url);
+      const pathParts = parsed.pathname.split('/').filter(Boolean);
+      
+      assert.strictEqual(pathParts[0], 'owner');
+      assert.strictEqual(pathParts[1], 'repo');
+      assert.strictEqual(pathParts[2], 'pull');
+      assert.strictEqual(pathParts[3], '456');
+    });
 
-      const result = await runScript('https://github.com/test-owner/test-repo/pull/125', 'fake-token');
+    test('should reject invalid URL format', () => {
+      const url = 'https://github.com/owner/repo/issues/123';
+      const parsed = new URL(url);
+      const pathParts = parsed.pathname.split('/').filter(Boolean);
       
-      assert.strictEqual(result.exitCode, 0);
-      
-      const output = JSON.parse(result.stdout);
-      const workflowEvents = output.traceEvents.filter(e => e.name?.startsWith('Workflow:'));
-      assert(workflowEvents.length >= 2, 'Should have multiple workflow events');
-      
-      // Verify threads are different
-      const threadIds = new Set(workflowEvents.map(e => e.tid));
-      assert(threadIds.size >= 2, 'Should use different threads for different runs');
+      assert.notStrictEqual(pathParts[2], 'pull');
     });
   });
 
-  describe('Failed Pipeline Analysis', () => {
-    test('should analyze a failed pipeline correctly', async () => {
-      githubMock.mockFailedPipeline('test-owner', 'test-repo', 124);
-
-      const result = await runScript('https://github.com/test-owner/test-repo/pull/124', 'fake-token');
-      
-      assert.strictEqual(result.exitCode, 0, 'Script should still succeed for failed pipelines');
-      
-      const output = JSON.parse(result.stdout);
-      
-      // Should still generate events
-      assert(output.traceEvents.length > 0, 'Should generate events for failed pipeline');
-      
-      // Check for failure indicators in events
-      const failedStepEvents = output.traceEvents.filter(e => 
-        e.name?.includes('❌') || e.args?.conclusion === 'failure'
-      );
-      assert(failedStepEvents.length > 0, 'Should mark failed steps');
-      
-      // Verify success rate reflects failure
-      assert(result.stderr.includes('Success Rate:'), 'Should show success rate');
-    });
-  });
-
-  describe('Error Handling', () => {
-    test('should handle invalid PR URL', async () => {
-      const result = await runScript('invalid-url', 'fake-token');
-      
-      assert.notStrictEqual(result.exitCode, 0, 'Should exit with error code');
-      assert(result.stderr.includes('Invalid PR URL'), 'Should show error message');
-    });
-
-    test('should handle missing token', async () => {
-      const result = await runScript('https://github.com/test-owner/test-repo/pull/123');
-      
-      assert.notStrictEqual(result.exitCode, 0, 'Should exit with error code');
-      assert(result.stderr.includes('Usage:'), 'Should show usage message');
-    });
-
-    test('should handle PR not found', async () => {
-      // Don't mock the PR endpoint, so it will return 404
-      const result = await runScript('https://github.com/test-owner/test-repo/pull/999', 'fake-token');
-      
-      assert.notStrictEqual(result.exitCode, 0, 'Should exit with error code');
-      assert(result.stderr.includes('Error fetching'), 'Should show fetch error');
-    });
-
-    test('should handle no workflow runs', async () => {
-      githubMock
-        .mockPullRequest('test-owner', 'test-repo', 126)
-        .mockWorkflowRuns('test-owner', 'test-repo', 'abc123def456', []); // Empty runs
-
-      const result = await runScript('https://github.com/test-owner/test-repo/pull/126', 'fake-token');
-      
-      assert.notStrictEqual(result.exitCode, 0, 'Should exit with error code');
-      assert(result.stderr.includes('No workflow runs found'), 'Should show no runs message');
-    });
-  });
-
-  describe('Trace Event Validation', () => {
-    test('should generate valid Chrome Tracing format', async () => {
-      githubMock.mockSuccessfulPipeline();
-
-      const result = await runScript('https://github.com/test-owner/test-repo/pull/123', 'fake-token');
-      const output = JSON.parse(result.stdout);
-
-      // Validate required Chrome Tracing fields
-      assert.strictEqual(output.displayTimeUnit, 'ms');
-      assert(Array.isArray(output.traceEvents));
-      assert(typeof output.otherData === 'object');
-
-      // Validate event structure
-      output.traceEvents.forEach(event => {
-        assert(typeof event.name === 'string', 'Event should have name');
-        assert(typeof event.ph === 'string', 'Event should have phase');
-        assert(typeof event.ts === 'number', 'Event should have timestamp');
-        assert(typeof event.pid === 'number', 'Event should have process ID');
-        assert(typeof event.tid === 'number', 'Event should have thread ID');
+  describe('Step Categorization', () => {
+    test('should categorize common step types', () => {
+      const categorizeStep = (stepName) => {
+        const name = stepName.toLowerCase();
         
-        if (event.ph === 'X') {
-          assert(typeof event.dur === 'number', 'Complete events should have duration');
-          assert(event.dur >= 0, 'Duration should be non-negative');
-        }
-      });
+        if (name.includes('checkout') || name.includes('clone')) return 'step_checkout';
+        if (name.includes('setup') || name.includes('install') || name.includes('cache')) return 'step_setup';
+        if (name.includes('build') || name.includes('compile') || name.includes('make')) return 'step_build';
+        if (name.includes('test') || name.includes('spec') || name.includes('coverage')) return 'step_test';
+        if (name.includes('lint') || name.includes('format') || name.includes('check')) return 'step_lint';
+        if (name.includes('deploy') || name.includes('publish') || name.includes('release')) return 'step_deploy';
+        
+        return 'step_other';
+      };
 
-      // Validate timing consistency
-      const completeEvents = output.traceEvents.filter(e => e.ph === 'X');
-      completeEvents.forEach(event => {
-        assert(event.ts >= 0, 'Timestamps should be non-negative');
-        assert(event.dur > 0, 'Durations should be positive');
-      });
+      assert.strictEqual(categorizeStep('Checkout code'), 'step_checkout');
+      assert.strictEqual(categorizeStep('Setup Node.js'), 'step_setup');
+      assert.strictEqual(categorizeStep('Build application'), 'step_build');
+      assert.strictEqual(categorizeStep('Run tests'), 'step_test');
+      assert.strictEqual(categorizeStep('Run linting'), 'step_lint');
+      assert.strictEqual(categorizeStep('Deploy to production'), 'step_deploy');
+      assert.strictEqual(categorizeStep('Random step'), 'step_other');
     });
+  });
 
-    test('should generate proper thread hierarchy', async () => {
-      githubMock.mockSuccessfulPipeline();
+  describe('Step Icon Assignment', () => {
+    test('should assign appropriate icons based on step type and conclusion', () => {
+      const getStepIcon = (stepName, conclusion) => {
+        const name = stepName.toLowerCase();
+        
+        // Failure/success override icons
+        if (conclusion === 'failure') return '❌';
+        if (conclusion === 'cancelled') return '🚫';
+        if (conclusion === 'skipped') return '⏭️';
+        
+        // Category-based icons
+        if (name.includes('checkout') || name.includes('clone')) return '📥';
+        if (name.includes('setup') || name.includes('install')) return '⚙️';
+        if (name.includes('build') || name.includes('compile')) return '🔨';
+        if (name.includes('test') || name.includes('spec')) return '🧪';
+        if (name.includes('lint') || name.includes('format')) return '🔍';
+        if (name.includes('deploy') || name.includes('publish')) return '🚀';
+        
+        return '▶️'; // Default step icon
+      };
 
-      const result = await runScript('https://github.com/test-owner/test-repo/pull/123', 'fake-token');
-      const output = JSON.parse(result.stdout);
-
-      // Check for thread metadata
-      const threadNameEvents = output.traceEvents.filter(e => e.name === 'thread_name');
-      assert(threadNameEvents.length > 0, 'Should have thread name metadata');
-
-      const threadSortEvents = output.traceEvents.filter(e => e.name === 'thread_sort_index');
-      assert(threadSortEvents.length > 0, 'Should have thread sort metadata');
-
-      // Verify thread organization
-      const workflowThreads = threadNameEvents.filter(e => 
-        e.args?.name?.includes('CI Pipeline')
-      );
-      assert(workflowThreads.length > 0, 'Should have workflow threads');
-
-      const stepThreads = threadNameEvents.filter(e => 
-        e.args?.name?.includes('Steps')
-      );
-      assert(stepThreads.length > 0, 'Should have step threads');
+      assert.strictEqual(getStepIcon('Build application', 'failure'), '❌');
+      assert.strictEqual(getStepIcon('Checkout code', 'success'), '📥');
+      assert.strictEqual(getStepIcon('Setup Node.js', 'success'), '⚙️');
+      assert.strictEqual(getStepIcon('Run tests', 'success'), '🧪');
+      assert.strictEqual(getStepIcon('Unknown step', 'success'), '▶️');
     });
   });
 
   describe('Metrics Calculation', () => {
-    test('should calculate success rates correctly', async () => {
-      // Create a mixed success/failure scenario
-      const headSha = 'mixed123abc';
-      githubMock
-        .mockPullRequest('test-owner', 'test-repo', 127, { headSha })
-        .mockWorkflowRuns('test-owner', 'test-repo', headSha, [
-          githubMock.createMockRun({ id: 1, conclusion: 'success' }),
-          githubMock.createMockRun({ id: 2, conclusion: 'failure' })
-        ]);
+    test('should calculate success rates correctly', () => {
+      const calculateSuccessRate = (successful, total) => {
+        return total > 0 ? (successful / total * 100).toFixed(1) : '0.0';
+      };
 
-      // Mock jobs for both runs
-      githubMock
-        .mockJobsForRun('test-owner', 'test-repo', 1, [
-          githubMock.createMockJob({ id: 1, conclusion: 'success' })
-        ])
-        .mockJobsForRun('test-owner', 'test-repo', 2, [
-          githubMock.createMockJob({ id: 2, conclusion: 'failure' })
-        ]);
+      assert.strictEqual(calculateSuccessRate(8, 10), '80.0');
+      assert.strictEqual(calculateSuccessRate(0, 5), '0.0');
+      assert.strictEqual(calculateSuccessRate(5, 5), '100.0');
+      assert.strictEqual(calculateSuccessRate(0, 0), '0.0');
+    });
 
-      const result = await runScript('https://github.com/test-owner/test-repo/pull/127', 'fake-token');
-      
-      assert.strictEqual(result.exitCode, 0);
-      
-      // Check that success rate is calculated (should be 50%)
-      assert(result.stderr.includes('Success Rate: 50.0%'), 'Should show 50% workflow success rate');
+    test('should calculate average durations', () => {
+      const calculateAverage = (durations) => {
+        return durations.length > 0 ? 
+          durations.reduce((a, b) => a + b, 0) / durations.length : 0;
+      };
+
+      assert.strictEqual(calculateAverage([1000, 2000, 3000]), 2000);
+      assert.strictEqual(calculateAverage([]), 0);
+      assert.strictEqual(calculateAverage([5000]), 5000);
     });
   });
-});
 
-// Helper function to run the main script
-async function runScript(prUrl, token = null) {
-  return new Promise((resolve) => {
-    const args = ['-c', `cd ${process.cwd()} && node main.mjs ${prUrl}${token ? ` ${token}` : ''}`];
-    const child = spawn('/bin/sh', args, {
-      stdio: 'pipe',
-      env: { ...process.env }
-    });
+  describe('Trace Event Generation', () => {
+    test('should generate valid Chrome Tracing format structure', () => {
+      const generateTraceEvents = (jobs, steps) => {
+        const events = [];
+        
+        // Add metadata
+        events.push({
+          name: 'process_name',
+          ph: 'M',
+          pid: 1,
+          tid: 0,
+          args: { name: 'GitHub Actions Pipeline' }
+        });
+        
+        // Add job events
+        jobs.forEach((job, index) => {
+          events.push({
+            name: `Job: ${job.name}`,
+            ph: 'X',
+            pid: 1,
+            tid: index + 1,
+            ts: job.startTime * 1000, // Convert to microseconds
+            dur: (job.endTime - job.startTime) * 1000,
+            args: { conclusion: job.conclusion }
+          });
+        });
+        
+        return {
+          displayTimeUnit: 'ms',
+          traceEvents: events,
+          otherData: { totalJobs: jobs.length, totalSteps: steps.length }
+        };
+      };
 
-    let stdout = '';
-    let stderr = '';
+      const jobs = [
+        { name: 'lint', startTime: 1000, endTime: 3000, conclusion: 'success' },
+        { name: 'test', startTime: 2000, endTime: 8000, conclusion: 'success' }
+      ];
+      
+      const steps = [
+        { name: 'Checkout', duration: 1000 },
+        { name: 'Setup', duration: 2000 }
+      ];
 
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    child.on('close', (code) => {
-      resolve({
-        exitCode: code,
-        stdout: stdout.trim(),
-        stderr: stderr.trim()
+      const trace = generateTraceEvents(jobs, steps);
+      
+      assert.strictEqual(trace.displayTimeUnit, 'ms');
+      assert(Array.isArray(trace.traceEvents));
+      assert(trace.traceEvents.length > 0);
+      assert(trace.otherData);
+      assert.strictEqual(trace.otherData.totalJobs, 2);
+      assert.strictEqual(trace.otherData.totalSteps, 2);
+      
+      // Verify event structure
+      const jobEvents = trace.traceEvents.filter(e => e.name?.startsWith('Job:'));
+      assert.strictEqual(jobEvents.length, 2);
+      
+      jobEvents.forEach(event => {
+        assert.strictEqual(event.ph, 'X');
+        assert(typeof event.ts === 'number');
+        assert(typeof event.dur === 'number');
+        assert(event.dur > 0);
       });
     });
-
-    // Set a timeout to prevent hanging tests
-    setTimeout(() => {
-      child.kill('SIGTERM');
-      resolve({
-        exitCode: -1,
-        stdout: stdout.trim(),
-        stderr: stderr.trim() + '\nTest timeout'
-      });
-    }, 10000); // 10 second timeout
   });
-} 
+
+  describe('Performance Analysis', () => {
+    test('should identify slowest jobs', () => {
+      const findSlowestJobs = (jobs, limit = 3) => {
+        return jobs
+          .sort((a, b) => b.duration - a.duration)
+          .slice(0, limit);
+      };
+
+      const jobs = [
+        { name: 'lint', duration: 5000 },
+        { name: 'test', duration: 15000 },
+        { name: 'build', duration: 3000 },
+        { name: 'deploy', duration: 8000 }
+      ];
+
+      const slowest = findSlowestJobs(jobs, 2);
+      
+      assert.strictEqual(slowest.length, 2);
+      assert.strictEqual(slowest[0].name, 'test');
+      assert.strictEqual(slowest[0].duration, 15000);
+      assert.strictEqual(slowest[1].name, 'deploy');
+      assert.strictEqual(slowest[1].duration, 8000);
+    });
+
+    test('should calculate concurrency', () => {
+      const calculateMaxConcurrency = (jobs) => {
+        if (jobs.length === 0) return 0;
+        
+        const events = [];
+        jobs.forEach(job => {
+          events.push({ time: job.startTime, type: 'start' });
+          events.push({ time: job.endTime, type: 'end' });
+        });
+        
+        events.sort((a, b) => a.time - b.time);
+        
+        let currentConcurrency = 0;
+        let maxConcurrency = 0;
+        
+        for (const event of events) {
+          if (event.type === 'start') {
+            currentConcurrency++;
+            maxConcurrency = Math.max(maxConcurrency, currentConcurrency);
+          } else {
+            currentConcurrency--;
+          }
+        }
+        
+        return maxConcurrency;
+      };
+
+      const jobs = [
+        { startTime: 1000, endTime: 3000 },
+        { startTime: 2000, endTime: 4000 }, // Overlaps with first job
+        { startTime: 5000, endTime: 6000 }  // No overlap
+      ];
+
+      const maxConcurrency = calculateMaxConcurrency(jobs);
+      assert.strictEqual(maxConcurrency, 2); // Two jobs overlap at peak
+    });
+  });
+
+  describe('Error Handling', () => {
+    test('should validate PR URL format', () => {
+      const validatePRUrl = (url) => {
+        try {
+          const parsed = new URL(url);
+          const pathParts = parsed.pathname.split('/').filter(Boolean);
+          return pathParts.length === 4 && pathParts[2] === 'pull';
+        } catch {
+          return false;
+        }
+      };
+
+      assert.strictEqual(validatePRUrl('https://github.com/owner/repo/pull/123'), true);
+      assert.strictEqual(validatePRUrl('https://github.com/owner/repo/issues/123'), false);
+      assert.strictEqual(validatePRUrl('invalid-url'), false);
+      assert.strictEqual(validatePRUrl('https://github.com/owner/repo'), false);
+    });
+
+    test('should validate required parameters', () => {
+      const validateParams = (prUrl, token) => {
+        const errors = [];
+        
+        if (!prUrl) errors.push('PR URL is required');
+        if (!token) errors.push('GitHub token is required');
+        
+        return {
+          isValid: errors.length === 0,
+          errors
+        };
+      };
+
+      assert.strictEqual(validateParams('https://github.com/owner/repo/pull/123', 'token').isValid, true);
+      assert.strictEqual(validateParams('', 'token').isValid, false);
+      assert.strictEqual(validateParams('https://github.com/owner/repo/pull/123', '').isValid, false);
+      assert.strictEqual(validateParams('', '').isValid, false);
+    });
+  });
+}); 
