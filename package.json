@@ -1,6 +1,6 @@
 {
   "name": "github-actions-profiler",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "type": "module",
   "description": "Analyze GitHub Actions workflow performance and generate Chrome Tracing format output for Perfetto.dev visualization",
   "main": "main.mjs",
