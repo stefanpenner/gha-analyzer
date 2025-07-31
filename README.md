@@ -2,6 +2,13 @@
 
 Analyze GitHub Actions workflow performance and generate Chrome Tracing format output for [Perfetto.dev](https://perfetto.dev) visualization.
 
+## TODO
+- [ ] release as npm module, so it can be used via npx
+- [ ] see if it's easy enough to bundle perfetto (or similar) UI
+- [ ] even more actionable output
+- [ ] explore ability to compare multiple runs and provide deeper repo-wide insights
+- [ ] ???
+
 ## Features
 
 - Timeline visualization with job duration bars
@@ -10,6 +17,12 @@ Analyze GitHub Actions workflow performance and generate Chrome Tracing format o
 - Chrome Tracing format for Perfetto.dev analysis
 
 ## 📊 Sample Output
+
+
+### Perfetto UI
+Example from one of Nodejs's GHA runs
+
+<img width="1626" height="1042" alt="image" src="https://github.com/user-attachments/assets/7ebf33cb-5caf-4233-9e0d-c5f562a8e6ef" />
 
 ### Terminal Analysis
 ```bash
