@@ -4,9 +4,11 @@ Analyze GitHub Actions workflow performance and generate Chrome Tracing format o
 
 ## TODO
 - [ ] release as npm module, so it can be used via npx
+- [ ] provide clickable perfetto example
 - [ ] see if it's easy enough to bundle perfetto (or similar) UI
 - [ ] even more actionable output
 - [ ] explore ability to compare multiple runs and provide deeper repo-wide insights
+- [ ] explore ability to make this a GHA action itself, so that all PR can surface these details
 - [ ] ???
 
 ## Features
