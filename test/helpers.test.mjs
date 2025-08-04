@@ -211,4 +211,145 @@ describe('Helper Functions - Advanced Features', () => {
       assert.strictEqual(overlaps[0][1].name, 'Job2');
     });
   });
+
+  describe('Timeline Grouping Functions', () => {
+    function getJobGroup(jobName) {
+      // Split by '/' and take the first part as the group
+      const parts = jobName.split(' / ');
+      return parts.length > 1 ? parts[0] : jobName;
+    }
+
+    function groupJobsByPrefix(timeline) {
+      const jobGroups = {};
+      timeline.forEach(job => {
+        const groupKey = getJobGroup(job.name);
+        if (!jobGroups[groupKey]) {
+          jobGroups[groupKey] = [];
+        }
+        jobGroups[groupKey].push(job);
+      });
+      return jobGroups;
+    }
+
+    function sortGroupsByEarliestStart(jobGroups) {
+      return Object.keys(jobGroups).sort((a, b) => {
+        const earliestA = Math.min(...jobGroups[a].map(job => job.startTime));
+        const earliestB = Math.min(...jobGroups[b].map(job => job.startTime));
+        return earliestA - earliestB;
+      });
+    }
+
+    test('should extract job group from job name', () => {
+      assert.strictEqual(getJobGroup('CI-validations / Build: ci-mariner2'), 'CI-validations');
+      assert.strictEqual(getJobGroup('Release / Setup'), 'Release');
+      assert.strictEqual(getJobGroup('Post-merge / Build / (Dry run) Build'), 'Post-merge');
+      assert.strictEqual(getJobGroup('Simple Job'), 'Simple Job');
+      assert.strictEqual(getJobGroup('No / Slash'), 'No');
+    });
+
+    test('should group jobs by prefix', () => {
+      const timeline = [
+        { name: 'CI-validations / Setup', startTime: 1000, endTime: 2000 },
+        { name: 'CI-validations / Build', startTime: 2000, endTime: 3000 },
+        { name: 'Release / Setup', startTime: 1500, endTime: 2500 },
+        { name: 'Release / Publish', startTime: 2500, endTime: 3500 },
+        { name: 'Simple Job', startTime: 500, endTime: 1500 }
+      ];
+
+      const groups = groupJobsByPrefix(timeline);
+      
+      assert.strictEqual(Object.keys(groups).length, 3);
+      assert.strictEqual(groups['CI-validations'].length, 2);
+      assert.strictEqual(groups['Release'].length, 2);
+      assert.strictEqual(groups['Simple Job'].length, 1);
+    });
+
+    test('should sort groups by earliest start time', () => {
+      const jobGroups = {
+        'Release': [
+          { name: 'Release / Setup', startTime: 2000, endTime: 3000 },
+          { name: 'Release / Publish', startTime: 3000, endTime: 4000 }
+        ],
+        'CI-validations': [
+          { name: 'CI-validations / Setup', startTime: 1000, endTime: 2000 },
+          { name: 'CI-validations / Build', startTime: 1500, endTime: 2500 }
+        ],
+        'Post-merge': [
+          { name: 'Post-merge / Setup', startTime: 500, endTime: 1500 }
+        ]
+      };
+
+      const sortedGroups = sortGroupsByEarliestStart(jobGroups);
+      
+      assert.deepStrictEqual(sortedGroups, ['Post-merge', 'CI-validations', 'Release']);
+    });
+
+    test('should handle jobs with same name in group', () => {
+      const timeline = [
+        { name: 'Release / Setup', startTime: 1000, endTime: 2000 },
+        { name: 'Release / Setup', startTime: 2000, endTime: 3000 }, // Same name, different run
+        { name: 'Release / Publish', startTime: 1500, endTime: 2500 }
+      ];
+
+      const groups = groupJobsByPrefix(timeline);
+      const sortedGroups = sortGroupsByEarliestStart(groups);
+      
+      assert.strictEqual(groups['Release'].length, 3);
+      assert.strictEqual(sortedGroups[0], 'Release');
+    });
+
+    test('should handle empty timeline', () => {
+      const timeline = [];
+      const groups = groupJobsByPrefix(timeline);
+      const sortedGroups = sortGroupsByEarliestStart(groups);
+      
+      assert.strictEqual(Object.keys(groups).length, 0);
+      assert.strictEqual(sortedGroups.length, 0);
+    });
+
+    test('should handle single job', () => {
+      const timeline = [
+        { name: 'Single Job', startTime: 1000, endTime: 2000 }
+      ];
+
+      const groups = groupJobsByPrefix(timeline);
+      const sortedGroups = sortGroupsByEarliestStart(groups);
+      
+      assert.strictEqual(Object.keys(groups).length, 1);
+      assert.strictEqual(groups['Single Job'].length, 1);
+      assert.strictEqual(sortedGroups[0], 'Single Job');
+    });
+
+    test('should handle complex job names with multiple slashes', () => {
+      const timeline = [
+        { name: 'Post-merge / Build / (Dry run) Build on Mariner2', startTime: 1000, endTime: 2000 },
+        { name: 'Post-merge / Setup / (Dry run) Setup', startTime: 500, endTime: 1500 },
+        { name: 'CI-validations / Build: ci-mariner2', startTime: 2000, endTime: 3000 }
+      ];
+
+      const groups = groupJobsByPrefix(timeline);
+      const sortedGroups = sortGroupsByEarliestStart(groups);
+      
+      assert.strictEqual(Object.keys(groups).length, 2);
+      assert.strictEqual(groups['Post-merge'].length, 2);
+      assert.strictEqual(groups['CI-validations'].length, 1);
+      assert.deepStrictEqual(sortedGroups, ['Post-merge', 'CI-validations']);
+    });
+
+    test('should sort jobs within groups by start time', () => {
+      const timeline = [
+        { name: 'Release / Publish', startTime: 2000, endTime: 3000 },
+        { name: 'Release / Setup', startTime: 1000, endTime: 2000 },
+        { name: 'Release / Teardown', startTime: 3000, endTime: 4000 }
+      ];
+
+      const groups = groupJobsByPrefix(timeline);
+      const releaseJobs = groups['Release'];
+      const sortedReleaseJobs = releaseJobs.sort((a, b) => a.startTime - b.startTime);
+      
+      assert.strictEqual(sortedReleaseJobs[0].name, 'Release / Setup');
+      assert.strictEqual(sortedReleaseJobs[1].name, 'Release / Publish');
+      assert.strictEqual(sortedReleaseJobs[2].name, 'Release / Teardown');
+    });
+  });
 }); 

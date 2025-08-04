@@ -547,39 +547,73 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
   }
 
   const timeline = metrics.jobTimeline;
-  const maxDuration = Math.max(...timeline.map(job => job.endTime - job.startTime));
   const scale = 60; // Terminal width for timeline bars
   
   console.error(`\n${makeClickableLink(repoActionsUrl, 'Pipeline Timeline')} (${timeline.length} jobs):`);
   console.error('┌' + '─'.repeat(scale + 2) + '┐');
   
-  // Sort jobs by start time to show execution order
-  const sortedJobs = [...timeline].sort((a, b) => a.startTime - b.startTime);
-  const earliestStart = sortedJobs[0].startTime;
-  const latestEnd = Math.max(...sortedJobs.map(job => job.endTime));
+  // Helper function to extract group prefix from job name
+  function getJobGroup(jobName) {
+    // Split by '/' and take the first part as the group
+    const parts = jobName.split(' / ');
+    return parts.length > 1 ? parts[0] : jobName;
+  }
+  
+  // Group jobs by their prefix (before first ' / ')
+  const jobGroups = {};
+  timeline.forEach(job => {
+    const groupKey = getJobGroup(job.name);
+    if (!jobGroups[groupKey]) {
+      jobGroups[groupKey] = [];
+    }
+    jobGroups[groupKey].push(job);
+  });
+  
+  // Sort groups by their earliest member's start time
+  const sortedGroupNames = Object.keys(jobGroups).sort((a, b) => {
+    const earliestA = Math.min(...jobGroups[a].map(job => job.startTime));
+    const earliestB = Math.min(...jobGroups[b].map(job => job.startTime));
+    return earliestA - earliestB;
+  });
+  
+  // Calculate timeline bounds across all jobs
+  const earliestStart = Math.min(...timeline.map(job => job.startTime));
+  const latestEnd = Math.max(...timeline.map(job => job.endTime));
   const totalDuration = latestEnd - earliestStart;
   
-  sortedJobs.forEach((job, index) => {
-    const relativeStart = job.startTime - earliestStart;
-    const duration = job.endTime - job.startTime;
-    const durationSec = duration / 1000000; // Convert microseconds to seconds
+  // Display each group
+  sortedGroupNames.forEach(groupName => {
+    const jobsInGroup = jobGroups[groupName];
     
-    // Calculate positions in the timeline
-    const startPos = Math.floor((relativeStart / totalDuration) * scale);
-    const barLength = Math.max(1, Math.floor((duration / totalDuration) * scale));
+    // Sort jobs within the group by start time
+    const sortedJobsInGroup = jobsInGroup.sort((a, b) => a.startTime - b.startTime);
     
-    // Create the timeline bar with better formatting
-    const padding = ' '.repeat(Math.max(0, startPos));
-    const statusIcon = job.conclusion === 'success' ? '█' : job.conclusion === 'failure' ? '▓' : '░';
-    const actualBarLength = Math.max(1, barLength);
-    const bar = statusIcon.repeat(actualBarLength);
-    const remaining = ' '.repeat(Math.max(0, scale - startPos - actualBarLength));
-    
-    // Job name with clickable link and duration
-    const jobLink = job.url ? makeClickableLink(job.url, job.name) : job.name;
-    const timeInfo = `${durationSec.toFixed(1)}s`;
-    
-    console.error(`│${padding}${bar}${remaining}  │ ${jobLink} (${timeInfo})`);
+    sortedJobsInGroup.forEach((job, index) => {
+      const relativeStart = job.startTime - earliestStart;
+      const duration = job.endTime - job.startTime;
+      const durationSec = duration / 1000000; // Convert microseconds to seconds
+      
+      // Calculate positions in the timeline
+      const startPos = Math.floor((relativeStart / totalDuration) * scale);
+      const barLength = Math.max(1, Math.floor((duration / totalDuration) * scale));
+      
+      // Create the timeline bar with better formatting
+      const padding = ' '.repeat(Math.max(0, startPos));
+      const statusIcon = job.conclusion === 'success' ? '█' : job.conclusion === 'failure' ? '▓' : '░';
+      const actualBarLength = Math.max(1, barLength);
+      const bar = statusIcon.repeat(actualBarLength);
+      const remaining = ' '.repeat(Math.max(0, scale - startPos - actualBarLength));
+      
+      // Job name with clickable link and duration
+      const jobLink = job.url ? makeClickableLink(job.url, job.name) : job.name;
+      const timeInfo = `${durationSec.toFixed(1)}s`;
+      
+      // Add group indicator for multiple instances of the same job name
+      const sameNameJobs = jobsInGroup.filter(j => j.name === job.name);
+      const groupIndicator = sameNameJobs.length > 1 ? ` [${sameNameJobs.indexOf(job) + 1}]` : '';
+      
+      console.error(`│${padding}${bar}${remaining}  │ ${jobLink}${groupIndicator} (${timeInfo})`);
+    });
   });
   
   console.error('└' + '─'.repeat(scale + 2) + '┘');
@@ -587,7 +621,22 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
   // Timeline legend
   console.error('Legend: █ Success  ▓ Failed  ░ Cancelled/Skipped');
   
-  // Show concurrency insights
+  // Show grouping insights
+  const groupedJobs = Object.values(jobGroups).filter(group => group.length > 1);
+  if (groupedJobs.length > 0) {
+    const totalGrouped = groupedJobs.reduce((sum, group) => sum + group.length, 0);
+    console.error(`Grouped ${totalGrouped} jobs by prefix (${groupedJobs.length} groups)`);
+    
+    // Show group breakdown
+    const groupBreakdown = sortedGroupNames.map(name => {
+      const count = jobGroups[name].length;
+      return `${name} (${count})`;
+    }).join(', ');
+    console.error(`Groups: ${groupBreakdown}`);
+  }
+  
+  // Show concurrency insights using original timeline for analysis
+  const sortedJobs = [...timeline].sort((a, b) => a.startTime - b.startTime);
   const overlappingJobs = findOverlappingJobs(sortedJobs);
   if (overlappingJobs.length > 0) {
     console.error(`Concurrent execution detected: ${overlappingJobs.length} overlapping job pairs`);
