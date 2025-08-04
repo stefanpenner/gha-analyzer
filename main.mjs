@@ -549,8 +549,25 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
   const timeline = metrics.jobTimeline;
   const scale = 60; // Terminal width for timeline bars
   
+  // Calculate timeline bounds across all jobs
+  const earliestStart = Math.min(...timeline.map(job => job.startTime));
+  const latestEnd = Math.max(...timeline.map(job => job.endTime));
+  const totalDuration = latestEnd - earliestStart;
+  
   console.error(`\n${makeClickableLink(repoActionsUrl, 'Pipeline Timeline')} (${timeline.length} jobs):`);
+  
+  // Format start and end times for display
+  const startTimeFormatted = new Date(earliestStart / 1000).toLocaleTimeString();
+  const endTimeFormatted = new Date(latestEnd / 1000).toLocaleTimeString();
+  
   console.error('┌' + '─'.repeat(scale + 2) + '┐');
+  // Position start time on left, end time on right
+  const startLabel = `Start: ${startTimeFormatted}`;
+  const endLabel = `End: ${endTimeFormatted}`;
+  const middlePadding = ' '.repeat(scale - startLabel.length - endLabel.length);
+  
+  console.error(`│ ${startLabel}${middlePadding}${endLabel} │`);
+  console.error('├' + '─'.repeat(scale + 2) + '┤');
   
   // Helper function to extract group prefix from job name
   function getJobGroup(jobName) {
@@ -575,11 +592,6 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
     const earliestB = Math.min(...jobGroups[b].map(job => job.startTime));
     return earliestA - earliestB;
   });
-  
-  // Calculate timeline bounds across all jobs
-  const earliestStart = Math.min(...timeline.map(job => job.startTime));
-  const latestEnd = Math.max(...timeline.map(job => job.endTime));
-  const totalDuration = latestEnd - earliestStart;
   
   // Display each group with tree view
   sortedGroupNames.forEach(groupName => {
@@ -636,10 +648,7 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
       console.error(`│${padding}${bar}${remaining}  │ ${treePrefix}${jobLink}${groupIndicator} (${timeInfo})`);
     });
     
-    // Add spacing between groups
-    if (sortedGroupNames.indexOf(groupName) < sortedGroupNames.length - 1) {
-      console.error(`│${' '.repeat(scale)}  │`);
-    }
+
   });
   
   console.error('└' + '─'.repeat(scale + 2) + '┘');
