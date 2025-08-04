@@ -351,5 +351,85 @@ describe('Helper Functions - Advanced Features', () => {
       assert.strictEqual(sortedReleaseJobs[1].name, 'Release / Publish');
       assert.strictEqual(sortedReleaseJobs[2].name, 'Release / Teardown');
     });
+
+    test('should calculate group wall time correctly', () => {
+      const timeline = [
+        { name: 'Release / Setup', startTime: 1000000, endTime: 2000000 }, // 1s
+        { name: 'Release / Publish', startTime: 2000000, endTime: 3000000 }, // 1s
+        { name: 'Release / Teardown', startTime: 3000000, endTime: 6000000 }, // 3s
+        { name: 'CI / Build', startTime: 500000, endTime: 1500000 }, // 1s
+        { name: 'CI / Test', startTime: 1500000, endTime: 2500000 } // 1s
+      ];
+
+      const groups = groupJobsByPrefix(timeline);
+      
+      // Calculate Release group wall time (earliest start to latest end)
+      const releaseJobs = groups['Release'];
+      const releaseStartTime = Math.min(...releaseJobs.map(job => job.startTime));
+      const releaseEndTime = Math.max(...releaseJobs.map(job => job.endTime));
+      const releaseWallTime = releaseEndTime - releaseStartTime;
+      const releaseWallSec = releaseWallTime / 1000000;
+      assert.strictEqual(releaseWallSec, 5); // 1000000 to 6000000 = 5 seconds
+      
+      // Calculate CI group wall time
+      const ciJobs = groups['CI'];
+      const ciStartTime = Math.min(...ciJobs.map(job => job.startTime));
+      const ciEndTime = Math.max(...ciJobs.map(job => job.endTime));
+      const ciWallTime = ciEndTime - ciStartTime;
+      const ciWallSec = ciWallTime / 1000000;
+      assert.strictEqual(ciWallSec, 2); // 500000 to 2500000 = 2 seconds
+    });
+
+    test('should extract job name without group prefix', () => {
+      // Test job name extraction for tree view
+      const jobName1 = 'CI-validations / Build: ci-mariner2';
+      const jobName2 = 'Release / Setup / (Dry run) Setup';
+      const jobName3 = 'Simple Job';
+      
+      const parts1 = jobName1.split(' / ');
+      const parts2 = jobName2.split(' / ');
+      const parts3 = jobName3.split(' / ');
+      
+      const nameWithoutPrefix1 = parts1.length > 1 ? parts1.slice(1).join(' / ') : jobName1;
+      const nameWithoutPrefix2 = parts2.length > 1 ? parts2.slice(1).join(' / ') : jobName2;
+      const nameWithoutPrefix3 = parts3.length > 1 ? parts3.slice(1).join(' / ') : jobName3;
+      
+      assert.strictEqual(nameWithoutPrefix1, 'Build: ci-mariner2');
+      assert.strictEqual(nameWithoutPrefix2, 'Setup / (Dry run) Setup');
+      assert.strictEqual(nameWithoutPrefix3, 'Simple Job');
+    });
+
+    test('should sort group time summaries by wall time descending', () => {
+      const timeline = [
+        { name: 'Fast / Job1', startTime: 1000000, endTime: 2000000 }, // 1s
+        { name: 'Fast / Job2', startTime: 2000000, endTime: 3000000 }, // 1s
+        { name: 'Slow / Job1', startTime: 3000000, endTime: 8000000 }, // 5s
+        { name: 'Medium / Job1', startTime: 4000000, endTime: 6000000 } // 2s
+      ];
+
+      const groups = groupJobsByPrefix(timeline);
+      
+      // Create group time summaries using wall time
+      const groupTimeSummaries = Object.keys(groups).map(groupName => {
+        const jobsInGroup = groups[groupName];
+        const groupStartTime = Math.min(...jobsInGroup.map(job => job.startTime));
+        const groupEndTime = Math.max(...jobsInGroup.map(job => job.endTime));
+        const groupWallTime = groupEndTime - groupStartTime;
+        const groupTotalSec = groupWallTime / 1000000;
+        return { name: groupName, totalSec: groupTotalSec, jobCount: jobsInGroup.length };
+      }).sort((a, b) => b.totalSec - a.totalSec);
+      
+      // Should be sorted by wall time descending: Slow (5s), then Medium/Fast (2s each)
+      assert.strictEqual(groupTimeSummaries[0].name, 'Slow');
+      assert.strictEqual(groupTimeSummaries[0].totalSec, 5);
+      
+      // Both Medium and Fast have 2s wall time, so check that they're both present
+      const remainingGroups = groupTimeSummaries.slice(1);
+      const groupNames = remainingGroups.map(g => g.name);
+      assert(groupNames.includes('Medium'));
+      assert(groupNames.includes('Fast'));
+      assert.strictEqual(remainingGroups[0].totalSec, 2);
+      assert.strictEqual(remainingGroups[1].totalSec, 2);
+    });
   });
 }); 

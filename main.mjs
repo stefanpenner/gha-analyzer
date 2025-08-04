@@ -581,13 +581,26 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
   const latestEnd = Math.max(...timeline.map(job => job.endTime));
   const totalDuration = latestEnd - earliestStart;
   
-  // Display each group
+  // Display each group with tree view
   sortedGroupNames.forEach(groupName => {
     const jobsInGroup = jobGroups[groupName];
+    
+    // Calculate wall time for this group (earliest start to latest end)
+    const groupStartTime = Math.min(...jobsInGroup.map(job => job.startTime));
+    const groupEndTime = Math.max(...jobsInGroup.map(job => job.endTime));
+    const groupWallTime = groupEndTime - groupStartTime;
+    const groupTotalSec = groupWallTime / 1000000; // Convert microseconds to seconds
     
     // Sort jobs within the group by start time
     const sortedJobsInGroup = jobsInGroup.sort((a, b) => a.startTime - b.startTime);
     
+    // Show group header with total time
+    const timeDisplay = groupTotalSec > 60 ? 
+      `${(groupTotalSec / 60).toFixed(1)}m` : 
+      `${groupTotalSec.toFixed(1)}s`;
+    console.error(`│${' '.repeat(scale)}  │ 📁 ${groupName} (${timeDisplay}, ${jobsInGroup.length} jobs)`);
+    
+    // Show jobs indented under the group
     sortedJobsInGroup.forEach((job, index) => {
       const relativeStart = job.startTime - earliestStart;
       const duration = job.endTime - job.startTime;
@@ -604,16 +617,29 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
       const bar = statusIcon.repeat(actualBarLength);
       const remaining = ' '.repeat(Math.max(0, scale - startPos - actualBarLength));
       
+      // Extract job name without group prefix
+      const jobNameParts = job.name.split(' / ');
+      const jobNameWithoutPrefix = jobNameParts.length > 1 ? jobNameParts.slice(1).join(' / ') : job.name;
+      
       // Job name with clickable link and duration
-      const jobLink = job.url ? makeClickableLink(job.url, job.name) : job.name;
+      const jobLink = job.url ? makeClickableLink(job.url, jobNameWithoutPrefix) : jobNameWithoutPrefix;
       const timeInfo = `${durationSec.toFixed(1)}s`;
       
       // Add group indicator for multiple instances of the same job name
       const sameNameJobs = jobsInGroup.filter(j => j.name === job.name);
       const groupIndicator = sameNameJobs.length > 1 ? ` [${sameNameJobs.indexOf(job) + 1}]` : '';
       
-      console.error(`│${padding}${bar}${remaining}  │ ${jobLink}${groupIndicator} (${timeInfo})`);
+      // Tree indentation
+      const isLastJob = index === sortedJobsInGroup.length - 1;
+      const treePrefix = isLastJob ? '└── ' : '├── ';
+      
+      console.error(`│${padding}${bar}${remaining}  │ ${treePrefix}${jobLink}${groupIndicator} (${timeInfo})`);
     });
+    
+    // Add spacing between groups
+    if (sortedGroupNames.indexOf(groupName) < sortedGroupNames.length - 1) {
+      console.error(`│${' '.repeat(scale)}  │`);
+    }
   });
   
   console.error('└' + '─'.repeat(scale + 2) + '┘');
@@ -633,6 +659,26 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
       return `${name} (${count})`;
     }).join(', ');
     console.error(`Groups: ${groupBreakdown}`);
+  }
+  
+  // Show group time summaries sorted by wall time
+  const groupTimeSummaries = sortedGroupNames.map(groupName => {
+    const jobsInGroup = jobGroups[groupName];
+    const groupStartTime = Math.min(...jobsInGroup.map(job => job.startTime));
+    const groupEndTime = Math.max(...jobsInGroup.map(job => job.endTime));
+    const groupWallTime = groupEndTime - groupStartTime;
+    const groupTotalSec = groupWallTime / 1000000;
+    return { name: groupName, totalSec: groupTotalSec, jobCount: jobsInGroup.length };
+  }).sort((a, b) => b.totalSec - a.totalSec); // Sort by wall time descending
+  
+  if (groupTimeSummaries.length > 0) {
+    console.error(`\n${makeClickableLink(repoActionsUrl, 'Group Time Summary')}:`);
+    groupTimeSummaries.forEach((group, index) => {
+      const timeDisplay = group.totalSec > 60 ? 
+        `${(group.totalSec / 60).toFixed(1)}m` : 
+        `${group.totalSec.toFixed(1)}s`;
+      console.error(`  ${index + 1}. ${group.name}: ${timeDisplay} (${group.jobCount} jobs)`);
+    });
   }
   
   // Show concurrency insights using original timeline for analysis
