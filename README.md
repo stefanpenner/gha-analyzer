@@ -68,17 +68,16 @@ Slowest Steps:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/github-actions-profiler.git
-cd github-actions-profiler
+git clone  https://github.com/stefanpenner/gha-analyzer
+cd gha-analyzer
 
 # Install dependencies (if any are added)
 npm install
-
-# Make executable
-chmod +x main.mjs
 ```
 
 ## 📖 Usage
+
+TODO: release via npm so we can simply do `npx gha-analyzer https://github.com/owner/repo/pull/123`
 
 ### Basic Usage
 
