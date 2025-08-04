@@ -14,34 +14,70 @@ describe('GitHub Actions Profiler - Core Functionality', () => {
   });
 
   describe('URL Parsing', () => {
-    test('should parse valid GitHub PR URL', () => {
-      const url = 'https://github.com/owner/repo/pull/123';
+    // Mock the parseGitHubUrl function for testing
+    function parseGitHubUrl(url) {
       const parsed = new URL(url);
       const pathParts = parsed.pathname.split('/').filter(Boolean);
       
-      assert.strictEqual(pathParts[0], 'owner');
-      assert.strictEqual(pathParts[1], 'repo');
-      assert.strictEqual(pathParts[2], 'pull');
-      assert.strictEqual(pathParts[3], '123');
+      // Handle PR URLs: /owner/repo/pull/prNumber
+      if (pathParts.length === 4 && pathParts[2] === 'pull') {
+        return {
+          owner: pathParts[0],
+          repo: pathParts[1],
+          type: 'pr',
+          identifier: pathParts[3]
+        };
+      }
+      
+      // Handle commit URLs: /owner/repo/commit/commitSha
+      if (pathParts.length === 4 && pathParts[2] === 'commit') {
+        return {
+          owner: pathParts[0],
+          repo: pathParts[1],
+          type: 'commit',
+          identifier: pathParts[3]
+        };
+      }
+      
+      throw new Error(`Invalid GitHub URL: ${url}`);
+    }
+
+    test('should parse valid GitHub PR URL', () => {
+      const url = 'https://github.com/owner/repo/pull/123';
+      const result = parseGitHubUrl(url);
+      
+      assert.strictEqual(result.owner, 'owner');
+      assert.strictEqual(result.repo, 'repo');
+      assert.strictEqual(result.type, 'pr');
+      assert.strictEqual(result.identifier, '123');
+    });
+
+    test('should parse valid GitHub commit URL', () => {
+      const url = 'https://github.com/owner/repo/commit/abc123def456';
+      const result = parseGitHubUrl(url);
+      
+      assert.strictEqual(result.owner, 'owner');
+      assert.strictEqual(result.repo, 'repo');
+      assert.strictEqual(result.type, 'commit');
+      assert.strictEqual(result.identifier, 'abc123def456');
     });
 
     test('should handle URLs with trailing slash', () => {
       const url = 'https://github.com/owner/repo/pull/456/';
-      const parsed = new URL(url);
-      const pathParts = parsed.pathname.split('/').filter(Boolean);
+      const result = parseGitHubUrl(url);
       
-      assert.strictEqual(pathParts[0], 'owner');
-      assert.strictEqual(pathParts[1], 'repo');
-      assert.strictEqual(pathParts[2], 'pull');
-      assert.strictEqual(pathParts[3], '456');
+      assert.strictEqual(result.owner, 'owner');
+      assert.strictEqual(result.repo, 'repo');
+      assert.strictEqual(result.type, 'pr');
+      assert.strictEqual(result.identifier, '456');
     });
 
     test('should reject invalid URL format', () => {
       const url = 'https://github.com/owner/repo/issues/123';
-      const parsed = new URL(url);
-      const pathParts = parsed.pathname.split('/').filter(Boolean);
       
-      assert.notStrictEqual(pathParts[2], 'pull');
+      assert.throws(() => {
+        parseGitHubUrl(url);
+      }, /Invalid GitHub URL/);
     });
   });
 

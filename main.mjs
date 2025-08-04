@@ -13,8 +13,12 @@
  * - Clickable links to GitHub Actions and PRs
  * - Chrome Tracing format for advanced analysis
  * 
- * Usage: node main.mjs <pr_url> [github_token]
+ * Usage: node main.mjs <github_url> [github_token]
  *        GITHUB_TOKEN environment variable can be used instead of token argument
+ *        
+ * Supported URL formats:
+ * - PR: https://github.com/owner/repo/pull/123
+ * - Commit: https://github.com/owner/repo/commit/abc123...
  * 
  * @author GitHub Actions Performance Team
  * @version 1.0.0
@@ -29,10 +33,14 @@ import url from 'url';
 
 const GITHUB_TOKEN = process.argv[3] || process.env.GITHUB_TOKEN;
 if (!GITHUB_TOKEN) {
-  console.error('Usage: node main.mjs <pr_url> [token]');
+  console.error('Usage: node main.mjs <github_url> [token]');
+  console.error('');
+  console.error('Supported URL formats:');
+  console.error('  PR: https://github.com/owner/repo/pull/123');
+  console.error('  Commit: https://github.com/owner/repo/commit/abc123...');
   console.error('');
   console.error('GitHub token can be provided as:');
-  console.error('  1. Command line argument: node main.mjs <pr_url> <token>');
+  console.error('  1. Command line argument: node main.mjs <github_url> <token>');
   console.error('  2. Environment variable: export GITHUB_TOKEN=<token>');
   process.exit(1);
 }
@@ -42,22 +50,38 @@ if (!GITHUB_TOKEN) {
 // =============================================================================
 
 /**
- * Parses a GitHub PR URL and extracts owner, repo, and PR number
- * @param {string} prUrl - GitHub PR URL
- * @returns {Object} - {owner, repo, prNumber}
+ * Parses a GitHub PR URL or commit URL and extracts owner, repo, and identifier
+ * @param {string} url - GitHub PR URL or commit URL
+ * @returns {Object} - {owner, repo, type, identifier}
  */
-function parsePRUrl(prUrl) {
-  const parsed = new URL(prUrl);
+function parseGitHubUrl(url) {
+  const parsed = new URL(url);
   const pathParts = parsed.pathname.split('/').filter(Boolean);
-  if (pathParts.length !== 4 || pathParts[2] !== 'pull') {
-    console.error(`Invalid ${makeClickableLink(prUrl, 'PR URL')}`);
-    process.exit(1);
+  
+  // Handle PR URLs: /owner/repo/pull/prNumber
+  if (pathParts.length === 4 && pathParts[2] === 'pull') {
+    return {
+      owner: pathParts[0],
+      repo: pathParts[1],
+      type: 'pr',
+      identifier: pathParts[3]
+    };
   }
-  return {
-    owner: pathParts[0],
-    repo: pathParts[1],
-    prNumber: pathParts[3]
-  };
+  
+  // Handle commit URLs: /owner/repo/commit/commitSha
+  if (pathParts.length === 4 && pathParts[2] === 'commit') {
+    return {
+      owner: pathParts[0],
+      repo: pathParts[1],
+      type: 'commit',
+      identifier: pathParts[3]
+    };
+  }
+  
+  console.error(`Invalid ${makeClickableLink(url, 'GitHub URL')}. Expected format:`);
+  console.error('  PR: https://github.com/owner/repo/pull/123');
+  console.error('  Commit: https://github.com/owner/repo/commit/abc123...');
+  process.exit(1);
 }
 
 /**
@@ -762,7 +786,7 @@ function findCriticalPath(jobs) {
   return criticalPath;
 }
 
-function outputResults(owner, repo, prNumber, branchName, headSha, metrics, traceEvents) {
+function outputResults(owner, repo, identifier, branchName, headSha, metrics, traceEvents, type, displayName, displayUrl) {
   // Simple completion message
   console.error(`\n✅ Generated ${traceEvents.length} trace events • Open in Perfetto.dev for analysis`);
   
@@ -772,10 +796,15 @@ function outputResults(owner, repo, prNumber, branchName, headSha, metrics, trac
   console.error(`📊 ${makeClickableLink(repoUrl, 'GitHub Actions Performance Report')}`);
   console.error(`${'='.repeat(60)}`);
   console.error(`Repository: ${makeClickableLink(repoUrl, `${owner}/${repo}`)}`);
-  const headerPrUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
-  console.error(`Pull Request: ${makeClickableLink(headerPrUrl, `#${prNumber}`)} (${branchName})`);
-  const headerCommitUrl = `https://github.com/${owner}/${repo}/commit/${headSha}`;
-  console.error(`Commit: ${makeClickableLink(headerCommitUrl, headSha.substring(0, 8))}`);
+  if (type === 'pr') {
+    const headerPrUrl = `https://github.com/${owner}/${repo}/pull/${identifier}`;
+    console.error(`Pull Request: ${makeClickableLink(headerPrUrl, `#${identifier}`)} (${branchName})`);
+    const headerCommitUrl = `https://github.com/${owner}/${repo}/commit/${headSha}`;
+    console.error(`Commit: ${makeClickableLink(headerCommitUrl, headSha.substring(0, 8))}`);
+  } else {
+    const headerCommitUrl = `https://github.com/${owner}/${repo}/commit/${identifier}`;
+    console.error(`Commit: ${makeClickableLink(headerCommitUrl, identifier.substring(0, 8))}`);
+  }
   console.error(`Analysis: ${metrics.totalRuns} runs • ${metrics.totalJobs} jobs (peak concurrency: ${metrics.maxConcurrency}) • ${metrics.totalSteps} steps`);
   console.error(`Success Rate: ${metrics.successRate}% workflows, ${metrics.jobSuccessRate}% jobs ran.`);
   
@@ -807,22 +836,32 @@ function outputResults(owner, repo, prNumber, branchName, headSha, metrics, trac
   }
   
   console.error(`\nLinks:`);
-  const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
   const actionsUrl = `https://github.com/${owner}/${repo}/actions`;
-  const commitUrl = `https://github.com/${owner}/${repo}/commit/${headSha}`;
   const perfettoUrl = `https://perfetto.dev`;
   
-  console.error(`• PR: ${makeClickableLink(prUrl)}`);
-  console.error(`• Actions: ${makeClickableLink(actionsUrl)}`);
-  console.error(`• Commit: ${makeClickableLink(commitUrl)}`);
+  if (type === 'pr') {
+    const prUrl = `https://github.com/${owner}/${repo}/pull/${identifier}`;
+    const commitUrl = `https://github.com/${owner}/${repo}/commit/${headSha}`;
+    console.error(`• PR: ${makeClickableLink(prUrl)}`);
+    console.error(`• Actions: ${makeClickableLink(actionsUrl)}`);
+    console.error(`• Commit: ${makeClickableLink(commitUrl)}`);
+  } else {
+    const commitUrl = `https://github.com/${owner}/${repo}/commit/${identifier}`;
+    console.error(`• Commit: ${makeClickableLink(commitUrl)}`);
+    console.error(`• Actions: ${makeClickableLink(actionsUrl)}`);
+  }
   console.error(`• Trace Analysis: ${makeClickableLink(perfettoUrl)}`);
   console.error(`${'='.repeat(60)}`);
   
   // Use already generated performance analysis data
 
   // Add trace naming metadata at the beginning
-  const traceTitle = `GitHub Actions: ${owner}/${repo} PR #${prNumber}`;
-  const tracePrUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+  const traceTitle = type === 'pr' 
+    ? `GitHub Actions: ${owner}/${repo} PR #${identifier}`
+    : `GitHub Actions: ${owner}/${repo} commit ${identifier.substring(0, 8)}`;
+  const traceUrl = type === 'pr' 
+    ? `https://github.com/${owner}/${repo}/pull/${identifier}`
+    : `https://github.com/${owner}/${repo}/commit/${identifier}`;
   const traceActionsUrl = `https://github.com/${owner}/${repo}/actions`;
   
   const traceMetadata = [
@@ -836,11 +875,11 @@ function outputResults(owner, repo, prNumber, branchName, headSha, metrics, trac
         name: traceTitle,
         trace_name: traceTitle,
         title: traceTitle,
-        pr_url: tracePrUrl,
-        github_url: tracePrUrl,
+        pr_url: type === 'pr' ? traceUrl : undefined,
+        github_url: traceUrl,
         actions_url: traceActionsUrl,
         repository: `${owner}/${repo}`,
-        pr_number: prNumber,
+        pr_number: type === 'pr' ? identifier : undefined,
         branch: branchName,
         commit: headSha
       }
@@ -851,8 +890,8 @@ function outputResults(owner, repo, prNumber, branchName, headSha, metrics, trac
       pid: 0,
               args: { 
           name: traceTitle,
-          url: tracePrUrl,
-          github_url: tracePrUrl
+          url: traceUrl,
+          github_url: traceUrl
         }
     }
   ];
@@ -863,7 +902,7 @@ function outputResults(owner, repo, prNumber, branchName, headSha, metrics, trac
     traceEvents: [...traceMetadata, ...traceEvents.sort((a, b) => a.ts - b.ts)],
     otherData: {
       trace_title: traceTitle,
-      pr_number: prNumber,
+      pr_number: type === 'pr' ? identifier : undefined,
       head_sha: headSha,
       branch_name: branchName,
       total_runs: metrics.totalRuns,
@@ -891,7 +930,7 @@ function outputResults(owner, repo, prNumber, branchName, headSha, metrics, trac
         }))
       },
       github_urls: {
-        pr: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
+        pr: type === 'pr' ? `https://github.com/${owner}/${repo}/pull/${identifier}` : undefined,
         actions: `https://github.com/${owner}/${repo}/actions`,
         commit: `https://github.com/${owner}/${repo}/commit/${headSha}`,
         repository: `https://github.com/${owner}/${repo}`
@@ -958,27 +997,47 @@ function getStepIcon(stepName, conclusion) {
  * Main function that orchestrates the entire profiling process
  */
 async function main() {
-  // Parse PR URL and validate inputs
-  const prUrl = process.argv[2];
-  if (!prUrl || !GITHUB_TOKEN) {
-    console.error('Usage: node script.mjs <pr_url> <token>');
+  // Parse GitHub URL and validate inputs
+  const githubUrl = process.argv[2];
+  if (!githubUrl || !GITHUB_TOKEN) {
+    console.error('Usage: node main.mjs <github_url> [token]');
+    console.error('');
+    console.error('Supported URL formats:');
+    console.error('  PR: https://github.com/owner/repo/pull/123');
+    console.error('  Commit: https://github.com/owner/repo/commit/abc123...');
     process.exit(1);
   }
 
-  const { owner, repo, prNumber } = parsePRUrl(prUrl);
+  const { owner, repo, type, identifier } = parseGitHubUrl(githubUrl);
   const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
   
-  // Fetch PR and workflow data
-  const analyzingPrUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
-  console.error(`Analyzing ${makeClickableLink(`https://github.com/${owner}/${repo}`, `${owner}/${repo}`)} ${makeClickableLink(analyzingPrUrl, `PR #${prNumber}`)}...`);
+  let headSha, branchName, displayName, displayUrl;
   
-  const prData = await fetchWithAuth(`${baseUrl}/pulls/${prNumber}`);
-  const { branchName, headSha } = extractPRInfo(prData, analyzingPrUrl);
+  if (type === 'pr') {
+    // Handle PR
+    const analyzingPrUrl = `https://github.com/${owner}/${repo}/pull/${identifier}`;
+    console.error(`Analyzing ${makeClickableLink(`https://github.com/${owner}/${repo}`, `${owner}/${repo}`)} ${makeClickableLink(analyzingPrUrl, `PR #${identifier}`)}...`);
+    
+    const prData = await fetchWithAuth(`${baseUrl}/pulls/${identifier}`);
+    const prInfo = extractPRInfo(prData, analyzingPrUrl);
+    headSha = prInfo.headSha;
+    branchName = prInfo.branchName;
+    displayName = `PR #${identifier}`;
+    displayUrl = analyzingPrUrl;
+  } else {
+    // Handle commit
+    const analyzingCommitUrl = `https://github.com/${owner}/${repo}/commit/${identifier}`;
+    console.error(`Analyzing ${makeClickableLink(`https://github.com/${owner}/${repo}`, `${owner}/${repo}`)} ${makeClickableLink(analyzingCommitUrl, `commit ${identifier.substring(0, 8)}`)}...`);
+    
+    headSha = identifier;
+    branchName = 'commit';
+    displayName = `commit ${identifier.substring(0, 8)}`;
+    displayUrl = analyzingCommitUrl;
+  }
   
   const allRuns = await fetchWorkflowRuns(baseUrl, headSha);
   if (allRuns.length === 0) {
-    const noPrUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
-    console.error(`No workflow runs found for ${makeClickableLink(noPrUrl, 'this PR')}`);
+    console.error(`No workflow runs found for ${makeClickableLink(displayUrl, displayName)}`);
     process.exit(1);
   }
 
@@ -996,7 +1055,7 @@ async function main() {
   // Process each workflow run (each run gets its own process)
   for (const [runIndex, run] of allRuns.entries()) {
     const workflowProcessId = runIndex + 1;
-    await processWorkflowRun(run, runIndex, workflowProcessId, earliestTime, metrics, traceEvents, jobStartTimes, jobEndTimes, owner, repo, prNumber);
+    await processWorkflowRun(run, runIndex, workflowProcessId, earliestTime, metrics, traceEvents, jobStartTimes, jobEndTimes, owner, repo, identifier);
   }
 
   // Generate concurrency counter events (use process 1 for global metrics)
@@ -1007,7 +1066,7 @@ async function main() {
 
  
   // Output results
-  outputResults(owner, repo, prNumber, branchName, headSha, finalMetrics, traceEvents);
+  outputResults(owner, repo, identifier, branchName, headSha, finalMetrics, traceEvents, type, displayName, displayUrl);
 }
 
 main();
