@@ -33,12 +33,7 @@ import url from 'url';
 
 const GITHUB_TOKEN = process.argv[3] || process.env.GITHUB_TOKEN;
 if (!GITHUB_TOKEN) {
-  console.error('Usage: node main.mjs <github_url> [token]');
-  console.error('');
-  console.error('Supported URL formats:');
-  console.error('  PR: https://github.com/owner/repo/pull/123');
-  console.error('  Commit: https://github.com/owner/repo/commit/abc123...');
-  console.error('');
+  console.error('Error: GitHub token is required');
   console.error('GitHub token can be provided as:');
   console.error('  1. Command line argument: node main.mjs <github_url> <token>');
   console.error('  2. Environment variable: export GITHUB_TOKEN=<token>');
@@ -1005,6 +1000,10 @@ async function main() {
     console.error('Supported URL formats:');
     console.error('  PR: https://github.com/owner/repo/pull/123');
     console.error('  Commit: https://github.com/owner/repo/commit/abc123...');
+    console.error('');
+    console.error('GitHub token can be provided as:');
+    console.error('  1. Command line argument: node main.mjs <github_url> <token>');
+    console.error('  2. Environment variable: export GITHUB_TOKEN=<token>');
     process.exit(1);
   }
 
