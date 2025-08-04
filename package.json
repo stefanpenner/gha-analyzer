@@ -9,10 +9,8 @@
   },
   "scripts": {
     "start": "node main.mjs",
-    "test:watch": "node --test --watch test/*.test.mjs",
-    "test:helpers": "node --test test/helpers.test.mjs",
-    "test:integration": "node --test test/main.test.mjs",
     "test": "node --test test/*.test.mjs",
+    "test:watch": "node --test --watch test/*.test.mjs",
     "lint": "echo 'No linter configured - consider adding ESLint'",
     "clean": "rm -f *.json trace-*.json output-*.json"
   },
@@ -45,4 +43,4 @@
   "devDependencies": {
     "nock": "^13.4.0"
   }
-} 
+}

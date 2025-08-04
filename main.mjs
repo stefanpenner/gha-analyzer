@@ -26,18 +26,66 @@
 
 import fs, { writeFileSync } from 'fs';
 import url from 'url';
+import { spawn } from 'child_process';
+import os from 'os';
+import path from 'path';
 
 // =============================================================================
 // CONFIGURATION AND VALIDATION
 // =============================================================================
 
-const GITHUB_TOKEN = process.argv[3] || process.env.GITHUB_TOKEN;
-if (!GITHUB_TOKEN) {
-  console.error('Error: GitHub token is required');
-  console.error('GitHub token can be provided as:');
-  console.error('  1. Command line argument: node main.mjs <github_url> <token>');
-  console.error('  2. Environment variable: export GITHUB_TOKEN=<token>');
-  process.exit(1);
+// Token will be extracted in main() function to handle multi-URL scenarios
+// Context object to hold global state
+const createContext = (token = process.env.GITHUB_TOKEN) => ({
+  githubToken: token
+});
+
+/**
+ * Progress bar utility for showing processing status
+ */
+class ProgressBar {
+  constructor(totalUrls, totalRuns) {
+    this.totalUrls = totalUrls;
+    this.totalRuns = totalRuns;
+    this.currentUrl = 0;
+    this.currentRun = 0;
+    this.currentUrlRuns = 0;
+    this.isProcessing = false;
+  }
+
+  startUrl(urlIndex, url) {
+    this.currentUrl = urlIndex + 1;
+    this.currentRun = 0;
+    this.isProcessing = true;
+    this.updateDisplay();
+  }
+
+  setUrlRuns(runCount) {
+    this.currentUrlRuns = runCount;
+    this.updateDisplay();
+  }
+
+  processRun() {
+    this.currentRun++;
+    this.updateDisplay();
+  }
+
+  updateDisplay() {
+    if (!this.isProcessing) return;
+    
+    const urlProgress = `${this.currentUrl}/${this.totalUrls}`;
+    const runProgress = this.currentUrlRuns > 0 ? ` (${this.currentRun}/${this.currentUrlRuns} runs)` : '';
+    const progressText = `Processing URL ${urlProgress}${runProgress}...`;
+    
+    // Clear the current line and show progress
+    process.stderr.write(`\r${progressText}`);
+  }
+
+  finish() {
+    this.isProcessing = false;
+    // Clear the progress line
+    process.stderr.write('\r' + ' '.repeat(50) + '\r');
+  }
 }
 
 // =============================================================================
@@ -45,9 +93,52 @@ if (!GITHUB_TOKEN) {
 // =============================================================================
 
 /**
+ * Humanizes time duration to show the most appropriate unit
+ * @param {number} seconds - Duration in seconds
+ * @returns {string} - Humanized time string (e.g., "2h 3m 45s", "15m 30s", "45s")
+ */
+function humanizeTime(seconds) {
+  if (seconds === 0) {
+    return '0s';
+  }
+  if (seconds < 1) {
+    return `${Math.round(seconds * 1000)}ms`;
+  }
+  
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  
+  const parts = [];
+  if (hours > 0) {
+    parts.push(`${hours}h`);
+  }
+  if (minutes > 0) {
+    parts.push(`${minutes}m`);
+  }
+  if (secs > 0 || parts.length === 0) {
+    parts.push(`${secs}s`);
+  }
+  
+  return parts.join(' ');
+}
+
+/**
+ * Extracts group prefix from job name (before first ' / ')
+ * @param {string} jobName - Job name
+ * @returns {string} - Group name
+ */
+function getJobGroup(jobName) {
+  // Split by '/' and take the first part as the group
+  const parts = jobName.split(' / ');
+  return parts.length > 1 ? parts[0] : jobName;
+}
+
+/**
  * Parses a GitHub PR URL or commit URL and extracts owner, repo, and identifier
  * @param {string} url - GitHub PR URL or commit URL
  * @returns {Object} - {owner, repo, type, identifier}
+ * @throws {Error} - If URL format is invalid
  */
 function parseGitHubUrl(url) {
   const parsed = new URL(url);
@@ -73,10 +164,7 @@ function parseGitHubUrl(url) {
     };
   }
   
-  console.error(`Invalid ${makeClickableLink(url, 'GitHub URL')}. Expected format:`);
-  console.error('  PR: https://github.com/owner/repo/pull/123');
-  console.error('  Commit: https://github.com/owner/repo/commit/abc123...');
-  process.exit(1);
+  throw new Error(`Invalid GitHub URL: ${url}. Expected format: PR: https://github.com/owner/repo/pull/123 or Commit: https://github.com/owner/repo/commit/abc123...`);
 }
 
 /**
@@ -84,9 +172,9 @@ function parseGitHubUrl(url) {
  * @param {string} url - API endpoint URL
  * @returns {Promise<Object>} - JSON response
  */
-async function fetchWithAuth(url) {
+async function fetchWithAuth(url, context) {
   const headers = {
-    Authorization: `token ${GITHUB_TOKEN}`,
+    Authorization: `token ${context.githubToken}`,
     Accept: 'application/vnd.github.v3+json',
     'User-Agent': 'Node'
   };
@@ -113,14 +201,14 @@ function extractPRInfo(prData, prUrl = null) {
   };
 }
 
-async function fetchWorkflowRuns(baseUrl, headSha) {
+async function fetchWorkflowRuns(baseUrl, headSha, context) {
   const commitRunsUrl = `${baseUrl}/actions/runs?head_sha=${headSha}&per_page=100`;
-  return await fetchWithPagination(commitRunsUrl);
+  return await fetchWithPagination(commitRunsUrl, context);
 }
 
-async function fetchWithPagination(url) {
+async function fetchWithPagination(url, context) {
   const headers = {
-    Authorization: `token ${GITHUB_TOKEN}`,
+    Authorization: `token ${context.githubToken}`,
     Accept: 'application/vnd.github.v3+json',
     'User-Agent': 'Node'
   };
@@ -201,10 +289,13 @@ function findEarliestTimestamp(allRuns) {
  * @param {Array} jobEndTimes - Array to track job end times
  * @param {string} owner - Repository owner
  * @param {string} repo - Repository name
- * @param {string} prNumber - PR number
+ * @param {string} identifier - PR number or commit SHA
  */
-async function processWorkflowRun(run, runIndex, processId, earliestTime, metrics, traceEvents, jobStartTimes, jobEndTimes, owner, repo, prNumber) {
-  console.error(`Processing run ${run.id}: ${run.name || 'unnamed'}...`);
+async function processWorkflowRun(run, runIndex, processId, earliestTime, metrics, traceEvents, jobStartTimes, jobEndTimes, owner, repo, identifier, urlIndex = 0, currentUrlResult = null, context = null, progressBar = null) {
+  // Update progress bar instead of console output
+  if (progressBar) {
+    progressBar.processRun();
+  }
   
   // Update run metrics
   metrics.totalRuns++;
@@ -217,29 +308,56 @@ async function processWorkflowRun(run, runIndex, processId, earliestTime, metric
   // Fetch jobs for this run
   const baseUrl = `https://api.github.com/repos/${run.repository.owner.login}/${run.repository.name}`;
   const jobsUrl = `${baseUrl}/actions/runs/${run.id}/jobs?per_page=100`;
-  const jobs = await fetchWithPagination(jobsUrl);
+  const jobs = await fetchWithPagination(jobsUrl, context);
   
-  // Calculate run timing
-  const runStartTs = Math.max(0, (new Date(run.created_at).getTime() - earliestTime) * 1000);
+  // Calculate run timing - use absolute timestamps for consistency
+  const absoluteRunStartMs = new Date(run.created_at).getTime();
+  const absoluteRunEndMs = new Date(run.updated_at).getTime();
+  const runStartTs = absoluteRunStartMs; // Keep in milliseconds for Perfetto
+  let runEndTs = Math.max(runStartTs + 1, absoluteRunEndMs); // Ensure minimum 1ms duration
   
   // Find latest job completion for run end time
-  let runEndTs = Math.max(runStartTs + 1000, (new Date(run.updated_at).getTime() - earliestTime) * 1000);
   for (const job of jobs) {
     if (job.completed_at) {
-      const jobEndTime = (new Date(job.completed_at).getTime() - earliestTime) * 1000;
+      const absoluteJobEndMs = new Date(job.completed_at).getTime();
+      const jobEndTime = absoluteJobEndMs; // Keep in milliseconds
       runEndTs = Math.max(runEndTs, jobEndTime);
     }
   }
   
-  const runDurationMs = (runEndTs - runStartTs) / 1000;
+  const runDurationMs = runEndTs - runStartTs;
   metrics.totalDuration += runDurationMs;
   
-  // Add process metadata for this workflow
+  // Add process metadata for this workflow with URL information
+  const sourceInfoForProcess = currentUrlResult.type === 'pr' ? `PR #${currentUrlResult.identifier}` : `commit ${currentUrlResult.identifier.substring(0, 8)}`;
+  const processName = `[${urlIndex + 1}] ${sourceInfoForProcess} - ${run.name || `Run ${run.id}`} (${run.status})`;
+  
+  // Define colors for different URLs (cycling through a color palette)
+  const colors = ['#4285f4', '#ea4335', '#fbbc04', '#34a853', '#ff6d01', '#46bdc6', '#7b1fa2', '#d81b60'];
+  const colorIndex = urlIndex % colors.length;
+  
   traceEvents.push({
     name: 'process_name',
     ph: 'M',
     pid: processId,
-    args: { name: `${run.name || `Run ${run.id}`} (${run.status})` }
+    args: { 
+      name: processName,
+      source_url: currentUrlResult.displayUrl,
+      source_type: currentUrlResult.type,
+      source_identifier: currentUrlResult.identifier,
+      repository: `${owner}/${repo}`
+    }
+  });
+  
+  // Add process color for visual distinction
+  traceEvents.push({
+    name: 'process_color',
+    ph: 'M',
+    pid: processId,
+    args: { 
+      color: colors[colorIndex],
+      color_name: `url_${urlIndex + 1}_color`
+    }
   });
   
   // Thread 1: Workflow overview with jobs timeline
@@ -248,13 +366,19 @@ async function processWorkflowRun(run, runIndex, processId, earliestTime, metric
   
   // Add workflow run event on overview thread
   const workflowUrl = `https://github.com/${run.repository.owner.login}/${run.repository.name}/actions/runs/${run.id}`;
-  const prUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+  const prUrl = `https://github.com/${owner}/${repo}/pull/${identifier}`;
+  const sourceInfo = currentUrlResult.type === 'pr' ? `PR #${identifier}` : `commit ${identifier.substring(0, 8)}`;
+  
+  // Normalize timestamps for Perfetto (relative to earliest time)
+  // Convert to microseconds for Chrome Tracing format when displayTimeUnit is 'ms'
+  const normalizedRunStartTs = (runStartTs - earliestTime) * 1000; // Convert to microseconds
+  const normalizedRunEndTs = (runEndTs - earliestTime) * 1000; // Convert to microseconds
   
   traceEvents.push({
-    name: `Workflow: ${run.name || `Run ${run.id}`}`,
+    name: `Workflow: ${run.name || `Run ${run.id}`} [${urlIndex + 1}]`,
     ph: 'X',
-    ts: runStartTs,
-    dur: runEndTs - runStartTs,
+    ts: normalizedRunStartTs,
+    dur: normalizedRunEndTs - normalizedRunStartTs,
     pid: processId,
     tid: workflowThreadId,
     cat: 'workflow',
@@ -267,34 +391,58 @@ async function processWorkflowRun(run, runIndex, processId, earliestTime, metric
       url: workflowUrl,
       github_url: workflowUrl,
       pr_url: prUrl,
-      pr_number: prNumber,
-      repository: `${owner}/${repo}`
+      pr_number: currentUrlResult.identifier,
+      repository: `${owner}/${repo}`,
+      source_url: currentUrlResult.displayUrl,
+      source_type: currentUrlResult.type,
+      source_identifier: currentUrlResult.identifier,
+      url_index: urlIndex + 1
     }
   });
   
   // Process jobs (each job gets its own thread with steps)
   for (const [jobIndex, job] of jobs.entries()) {
     const jobThreadId = jobIndex + 10; // Start from thread 10 to keep workflow overview first
-    await processJob(job, jobIndex, run, jobThreadId, processId, earliestTime, runStartTs, runEndTs, metrics, traceEvents, jobStartTimes, jobEndTimes, prUrl);
+    await processJob(job, jobIndex, run, jobThreadId, processId, earliestTime, runStartTs, runEndTs, metrics, traceEvents, jobStartTimes, jobEndTimes, prUrl, urlIndex, currentUrlResult);
   }
 }
 
-async function processJob(job, jobIndex, run, jobThreadId, processId, earliestTime, runStartTs, runEndTs, metrics, traceEvents, jobStartTimes, jobEndTimes, prUrl) {
-  if (!job.started_at || !job.completed_at) {
-    console.error(`  Skipping job ${job.name} - missing timing data`);
+async function processJob(job, jobIndex, run, jobThreadId, processId, earliestTime, runStartTs, runEndTs, metrics, traceEvents, jobStartTimes, jobEndTimes, prUrl, urlIndex, currentUrlResult) {
+  // Check if job has started
+  if (!job.started_at) {
+    console.error(`  Skipping job ${job.name} - missing start time`);
     return;
   }
   
+  // Check if job is still pending/running
+  const isPending = job.status !== 'completed' || !job.completed_at;
+  if (isPending) {
+    // Track pending jobs in metrics
+    metrics.pendingJobs = metrics.pendingJobs || [];
+    metrics.pendingJobs.push({
+      name: job.name,
+      status: job.status,
+      startedAt: job.started_at,
+      url: job.html_url || `https://github.com/${run.repository.owner.login}/${run.repository.name}/actions/runs/${run.id}/job/${job.id}`
+    });
+  }
+  
+  // For pending jobs, use current time as end time for visualization
+  const absoluteJobStartMs = new Date(job.started_at).getTime();
+  const absoluteJobEndMs = isPending ? Date.now() : new Date(job.completed_at).getTime();
+  
   // Update job metrics
   metrics.totalJobs++;
-  if (job.status !== 'completed' || job.conclusion !== 'success') {
+  if (isPending) {
+    // Don't count pending jobs as failed, they're still running
+  } else if (job.status !== 'completed' || job.conclusion !== 'success') {
     metrics.failedJobs++;
   }
   
-  // Calculate job timing
-  const jobStartTs = Math.max(runStartTs, (new Date(job.started_at).getTime() - earliestTime) * 1000);
-  let jobEndTs = Math.max(jobStartTs + 1000, (new Date(job.completed_at).getTime() - earliestTime) * 1000);
-  const jobDurationMs = (jobEndTs - jobStartTs) / 1000;
+  // Calculate job timing - use absolute timestamps for consistency
+  const jobStartTs = absoluteJobStartMs; // Keep in milliseconds for Perfetto
+  let jobEndTs = Math.max(jobStartTs + 1, absoluteJobEndMs); // Ensure minimum 1ms duration
+  const jobDurationMs = jobEndTs - jobStartTs;
   
   // Validate timing
   if (jobStartTs >= jobEndTs || jobDurationMs <= 0) {
@@ -321,15 +469,16 @@ async function processJob(job, jobIndex, run, jobThreadId, processId, earliestTi
   // Track for concurrency
   jobStartTimes.push({ ts: jobStartTs, type: 'start' });
   jobEndTimes.push({ ts: jobEndTs, type: 'end' });
-  const jobIcon = job.conclusion === 'success' ? '✅' : job.conclusion === 'failure' ? '❌' : '⏸️';
+  const jobIcon = isPending ? '⏳' : job.conclusion === 'success' ? '✅' : job.conclusion === 'failure' ? '❌' : job.conclusion === 'skipped' || job.conclusion === 'cancelled' ? '⏸️' : '❓';
   const jobUrl = job.html_url || `https://github.com/${run.repository.owner.login}/${run.repository.name}/actions/runs/${run.id}/job/${job.id}`;
 
-  // Add to timeline for visualization
+  // Add to timeline for visualization - use absolute timestamps for time display
   metrics.jobTimeline.push({
     name: job.name,
     startTime: jobStartTs,
     endTime: jobEndTs,
     conclusion: job.conclusion,
+    status: job.status,
     url: jobUrl
   });
   
@@ -337,11 +486,18 @@ async function processJob(job, jobIndex, run, jobThreadId, processId, earliestTi
   addThreadMetadata(traceEvents, processId, jobThreadId, `${jobIcon} ${job.name}`, jobIndex + 10);
   
   // Add job event (this shows the overall job duration)
+  const sourceInfoForJob = currentUrlResult.type === 'pr' ? `PR #${currentUrlResult.identifier}` : `commit ${currentUrlResult.identifier.substring(0, 8)}`;
+  
+  // Normalize timestamps for Perfetto (relative to earliest time)
+  // Convert to microseconds for Chrome Tracing format when displayTimeUnit is 'ms'
+  const normalizedJobStartTs = (jobStartTs - earliestTime) * 1000; // Convert to microseconds
+  const normalizedJobEndTs = (jobEndTs - earliestTime) * 1000; // Convert to microseconds
+  
   traceEvents.push({
-    name: `Job: ${job.name}`,
+    name: `Job: ${job.name} [${urlIndex + 1}]`,
     ph: 'X',
-    ts: jobStartTs,
-    dur: jobEndTs - jobStartTs,
+    ts: normalizedJobStartTs,
+    dur: normalizedJobEndTs - normalizedJobStartTs,
     pid: processId,
     tid: jobThreadId,
     cat: 'job',
@@ -356,17 +512,21 @@ async function processJob(job, jobIndex, run, jobThreadId, processId, earliestTi
       pr_url: prUrl,
       pr_number: prUrl.split('/').pop(),
       repository: prUrl.split('/').slice(-4, -2).join('/'),
-      job_id: job.id
+      job_id: job.id,
+      source_url: currentUrlResult.displayUrl,
+      source_type: currentUrlResult.type,
+      source_identifier: currentUrlResult.identifier,
+      url_index: urlIndex + 1
     }
   });
   
   // Process steps on the same thread as the job
   for (const step of job.steps) {
-    processStep(step, job, run, jobThreadId, processId, earliestTime, jobStartTs, jobEndTs, metrics, traceEvents, prUrl);
+    processStep(step, job, run, jobThreadId, processId, earliestTime, jobStartTs, jobEndTs, metrics, traceEvents, prUrl, urlIndex, currentUrlResult);
   }
 }
 
-function processStep(step, job, run, jobThreadId, processId, earliestTime, jobStartTs, jobEndTs, metrics, traceEvents, prUrl) {
+function processStep(step, job, run, jobThreadId, processId, earliestTime, jobStartTs, jobEndTs, metrics, traceEvents, prUrl, urlIndex, currentUrlResult) {
   if (!step.started_at || !step.completed_at) return;
   
   // Update step metrics
@@ -375,13 +535,15 @@ function processStep(step, job, run, jobThreadId, processId, earliestTime, jobSt
     metrics.failedSteps++;
   }
   
-  // Calculate step timing
-  const stepStartTs = Math.max(jobStartTs, (new Date(step.started_at).getTime() - earliestTime) * 1000);
-  let stepEndTs = Math.max(stepStartTs + 500, (new Date(step.completed_at).getTime() - earliestTime) * 1000);
+  // Calculate step timing - use absolute timestamps for consistency
+  const absoluteStepStartMs = new Date(step.started_at).getTime();
+  const absoluteStepEndMs = new Date(step.completed_at).getTime();
+  const stepStartTs = absoluteStepStartMs; // Keep in milliseconds for Perfetto
+  let stepEndTs = Math.max(stepStartTs + 1, absoluteStepEndMs); // Ensure minimum 1ms duration
   if (stepEndTs > jobEndTs) {
-    stepEndTs = Math.max(stepStartTs + 500, jobEndTs);
+    stepEndTs = Math.max(stepStartTs + 1, jobEndTs);
   }
-  const stepDurationMs = (stepEndTs - stepStartTs) / 1000;
+  const stepDurationMs = stepEndTs - stepStartTs;
   
   // Validate timing
   if (stepStartTs >= stepEndTs || stepDurationMs <= 0) return;
@@ -400,11 +562,16 @@ function processStep(step, job, run, jobThreadId, processId, earliestTime, jobSt
     url: stepUrl,
     jobName: job.name
   });
+  // Normalize timestamps for Perfetto (relative to earliest time)
+  // Convert to microseconds for Chrome Tracing format when displayTimeUnit is 'ms'
+  const normalizedStepStartTs = (stepStartTs - earliestTime) * 1000; // Convert to microseconds
+  const normalizedStepEndTs = (stepEndTs - earliestTime) * 1000; // Convert to microseconds
+  
   traceEvents.push({
-    name: `${stepIcon} ${step.name}`,
+    name: `${stepIcon} ${step.name} [${urlIndex + 1}]`,
     ph: 'X',
-    ts: stepStartTs,
-    dur: stepEndTs - stepStartTs,
+    ts: normalizedStepStartTs,
+    dur: normalizedStepEndTs - normalizedStepStartTs,
     pid: processId,
     tid: jobThreadId,
     cat: stepCategory,
@@ -418,7 +585,11 @@ function processStep(step, job, run, jobThreadId, processId, earliestTime, jobSt
       pr_url: prUrl,
       pr_number: prUrl.split('/').pop(),
       repository: prUrl.split('/').slice(-4, -2).join('/'),
-      step_number: step.number
+      step_number: step.number,
+      source_url: currentUrlResult.displayUrl,
+      source_type: currentUrlResult.type,
+      source_identifier: currentUrlResult.identifier,
+      url_index: urlIndex + 1
     }
   });
 }
@@ -443,7 +614,7 @@ function addThreadMetadata(traceEvents, processId, threadId, name, sortIndex) {
   }
 }
 
-function generateConcurrencyCounters(jobStartTimes, jobEndTimes, traceEvents) {
+function generateConcurrencyCounters(jobStartTimes, jobEndTimes, traceEvents, earliestTime) {
   if (jobStartTimes.length === 0) return;
   
   const allJobEvents = [...jobStartTimes, ...jobEndTimes].sort((a, b) => a.ts - b.ts);
@@ -468,10 +639,13 @@ function generateConcurrencyCounters(jobStartTimes, jobEndTimes, traceEvents) {
       currentConcurrency--;
     }
     
+    // Normalize timestamp relative to earliest time and convert to microseconds
+    const normalizedTs = (event.ts - earliestTime) * 1000; // Convert to microseconds
+    
     traceEvents.push({
       name: 'Concurrent Jobs',
       ph: 'C',
-      ts: event.ts,
+      ts: normalizedTs,
       pid: metricsProcessId,
       tid: counterThreadId,
       args: { 'Concurrent Jobs': currentConcurrency }
@@ -560,12 +734,46 @@ function makeClickableLink(url, text = null) {
   return `\u001b]8;;${url}\u0007${displayText}\u001b]8;;\u0007`;
 }
 
-function generateTimelineVisualization(metrics, repoActionsUrl) {
+function grayText(text) {
+  // ANSI escape sequence for gray color (bright black)
+  return `\u001b[90m${text}\u001b[0m`;
+}
+
+function greenText(text) {
+  // ANSI escape sequence for green color
+  return `\u001b[32m${text}\u001b[0m`;
+}
+
+function redText(text) {
+  // ANSI escape sequence for red color
+  return `\u001b[31m${text}\u001b[0m`;
+}
+
+function yellowText(text) {
+  // ANSI escape sequence for yellow color
+  return `\u001b[33m${text}\u001b[0m`;
+}
+
+function blueText(text) {
+  // ANSI escape sequence for blue color
+  return `\u001b[34m${text}\u001b[0m`;
+}
+
+function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0) {
   if (!metrics.jobTimeline || metrics.jobTimeline.length === 0) {
     return '';
   }
 
   const timeline = metrics.jobTimeline;
+  
+  // Calculate bottleneck jobs for this timeline
+  const timelineBottlenecks = findBottleneckJobs(timeline);
+  const bottleneckJobs = new Set();
+  timelineBottlenecks.forEach(job => {
+    // Create a unique identifier for the job to match against timeline jobs
+    const jobKey = `${job.name}-${job.startTime}-${job.endTime}`;
+    bottleneckJobs.add(jobKey);
+  });
   const scale = 60; // Terminal width for timeline bars
   
   // Calculate timeline bounds across all jobs
@@ -573,11 +781,11 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
   const latestEnd = Math.max(...timeline.map(job => job.endTime));
   const totalDuration = latestEnd - earliestStart;
   
-  console.error(`\n${makeClickableLink(repoActionsUrl, 'Pipeline Timeline')} (${timeline.length} jobs):`);
+  // Removed redundant "Pipeline Timeline" line - now handled by the caller
   
-  // Format start and end times for display
-  const startTimeFormatted = new Date(earliestStart / 1000).toLocaleTimeString();
-  const endTimeFormatted = new Date(latestEnd / 1000).toLocaleTimeString();
+  // Format start and end times for display (timeline uses absolute timestamps)
+  const startTimeFormatted = new Date(earliestStart).toLocaleTimeString();
+  const endTimeFormatted = new Date(latestEnd).toLocaleTimeString();
   
   console.error('┌' + '─'.repeat(scale + 2) + '┐');
   // Position start time on left, end time on right
@@ -587,13 +795,6 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
   
   console.error(`│ ${startLabel}${middlePadding}${endLabel} │`);
   console.error('├' + '─'.repeat(scale + 2) + '┤');
-  
-  // Helper function to extract group prefix from job name
-  function getJobGroup(jobName) {
-    // Split by '/' and take the first part as the group
-    const parts = jobName.split(' / ');
-    return parts.length > 1 ? parts[0] : jobName;
-  }
   
   // Group jobs by their prefix (before first ' / ')
   const jobGroups = {};
@@ -620,41 +821,56 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
     const groupStartTime = Math.min(...jobsInGroup.map(job => job.startTime));
     const groupEndTime = Math.max(...jobsInGroup.map(job => job.endTime));
     const groupWallTime = groupEndTime - groupStartTime;
-    const groupTotalSec = groupWallTime / 1000000; // Convert microseconds to seconds
+    const groupTotalSec = groupWallTime / 1000; // Convert milliseconds to seconds
     
     // Sort jobs within the group by start time
     const sortedJobsInGroup = jobsInGroup.sort((a, b) => a.startTime - b.startTime);
     
     // Show group header with total time
-    const timeDisplay = groupTotalSec > 60 ? 
-      `${(groupTotalSec / 60).toFixed(1)}m` : 
-      `${groupTotalSec.toFixed(1)}s`;
-    console.error(`│${' '.repeat(scale)}  │ 📁 ${groupName} (${timeDisplay}, ${jobsInGroup.length} jobs)`);
+    const timeDisplay = humanizeTime(groupTotalSec);
+    // Ensure group name is clean and doesn't contain any problematic characters
+    const cleanGroupName = groupName.replace(/[^\w\s\-_/()]/g, '').trim();
+    console.error(`│${' '.repeat(scale)}  │ 📁 ${cleanGroupName} (${timeDisplay}, ${jobsInGroup.length} jobs)`);
     
     // Show jobs indented under the group
     sortedJobsInGroup.forEach((job, index) => {
       const relativeStart = job.startTime - earliestStart;
       const duration = job.endTime - job.startTime;
-      const durationSec = duration / 1000000; // Convert microseconds to seconds
+      const durationSec = duration / 1000; // Convert milliseconds to seconds
       
       // Calculate positions in the timeline
       const startPos = Math.floor((relativeStart / totalDuration) * scale);
       const barLength = Math.max(1, Math.floor((duration / totalDuration) * scale));
       
-      // Create the timeline bar with better formatting
+      // Create the timeline bar with better formatting and colors
       const padding = ' '.repeat(Math.max(0, startPos));
-      const statusIcon = job.conclusion === 'success' ? '█' : job.conclusion === 'failure' ? '▓' : '░';
-      const actualBarLength = Math.max(1, barLength);
-      const bar = statusIcon.repeat(actualBarLength);
-      const remaining = ' '.repeat(Math.max(0, scale - startPos - actualBarLength));
       
-      // Extract job name without group prefix
+      // Choose status icon and color based on job status
+      let statusIcon, coloredBar;
+      if (job.conclusion === 'success') {
+        statusIcon = '█';
+        coloredBar = greenText(statusIcon.repeat(Math.max(1, barLength)));
+      } else if (job.conclusion === 'failure') {
+        statusIcon = '█';
+        coloredBar = redText(statusIcon.repeat(Math.max(1, barLength)));
+      } else if (job.status === 'in_progress' || job.status === 'queued' || job.status === 'waiting') {
+        statusIcon = '▒';
+        coloredBar = blueText(statusIcon.repeat(Math.max(1, barLength)));
+      } else if (job.conclusion === 'skipped' || job.conclusion === 'cancelled') {
+        statusIcon = '░';
+        coloredBar = grayText(statusIcon.repeat(Math.max(1, barLength)));
+      } else {
+        statusIcon = '░';
+        coloredBar = grayText(statusIcon.repeat(Math.max(1, barLength)));
+      }
+      
+      const remaining = ' '.repeat(Math.max(0, scale - startPos - Math.max(1, barLength)));
+      
+      // Extract job name without group prefix and ensure it's clean
       const jobNameParts = job.name.split(' / ');
       const jobNameWithoutPrefix = jobNameParts.length > 1 ? jobNameParts.slice(1).join(' / ') : job.name;
-      
-      // Job name with clickable link and duration
-      const jobLink = job.url ? makeClickableLink(job.url, jobNameWithoutPrefix) : jobNameWithoutPrefix;
-      const timeInfo = `${durationSec.toFixed(1)}s`;
+      // Ensure job name is clean and doesn't contain any problematic characters
+      const cleanJobName = jobNameWithoutPrefix.replace(/[^\w\s\-_/()]/g, '').trim();
       
       // Add group indicator for multiple instances of the same job name
       const sameNameJobs = jobsInGroup.filter(j => j.name === job.name);
@@ -664,7 +880,33 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
       const isLastJob = index === sortedJobsInGroup.length - 1;
       const treePrefix = isLastJob ? '└── ' : '├── ';
       
-      console.error(`│${padding}${bar}${remaining}  │ ${treePrefix}${jobLink}${groupIndicator} (${timeInfo})`);
+      // Check if this job is a bottleneck
+      const jobKey = `${job.name}-${job.startTime}-${job.endTime}`;
+      const isBottleneck = bottleneckJobs.has(jobKey);
+      
+      // Add bottleneck indicator for high-impact optimization opportunities
+      const bottleneckIndicator = isBottleneck ? ' 🔥' : '';
+      
+      // Create text for job name and time (without tree prefix)
+      const jobNameAndTime = `${cleanJobName}${groupIndicator} (${humanizeTime(durationSec)})${bottleneckIndicator}`;
+      const jobLink = job.url ? makeClickableLink(job.url, jobNameAndTime) : jobNameAndTime;
+      
+      // Color the job name and time based on status
+      let displayJobText;
+      if (job.conclusion === 'success') {
+        displayJobText = greenText(jobLink);
+      } else if (job.conclusion === 'failure') {
+        displayJobText = redText(jobLink);
+      } else if (job.status === 'in_progress' || job.status === 'queued' || job.status === 'waiting') {
+        displayJobText = blueText(`⏳ ${jobLink}`);
+      } else if (job.conclusion === 'skipped' || job.conclusion === 'cancelled') {
+        displayJobText = grayText(jobLink);
+      } else {
+        displayJobText = jobLink;
+      }
+      const displayText = `${treePrefix}${displayJobText}`;
+      
+      console.error(`│${padding}${coloredBar}${remaining}  │ ${displayText}`);
     });
     
 
@@ -672,22 +914,8 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
   
   console.error('└' + '─'.repeat(scale + 2) + '┘');
   
-  // Timeline legend
-  console.error('Legend: █ Success  ▓ Failed  ░ Cancelled/Skipped');
-  
-  // Show grouping insights
-  const groupedJobs = Object.values(jobGroups).filter(group => group.length > 1);
-  if (groupedJobs.length > 0) {
-    const totalGrouped = groupedJobs.reduce((sum, group) => sum + group.length, 0);
-    console.error(`Grouped ${totalGrouped} jobs by prefix (${groupedJobs.length} groups)`);
-    
-    // Show group breakdown
-    const groupBreakdown = sortedGroupNames.map(name => {
-      const count = jobGroups[name].length;
-      return `${name} (${count})`;
-    }).join(', ');
-    console.error(`Groups: ${groupBreakdown}`);
-  }
+  // Timeline legend with colors
+  console.error(`Legend: ${greenText('█ Success')}  ${redText('█ Failed')}  ${blueText('▒ Pending/Running')}  ${grayText('░ Cancelled/Skipped')}`);
   
   // Show group time summaries sorted by wall time
   const groupTimeSummaries = sortedGroupNames.map(groupName => {
@@ -695,32 +923,19 @@ function generateTimelineVisualization(metrics, repoActionsUrl) {
     const groupStartTime = Math.min(...jobsInGroup.map(job => job.startTime));
     const groupEndTime = Math.max(...jobsInGroup.map(job => job.endTime));
     const groupWallTime = groupEndTime - groupStartTime;
-    const groupTotalSec = groupWallTime / 1000000;
+    const groupTotalSec = groupWallTime / 1000;
     return { name: groupName, totalSec: groupTotalSec, jobCount: jobsInGroup.length };
   }).sort((a, b) => b.totalSec - a.totalSec); // Sort by wall time descending
   
-  if (groupTimeSummaries.length > 0) {
-    console.error(`\n${makeClickableLink(repoActionsUrl, 'Group Time Summary')}:`);
-    groupTimeSummaries.forEach((group, index) => {
-      const timeDisplay = group.totalSec > 60 ? 
-        `${(group.totalSec / 60).toFixed(1)}m` : 
-        `${group.totalSec.toFixed(1)}s`;
-      console.error(`  ${index + 1}. ${group.name}: ${timeDisplay} (${group.jobCount} jobs)`);
-    });
-  }
+
   
   // Show concurrency insights using original timeline for analysis
   const sortedJobs = [...timeline].sort((a, b) => a.startTime - b.startTime);
-  const overlappingJobs = findOverlappingJobs(sortedJobs);
-  if (overlappingJobs.length > 0) {
-    console.error(`Concurrent execution detected: ${overlappingJobs.length} overlapping job pairs`);
-  }
   
-  // Show critical path (longest sequential chain)
-  const criticalPath = findCriticalPath(sortedJobs);
-  if (criticalPath.length > 1) {
-    const criticalDuration = criticalPath.reduce((sum, job) => sum + (job.endTime - job.startTime), 0) / 1000000;
-    console.error(`Critical path: ${criticalPath.length} jobs, ${criticalDuration.toFixed(1)}s total`);
+  // Show bottleneck jobs summary
+  if (timelineBottlenecks.length > 0) {
+    const bottleneckDuration = timelineBottlenecks.reduce((sum, job) => sum + (job.endTime - job.startTime), 0) / 1000;
+    console.error(`Bottleneck jobs: ${timelineBottlenecks.length} jobs, ${humanizeTime(bottleneckDuration)} total`);
   }
 }
 
@@ -740,206 +955,45 @@ function findOverlappingJobs(jobs) {
   return overlaps;
 }
 
-function findCriticalPath(jobs) {
+function findBottleneckJobs(jobs) {
   if (jobs.length === 0) return [];
   
-  // For pipelines without explicit dependencies, the critical path is approximated as:
-  // The path from pipeline start to end that represents the longest blocking duration
+  // Filter out jobs with 0 or very short duration (less than 1 second)
+  const significantJobs = jobs.filter(job => {
+    const duration = job.endTime - job.startTime;
+    return duration > 1000; // More than 1 second in milliseconds
+  });
   
-  // Sort jobs by start time
-  const sortedByStart = [...jobs].sort((a, b) => a.startTime - b.startTime);
-  const pipelineStart = sortedByStart[0].startTime;
-  const pipelineEnd = Math.max(...sortedByStart.map(job => job.endTime));
+  if (significantJobs.length === 0) return [];
   
-  // Find the job that ends latest (likely the bottleneck)
-  const bottleneckJob = sortedByStart.reduce((longest, job) => 
-    job.endTime > longest.endTime ? job : longest
-  );
+  // Sort jobs by duration (longest first)
+  const sortedByDuration = [...significantJobs].sort((a, b) => {
+    const durationA = b.endTime - b.startTime;
+    const durationB = a.endTime - a.startTime;
+    return durationA - durationB;
+  });
   
-  // Simple heuristic: if one job dominates the timeline, it's likely the critical path
-  const bottleneckDuration = bottleneckJob.endTime - bottleneckJob.startTime;
+  // Calculate total pipeline duration
+  const pipelineStart = Math.min(...jobs.map(job => job.startTime));
+  const pipelineEnd = Math.max(...jobs.map(job => job.endTime));
   const totalPipelineDuration = pipelineEnd - pipelineStart;
   
-  // If the bottleneck job takes up most of the pipeline duration, it's the critical path
-  if (bottleneckDuration > totalPipelineDuration * 0.7) {
-    return [bottleneckJob];
+  // Find jobs that are significant bottlenecks (more than 10% of total pipeline time)
+  const bottleneckThreshold = totalPipelineDuration * 0.1; // 10% threshold
+  const bottleneckJobs = sortedByDuration.filter(job => {
+    const duration = job.endTime - job.startTime;
+    return duration > bottleneckThreshold;
+  });
+  
+  // If no jobs meet the threshold, return the top 2 longest jobs
+  if (bottleneckJobs.length === 0) {
+    return sortedByDuration.slice(0, 2);
   }
   
-  // Otherwise, find the longest sequential chain (original algorithm as fallback)
-  let criticalPath = [sortedByStart[0]];
-  
-  for (let i = 1; i < sortedByStart.length; i++) {
-    const currentJob = sortedByStart[i];
-    const lastInPath = criticalPath[criticalPath.length - 1];
-    
-    // If this job starts after the last one ends, it could be in the critical path
-    if (currentJob.startTime >= lastInPath.endTime) {
-      criticalPath.push(currentJob);
-    }
-  }
-  
-  return criticalPath;
+  return bottleneckJobs;
 }
 
-function outputResults(owner, repo, identifier, branchName, headSha, metrics, traceEvents, type, displayName, displayUrl) {
-  // Simple completion message
-  console.error(`\n✅ Generated ${traceEvents.length} trace events • Open in Perfetto.dev for analysis`);
-  
-  // Professional summary report
-  console.error(`\n${'='.repeat(60)}`);
-  const repoUrl = `https://github.com/${owner}/${repo}`;
-  console.error(`📊 ${makeClickableLink(repoUrl, 'GitHub Actions Performance Report')}`);
-  console.error(`${'='.repeat(60)}`);
-  console.error(`Repository: ${makeClickableLink(repoUrl, `${owner}/${repo}`)}`);
-  if (type === 'pr') {
-    const headerPrUrl = `https://github.com/${owner}/${repo}/pull/${identifier}`;
-    console.error(`Pull Request: ${makeClickableLink(headerPrUrl, `#${identifier}`)} (${branchName})`);
-    const headerCommitUrl = `https://github.com/${owner}/${repo}/commit/${headSha}`;
-    console.error(`Commit: ${makeClickableLink(headerCommitUrl, headSha.substring(0, 8))}`);
-  } else {
-    const headerCommitUrl = `https://github.com/${owner}/${repo}/commit/${identifier}`;
-    console.error(`Commit: ${makeClickableLink(headerCommitUrl, identifier.substring(0, 8))}`);
-  }
-  console.error(`Analysis: ${metrics.totalRuns} runs • ${metrics.totalJobs} jobs (peak concurrency: ${metrics.maxConcurrency}) • ${metrics.totalSteps} steps`);
-  console.error(`Success Rate: ${metrics.successRate}% workflows, ${metrics.jobSuccessRate}% jobs ran.`);
-  
-  // Generate and show slowest jobs analysis
-  const repoActionsUrl = `https://github.com/${owner}/${repo}/actions`;
-  console.error(`\n${makeClickableLink(repoActionsUrl, 'Performance Analysis')}:`);
-  
-  // Show timeline visualization
-  generateTimelineVisualization(metrics, repoActionsUrl);
-  
-  const slowJobs = analyzeSlowJobs(metrics, 5);
-  if (slowJobs.length > 0) {
-    console.error(`\n${makeClickableLink(repoActionsUrl, 'Slowest Jobs')}:`);
-    slowJobs.forEach((job, i) => {
-      const jobLink = job.url ? makeClickableLink(job.url, job.name) : job.name;
-      console.error(`  ${i + 1}. ${(job.duration / 1000).toFixed(1)}s - ${jobLink}`);
-    });
-  }
 
-  const slowSteps = analyzeSlowSteps(metrics, 5);
-  if (slowSteps.length > 0) {
-    console.error(`\n${makeClickableLink(repoActionsUrl, 'Slowest Steps')}:`);
-    slowSteps.forEach((step, i) => {
-      const jobInfo = step.jobName ? ` (in ${step.jobName})` : '';
-      const fullDescription = `${step.name}${jobInfo}`;
-      const stepLink = step.url ? makeClickableLink(step.url, fullDescription) : fullDescription;
-      console.error(`  ${i + 1}. ${(step.duration / 1000).toFixed(1)}s - ${stepLink}`);
-    });
-  }
-  
-  console.error(`\nLinks:`);
-  const actionsUrl = `https://github.com/${owner}/${repo}/actions`;
-  const perfettoUrl = `https://perfetto.dev`;
-  
-  if (type === 'pr') {
-    const prUrl = `https://github.com/${owner}/${repo}/pull/${identifier}`;
-    const commitUrl = `https://github.com/${owner}/${repo}/commit/${headSha}`;
-    console.error(`• PR: ${makeClickableLink(prUrl)}`);
-    console.error(`• Actions: ${makeClickableLink(actionsUrl)}`);
-    console.error(`• Commit: ${makeClickableLink(commitUrl)}`);
-  } else {
-    const commitUrl = `https://github.com/${owner}/${repo}/commit/${identifier}`;
-    console.error(`• Commit: ${makeClickableLink(commitUrl)}`);
-    console.error(`• Actions: ${makeClickableLink(actionsUrl)}`);
-  }
-  console.error(`• Trace Analysis: ${makeClickableLink(perfettoUrl)}`);
-  console.error(`${'='.repeat(60)}`);
-  
-  // Use already generated performance analysis data
-
-  // Add trace naming metadata at the beginning
-  const traceTitle = type === 'pr' 
-    ? `GitHub Actions: ${owner}/${repo} PR #${identifier}`
-    : `GitHub Actions: ${owner}/${repo} commit ${identifier.substring(0, 8)}`;
-  const traceUrl = type === 'pr' 
-    ? `https://github.com/${owner}/${repo}/pull/${identifier}`
-    : `https://github.com/${owner}/${repo}/commit/${identifier}`;
-  const traceActionsUrl = `https://github.com/${owner}/${repo}/actions`;
-  
-  const traceMetadata = [
-    {
-      name: 'trace_metadata',
-      ph: 'M',
-      pid: 0,
-      tid: 0,
-      ts: 0,
-      args: {
-        name: traceTitle,
-        trace_name: traceTitle,
-        title: traceTitle,
-        pr_url: type === 'pr' ? traceUrl : undefined,
-        github_url: traceUrl,
-        actions_url: traceActionsUrl,
-        repository: `${owner}/${repo}`,
-        pr_number: type === 'pr' ? identifier : undefined,
-        branch: branchName,
-        commit: headSha
-      }
-    },
-    {
-      name: 'process_name', 
-      ph: 'M',
-      pid: 0,
-              args: { 
-          name: traceTitle,
-          url: traceUrl,
-          github_url: traceUrl
-        }
-    }
-  ];
-
-  // Output JSON for Perfetto
-  const output = {
-    displayTimeUnit: 'ms',
-    traceEvents: [...traceMetadata, ...traceEvents.sort((a, b) => a.ts - b.ts)],
-    otherData: {
-      trace_title: traceTitle,
-      pr_number: type === 'pr' ? identifier : undefined,
-      head_sha: headSha,
-      branch_name: branchName,
-      total_runs: metrics.totalRuns,
-      success_rate: `${metrics.successRate}%`,
-      total_events: traceEvents.length,
-      performance_analysis: {
-        slowest_jobs: slowJobs.map(job => ({
-          name: job.name,
-          duration_seconds: (job.duration / 1000).toFixed(1),
-          url: job.url
-        })),
-        slowest_steps: slowSteps.map(step => ({
-          name: step.name,
-          duration_seconds: (step.duration / 1000).toFixed(1),
-          url: step.url,
-          job_name: step.jobName
-        })),
-        timeline: metrics.jobTimeline.map(job => ({
-          name: job.name,
-          start_time: job.startTime,
-          end_time: job.endTime,
-          duration_seconds: ((job.endTime - job.startTime) / 1000000).toFixed(1),
-          conclusion: job.conclusion,
-          url: job.url
-        }))
-      },
-      github_urls: {
-        pr: type === 'pr' ? `https://github.com/${owner}/${repo}/pull/${identifier}` : undefined,
-        actions: `https://github.com/${owner}/${repo}/actions`,
-        commit: `https://github.com/${owner}/${repo}/commit/${headSha}`,
-        repository: `https://github.com/${owner}/${repo}`
-      }
-    }
-  };
-  
-  try {
-    console.log(JSON.stringify(output, null, 2));
-  } catch (error) {
-    console.error('JSON validation failed:', error);
-    process.exit(1);
-  }
-}
 
 // Helper function to categorize steps based on their names
 function categorizeStep(stepName) {
@@ -985,6 +1039,84 @@ function getStepIcon(stepName, conclusion) {
 }
 
 // =============================================================================
+// PERFETTO INTEGRATION
+// =============================================================================
+
+/**
+ * Downloads and uses the Perfetto open_trace_in_ui script to open a trace file
+ * @param {string} traceFile - Path to the trace file to open
+ */
+async function openTraceInPerfetto(traceFile) {
+  const scriptName = 'open_trace_in_ui';
+  const scriptUrl = 'https://raw.githubusercontent.com/google/perfetto/main/tools/open_trace_in_ui';
+  const tmpDir = os.tmpdir();
+  const scriptPath = path.join(tmpDir, scriptName);
+  
+  try {
+    console.error(`\n🚀 Opening trace in Perfetto UI...`);
+    
+    // Check if script already exists in temp directory
+    if (!fs.existsSync(scriptPath)) {
+      console.error(`📥 Downloading ${scriptName} from Perfetto...`);
+      
+      // Download the script using curl to temp directory
+      const downloadResult = await new Promise((resolve, reject) => {
+        const curl = spawn('curl', ['-L', '-o', scriptPath, scriptUrl], { stdio: 'inherit' });
+        curl.on('close', (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`Failed to download ${scriptName} (exit code: ${code})`));
+          }
+        });
+        curl.on('error', reject);
+      });
+      
+      // Make the script executable
+      await new Promise((resolve, reject) => {
+        const chmod = spawn('chmod', ['+x', scriptPath], { stdio: 'inherit' });
+        chmod.on('close', (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`Failed to make ${scriptName} executable (exit code: ${code})`));
+          }
+        });
+        chmod.on('error', reject);
+      });
+    } else {
+      console.error(`📁 Using existing script: ${scriptPath}`);
+    }
+    
+    // Open the trace file using the script
+    console.error(`🔗 Opening ${traceFile} in Perfetto UI...`);
+    const openResult = await new Promise((resolve, reject) => {
+      const openScript = spawn(scriptPath, [traceFile], { 
+        stdio: 'inherit',
+        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+      });
+      openScript.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`Failed to open trace in Perfetto (exit code: ${code})`));
+        }
+      });
+      openScript.on('error', (error) => {
+        reject(new Error(`Failed to execute script: ${error.message}`));
+      });
+    });
+    
+    console.error(`✅ Trace opened successfully in Perfetto UI!`);
+    
+  } catch (error) {
+    console.error(`❌ Failed to open trace in Perfetto: ${error.message}`);
+    console.error(`💡 You can manually open the trace at: https://ui.perfetto.dev`);
+    console.error(`   Then click "Open trace file" and select: ${traceFile}`);
+  }
+}
+
+// =============================================================================
 // MAIN EXECUTION
 // =============================================================================
 
@@ -992,80 +1124,553 @@ function getStepIcon(stepName, conclusion) {
  * Main function that orchestrates the entire profiling process
  */
 async function main() {
-  // Parse GitHub URL and validate inputs
-  const githubUrl = process.argv[2];
-  if (!githubUrl || !GITHUB_TOKEN) {
-    console.error('Usage: node main.mjs <github_url> [token]');
+  // Parse command line arguments
+  const args = process.argv.slice(2);
+  
+  // Extract --perfetto and --open-in-perfetto flags
+  let perfettoFile = null;
+  let openInPerfetto = false;
+  const filteredArgs = args.filter(arg => {
+    if (arg.startsWith('--perfetto=')) {
+      perfettoFile = arg.substring('--perfetto='.length);
+      return false; // Remove from args
+    }
+    if (arg === '--open-in-perfetto') {
+      openInPerfetto = true;
+      return false; // Remove from args
+    }
+    return true;
+  });
+  
+  // Parse GitHub URLs and validate inputs
+  const githubUrls = filteredArgs.slice(0, -1); // All args except the last one (which might be token)
+  const providedToken = filteredArgs[filteredArgs.length - 1];
+  
+  // Check if the last argument is a token (doesn't look like a URL)
+  const urls = providedToken && !providedToken.startsWith('http') ? githubUrls : [...githubUrls, providedToken].filter(Boolean);
+  
+  // Create context with token
+  const context = createContext(providedToken && !providedToken.startsWith('http') ? providedToken : undefined);
+  
+  if (urls.length === 0 || !context.githubToken) {
+    console.error('Usage: node main.mjs <github_url1> [github_url2] ... [token] [--perfetto=<file_name_for_trace.json>] [--open-in-perfetto]');
     console.error('');
     console.error('Supported URL formats:');
     console.error('  PR: https://github.com/owner/repo/pull/123');
     console.error('  Commit: https://github.com/owner/repo/commit/abc123...');
     console.error('');
+    console.error('Examples:');
+    console.error('  Single URL: node main.mjs https://github.com/owner/repo/pull/123');
+    console.error('  Multiple URLs: node main.mjs https://github.com/owner/repo/pull/123 https://github.com/owner/repo/commit/abc123');
+    console.error('  With token: node main.mjs https://github.com/owner/repo/pull/123 your_token');
+    console.error('  With perfetto output: node main.mjs https://github.com/owner/repo/pull/123 --perfetto=trace.json');
+    console.error('  With token and perfetto: node main.mjs https://github.com/owner/repo/pull/123 your_token --perfetto=trace.json');
+    console.error('  Auto-open in perfetto: node main.mjs https://github.com/owner/repo/pull/123 --perfetto=trace.json --open-in-perfetto');
+    console.error('');
     console.error('GitHub token can be provided as:');
-    console.error('  1. Command line argument: node main.mjs <github_url> <token>');
+    console.error('  1. Command line argument: node main.mjs <github_urls> <token>');
     console.error('  2. Environment variable: export GITHUB_TOKEN=<token>');
+    console.error('');
+    console.error('Perfetto tracing:');
+    console.error('  Use --perfetto=<filename> to save Chrome Tracing format output to a file');
+    console.error('  Use --open-in-perfetto to automatically open the trace in Perfetto UI');
+    console.error('  If not specified, no trace file will be generated');
     process.exit(1);
   }
 
-  const { owner, repo, type, identifier } = parseGitHubUrl(githubUrl);
-  const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
+  // Initialize combined data structures
+  const allTraceEvents = [];
+  const allJobStartTimes = [];
+  const allJobEndTimes = [];
+  const allMetrics = initializeMetrics();
+  const urlResults = [];
+  let globalEarliestTime = Infinity;
+  let globalLatestTime = 0;
+  let totalRuns = 0;
+
+    // Initialize progress bar
+  const progressBar = new ProgressBar(urls.length, 0);
   
-  let headSha, branchName, displayName, displayUrl;
-  
-  if (type === 'pr') {
-    // Handle PR
-    const analyzingPrUrl = `https://github.com/${owner}/${repo}/pull/${identifier}`;
-    console.error(`Analyzing ${makeClickableLink(`https://github.com/${owner}/${repo}`, `${owner}/${repo}`)} ${makeClickableLink(analyzingPrUrl, `PR #${identifier}`)}...`);
+  // Process each URL
+  for (const [urlIndex, githubUrl] of urls.entries()) {
+    progressBar.startUrl(urlIndex, githubUrl);
     
-    const prData = await fetchWithAuth(`${baseUrl}/pulls/${identifier}`);
-    const prInfo = extractPRInfo(prData, analyzingPrUrl);
-    headSha = prInfo.headSha;
-    branchName = prInfo.branchName;
-    displayName = `PR #${identifier}`;
-    displayUrl = analyzingPrUrl;
-  } else {
-    // Handle commit
-    const analyzingCommitUrl = `https://github.com/${owner}/${repo}/commit/${identifier}`;
-    console.error(`Analyzing ${makeClickableLink(`https://github.com/${owner}/${repo}`, `${owner}/${repo}`)} ${makeClickableLink(analyzingCommitUrl, `commit ${identifier.substring(0, 8)}`)}...`);
-    
-    headSha = identifier;
-    branchName = 'commit';
-    displayName = `commit ${identifier.substring(0, 8)}`;
-    displayUrl = analyzingCommitUrl;
+    try {
+      const { owner, repo, type, identifier } = parseGitHubUrl(githubUrl);
+      const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
+      
+      let headSha, branchName, displayName, displayUrl;
+      
+      if (type === 'pr') {
+        // Handle PR
+        const analyzingPrUrl = `https://github.com/${owner}/${repo}/pull/${identifier}`;
+        
+        const prData = await fetchWithAuth(`${baseUrl}/pulls/${identifier}`, context);
+        const prInfo = extractPRInfo(prData, analyzingPrUrl);
+        headSha = prInfo.headSha;
+        branchName = prInfo.branchName;
+        displayName = `PR #${identifier}`;
+        displayUrl = analyzingPrUrl;
+      } else {
+        // Handle commit
+        const analyzingCommitUrl = `https://github.com/${owner}/${repo}/commit/${identifier}`;
+        
+        headSha = identifier;
+        branchName = 'commit';
+        displayName = `commit ${identifier.substring(0, 8)}`;
+        displayUrl = analyzingCommitUrl;
+      }
+      
+      const allRuns = await fetchWorkflowRuns(baseUrl, headSha, context);
+      if (allRuns.length === 0) {
+        continue; // Skip this URL and continue with others
+      }
+      
+      // Update progress bar with run count for this URL
+      progressBar.setUrlRuns(allRuns.length);
+
+      // Initialize per-URL data structures
+      const urlMetrics = initializeMetrics();
+      const urlTraceEvents = [];
+      const urlJobStartTimes = [];
+      const urlJobEndTimes = [];
+      let urlEarliestTime = Infinity;
+
+      // Find earliest timestamp for this URL
+      urlEarliestTime = findEarliestTimestamp(allRuns);
+
+      // urlEarliestTime is already in milliseconds, keep it as is for normalization
+      const urlEarliestTimeForProcess = urlEarliestTime;
+      
+      // Process each workflow run for this URL
+      for (const [runIndex, run] of allRuns.entries()) {
+        const workflowProcessId = (urlIndex + 1) * 1000 + runIndex + 1; // URL-specific process ID
+        await processWorkflowRun(run, runIndex, workflowProcessId, urlEarliestTimeForProcess, urlMetrics, urlTraceEvents, urlJobStartTimes, urlJobEndTimes, owner, repo, identifier, urlIndex, { type: type, displayUrl: displayUrl, identifier: identifier }, context, progressBar);
+      }
+
+      // Calculate metrics for this URL
+      const urlFinalMetrics = calculateFinalMetrics(urlMetrics, allRuns.length, urlJobStartTimes, urlJobEndTimes);
+      
+      // Store URL-specific results
+      urlResults.push({
+        owner,
+        repo,
+        identifier,
+        branchName,
+        headSha,
+        metrics: urlFinalMetrics,
+        traceEvents: urlTraceEvents,
+        type,
+        displayName,
+        displayUrl,
+        urlIndex,
+        jobStartTimes: urlJobStartTimes,
+        jobEndTimes: urlJobEndTimes,
+        earliestTime: urlEarliestTime
+      });
+
+      // Accumulate global data
+      allTraceEvents.push(...urlTraceEvents);
+      allJobStartTimes.push(...urlJobStartTimes);
+      allJobEndTimes.push(...urlJobEndTimes);
+      totalRuns += allRuns.length;
+      
+      // Update global time bounds
+      // Both urlEarliestTime and job timestamps are in milliseconds
+      if (urlEarliestTime < globalEarliestTime) {
+        globalEarliestTime = urlEarliestTime;
+      }
+      const urlLatestTime = Math.max(...urlJobEndTimes);
+      if (urlLatestTime > globalLatestTime) {
+        globalLatestTime = urlLatestTime;
+      }
+    } catch (error) {
+      console.error(`Error processing URL ${githubUrl}: ${error.message}`);
+      continue; // Skip this URL and continue with others
+    }
   }
+
+  // Finish progress bar
+  progressBar.finish();
   
-  const allRuns = await fetchWorkflowRuns(baseUrl, headSha);
-  if (allRuns.length === 0) {
-    console.error(`No workflow runs found for ${makeClickableLink(displayUrl, displayName)}`);
+  if (urlResults.length === 0) {
+    console.error('No workflow runs found for any of the provided URLs');
     process.exit(1);
   }
 
-  // Initialize metrics and trace data
-  const metrics = initializeMetrics();
-  const traceEvents = [];
-  const jobStartTimes = [];
-  const jobEndTimes = [];
-  let earliestTime = Infinity;
-  let processId = 1;
+  // Generate global concurrency counter events
+  generateConcurrencyCounters(allJobStartTimes, allJobEndTimes, allTraceEvents, globalEarliestTime);
 
-  // Find earliest timestamp for normalization
-  earliestTime = findEarliestTimestamp(allRuns);
+  // Calculate combined metrics
+  const combinedMetrics = calculateCombinedMetrics(urlResults, totalRuns, allJobStartTimes, allJobEndTimes);
 
-  // Process each workflow run (each run gets its own process)
-  for (const [runIndex, run] of allRuns.entries()) {
-    const workflowProcessId = runIndex + 1;
-    await processWorkflowRun(run, runIndex, workflowProcessId, earliestTime, metrics, traceEvents, jobStartTimes, jobEndTimes, owner, repo, identifier);
-  }
-
-  // Generate concurrency counter events (use process 1 for global metrics)
-  generateConcurrencyCounters(jobStartTimes, jobEndTimes, traceEvents);
-
-  // Calculate final metrics
-  const finalMetrics = calculateFinalMetrics(metrics, allRuns.length, jobStartTimes, jobEndTimes);
-
- 
-  // Output results
-  outputResults(owner, repo, identifier, branchName, headSha, finalMetrics, traceEvents, type, displayName, displayUrl);
+  // Output combined results
+  await outputCombinedResults(urlResults, combinedMetrics, allTraceEvents, globalEarliestTime, globalLatestTime, perfettoFile, openInPerfetto);
 }
 
-main();
+/**
+ * Generate high-level timeline showing PR/Commit execution times
+ */
+function generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLatestTime) {
+  const scale = 60;
+  
+  // Calculate timeline bounds from actual job data
+  let timelineEarliestTime = Infinity;
+  let timelineLatestTime = 0;
+  
+  sortedResults.forEach(result => {
+    if (result.metrics.jobTimeline.length > 0) {
+      const resultEarliestTime = Math.min(...result.metrics.jobTimeline.map(job => job.startTime));
+      const resultLatestTime = Math.max(...result.metrics.jobTimeline.map(job => job.endTime));
+      timelineEarliestTime = Math.min(timelineEarliestTime, resultEarliestTime);
+      timelineLatestTime = Math.max(timelineLatestTime, resultLatestTime);
+    }
+  });
+  
+  const totalDuration = timelineLatestTime - timelineEarliestTime;
+  
+  // Format times for display (timeline uses absolute timestamps)
+  const startTimeFormatted = new Date(timelineEarliestTime).toLocaleTimeString();
+  const endTimeFormatted = new Date(timelineLatestTime).toLocaleTimeString();
+  
+  // Create timeline header
+  const startLabel = `Start: ${startTimeFormatted}`;
+  const endLabel = `End: ${endTimeFormatted}`;
+  const middlePadding = ' '.repeat(Math.max(0, scale - startLabel.length - endLabel.length));
+  
+  console.error(`┌${'─'.repeat(scale + 2)}┐`);
+  console.error(`│ ${startLabel}${middlePadding}${endLabel} │`);
+  console.error('├' + '─'.repeat(scale + 2) + '┤');
+  
+  // Display each PR/Commit as a timeline bar
+  sortedResults.forEach((result, index) => {
+    // Calculate the actual wall time from the job timeline (earliest start to latest end)
+    const resultEarliestTime = Math.min(...result.metrics.jobTimeline.map(job => job.startTime));
+    const resultLatestTime = Math.max(...result.metrics.jobTimeline.map(job => job.endTime));
+    const wallTimeSec = (resultLatestTime - resultEarliestTime) / 1000;
+    
+    // Calculate relative start position based on actual start time
+    const relativeStart = resultEarliestTime - timelineEarliestTime;
+    const startPos = Math.floor((relativeStart / totalDuration) * scale);
+    
+    // Calculate bar length based on wall time, but cap it to prevent overflow
+    const maxBarLength = scale - startPos;
+    const barLength = Math.max(1, Math.min(maxBarLength, Math.floor((wallTimeSec / (totalDuration / 1000)) * scale)));
+    
+    // Determine overall status for this URL
+    const hasFailedJobs = result.metrics.jobTimeline.some(job => job.conclusion === 'failure');
+    const hasPendingJobs = result.metrics.pendingJobs && result.metrics.pendingJobs.length > 0;
+    const hasSkippedJobs = result.metrics.jobTimeline.some(job => job.conclusion === 'skipped' || job.conclusion === 'cancelled');
+    
+    // Format duration
+    let timeDisplay;
+    if (isNaN(wallTimeSec) || wallTimeSec <= 0) {
+      timeDisplay = '0s';
+    } else {
+      timeDisplay = humanizeTime(wallTimeSec);
+    }
+    
+    // Create full text for clickable link with URL index
+    const fullText = `[${result.urlIndex + 1}] ${result.displayName} (${timeDisplay})`;
+    
+    // Choose color based on status
+    let coloredBar, coloredLink;
+    if (hasFailedJobs) {
+      coloredBar = redText('█'.repeat(barLength));
+      coloredLink = redText(makeClickableLink(result.displayUrl, fullText));
+    } else if (hasPendingJobs) {
+      coloredBar = blueText('█'.repeat(barLength));
+      coloredLink = blueText(makeClickableLink(result.displayUrl, fullText));
+    } else if (hasSkippedJobs) {
+      coloredBar = grayText('█'.repeat(barLength));
+      coloredLink = grayText(makeClickableLink(result.displayUrl, fullText));
+    } else {
+      coloredBar = greenText('█'.repeat(barLength));
+      coloredLink = greenText(makeClickableLink(result.displayUrl, fullText));
+    }
+    
+    // Create the timeline bar
+    const padding = ' '.repeat(Math.max(0, startPos));
+    const remaining = ' '.repeat(Math.max(0, scale - startPos - barLength));
+    
+    console.error(`│${padding}${coloredBar}${remaining}  │ ${coloredLink}`);
+  });
+  
+  console.error('└' + '─'.repeat(scale + 2) + '┘');
+}
+
+/**
+ * Calculate combined metrics from multiple URL results
+ */
+function calculateCombinedMetrics(urlResults, totalRuns, allJobStartTimes, allJobEndTimes) {
+  const combined = {
+    totalRuns,
+    totalJobs: urlResults.reduce((sum, result) => sum + result.metrics.totalJobs, 0),
+    totalSteps: urlResults.reduce((sum, result) => sum + result.metrics.totalSteps, 0),
+    successRate: calculateCombinedSuccessRate(urlResults),
+    jobSuccessRate: calculateCombinedJobSuccessRate(urlResults),
+    maxConcurrency: Math.max(...allJobStartTimes.map((_, i) => {
+      const time = allJobStartTimes[i];
+      return allJobStartTimes.filter((start, j) => 
+        start <= time && allJobEndTimes[j] >= time
+      ).length;
+    })),
+    jobTimeline: urlResults.flatMap((result, urlIndex) => 
+      result.metrics.jobTimeline.map(job => ({
+        ...job,
+        urlIndex,
+        sourceUrl: result.displayUrl,
+        sourceName: result.displayName
+      }))
+    )
+  };
+  
+  return combined;
+}
+
+/**
+ * Calculate combined success rate across all URLs
+ */
+function calculateCombinedSuccessRate(urlResults) {
+  const totalSuccessful = urlResults.reduce((sum, result) => sum + (result.metrics.totalRuns * parseFloat(result.metrics.successRate) / 100), 0);
+  const totalRuns = urlResults.reduce((sum, result) => sum + result.metrics.totalRuns, 0);
+  return totalRuns > 0 ? (totalSuccessful / totalRuns * 100).toFixed(1) : '0.0';
+}
+
+/**
+ * Calculate combined job success rate across all URLs
+ */
+function calculateCombinedJobSuccessRate(urlResults) {
+  const totalSuccessfulJobs = urlResults.reduce((sum, result) => sum + (result.metrics.totalJobs * parseFloat(result.metrics.jobSuccessRate) / 100), 0);
+  const totalJobs = urlResults.reduce((sum, result) => sum + result.metrics.totalJobs, 0);
+  return totalJobs > 0 ? (totalSuccessfulJobs / totalJobs * 100).toFixed(1) : '0.0';
+}
+
+/**
+ * Output combined results from multiple URLs
+ */
+async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents, globalEarliestTime, globalLatestTime, perfettoFile, openInPerfetto = false) {
+  // Simple completion message
+  if (perfettoFile) {
+    console.error(`\n✅ Generated ${allTraceEvents.length} trace events • Open in Perfetto.dev for analysis`);
+  } else {
+    console.error(`\n✅ Generated ${allTraceEvents.length} trace events • Use --perfetto=<filename> to save trace for Perfetto.dev analysis`);
+  }
+  
+  // Professional summary report
+  console.error(`\n${'='.repeat(80)}`);
+  console.error(`📊 ${makeClickableLink('https://perfetto.dev', 'GitHub Actions Performance Report - Multi-URL Analysis')}`);
+  console.error(`${'='.repeat(80)}`);
+  
+  // Summary of all URLs
+  console.error(`Analysis Summary: ${urlResults.length} URLs • ${combinedMetrics.totalRuns} runs • ${combinedMetrics.totalJobs} jobs • ${combinedMetrics.totalSteps} steps`);
+  console.error(`Success Rate: ${combinedMetrics.successRate}% workflows, ${combinedMetrics.jobSuccessRate}% jobs • Peak Concurrency: ${combinedMetrics.maxConcurrency}`);
+  
+  // Check for pending jobs across all URLs
+  const allPendingJobs = [];
+  urlResults.forEach(result => {
+    if (result.metrics.pendingJobs && result.metrics.pendingJobs.length > 0) {
+      allPendingJobs.push(...result.metrics.pendingJobs.map(job => ({
+        ...job,
+        sourceUrl: result.displayUrl,
+        sourceName: result.displayName
+      })));
+    }
+  });
+  
+  if (allPendingJobs.length > 0) {
+    console.error(`\n${blueText('⚠️  Pending Jobs Detected:')} ${allPendingJobs.length} jobs still running`);
+    allPendingJobs.forEach((job, index) => {
+      const jobLink = makeClickableLink(job.url, job.name);
+      console.error(`  ${index + 1}. ${blueText(jobLink)} (${job.status}) - ${job.sourceName}`);
+    });
+    console.error(`\n  Note: Timeline shows current progress for pending jobs. Results may change as jobs complete.`);
+  }
+  
+  // Combined Analysis Section (moved to first)
+  console.error(`\n${makeClickableLink('https://perfetto.dev', 'Combined Analysis')}:`);
+  
+  // List PRs and Commits ordered by start time
+  const sortedResults = [...urlResults].sort((a, b) => a.earliestTime - b.earliestTime);
+  console.error(`\nIncluded URLs (ordered by start time):`);
+  sortedResults.forEach((result, index) => {
+    const repoUrl = `https://github.com/${result.owner}/${result.repo}`;
+    if (result.type === 'pr') {
+      console.error(`  ${index + 1}. ${makeClickableLink(result.displayUrl, result.displayName)} (${result.branchName}) - ${makeClickableLink(repoUrl, `${result.owner}/${result.repo}`)}`);
+    } else {
+      console.error(`  ${index + 1}. ${makeClickableLink(result.displayUrl, result.displayName)} - ${makeClickableLink(repoUrl, `${result.owner}/${result.repo}`)}`);
+    }
+  });
+  
+  // Combined pipeline timeline (PR/Commit level)
+  console.error(`\nCombined Pipeline Timeline:`);
+  generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLatestTime);
+  
+  // Slowest jobs grouped by PR/Commit (ordered by start time like combined timeline)
+  const allJobs = combinedMetrics.jobTimeline.sort((a, b) => (b.endTime - b.startTime) - (a.endTime - a.startTime));
+  const slowJobs = allJobs.slice(0, 10);
+  
+  if (slowJobs.length > 0) {
+    console.error(`\nSlowest Jobs (grouped by PR/Commit):`);
+    
+    // Calculate bottleneck jobs for each URL to identify high-impact optimizations
+    const bottleneckJobs = new Set();
+    sortedResults.forEach(result => {
+      const bottlenecks = findBottleneckJobs(result.metrics.jobTimeline);
+      bottlenecks.forEach(job => {
+        // Create a unique identifier for the job to match against slowJobs
+        const jobKey = `${job.name}-${job.startTime}-${job.endTime}`;
+        bottleneckJobs.add(jobKey);
+      });
+    });
+    
+    // Group jobs by their source URL and sort by start time to match combined timeline order
+    const jobsBySource = {};
+    slowJobs.forEach(job => {
+      const sourceKey = job.sourceUrl;
+      if (!jobsBySource[sourceKey]) {
+        jobsBySource[sourceKey] = [];
+      }
+      jobsBySource[sourceKey].push(job);
+    });
+    
+    // Display grouped by source in the same order as combined timeline
+    sortedResults.forEach(result => {
+      const sourceUrl = result.displayUrl;
+      const jobs = jobsBySource[sourceUrl];
+      if (jobs && jobs.length > 0) {
+        const headerText = `[${result.urlIndex + 1}] ${result.displayName}`;
+        const headerLink = makeClickableLink(sourceUrl, headerText);
+        console.error(`\n  ${headerLink}:`);
+        // Sort jobs within each group by duration (descending) to show slowest first
+        const sortedJobs = jobs.sort((a, b) => (b.endTime - b.startTime) - (a.endTime - a.startTime));
+        sortedJobs.forEach((job, i) => {
+          const duration = ((job.endTime - job.startTime) / 1000);
+          
+          // Check if this job is a bottleneck
+          const jobKey = `${job.name}-${job.startTime}-${job.endTime}`;
+          const isBottleneck = bottleneckJobs.has(jobKey);
+          
+          // Add bottleneck indicator for high-impact optimization opportunities
+          const bottleneckIndicator = isBottleneck ? ' 🔥' : '';
+          const fullText = `${i + 1}. ${humanizeTime(duration)} - ${job.name}${bottleneckIndicator}`;
+          const jobLink = job.url ? makeClickableLink(job.url, fullText) : fullText;
+          console.error(`    ${jobLink}`);
+        });
+      }
+    });
+    
+    // Add explanation for bottleneck indicator
+    const hasBottleneckJobs = slowJobs.some(job => {
+      const jobKey = `${job.name}-${job.startTime}-${job.endTime}`;
+      return bottleneckJobs.has(jobKey);
+    });
+    
+    if (hasBottleneckJobs) {
+      console.error(`\n  🔥 Bottleneck jobs - optimizing these will have the most impact on total pipeline time`);
+    }
+  }
+  
+  // Individual Pipeline Timelines Section (moved to after combined analysis)
+  console.error(`\n${makeClickableLink('https://ui.perfetto.dev', 'Pipeline Timelines')}:`);
+  
+  urlResults.forEach((result, index) => {
+    // Calculate wall time for this URL (earliest start to latest end)
+    const timeline = result.metrics.jobTimeline;
+    if (timeline && timeline.length > 0) {
+      const earliestStart = Math.min(...timeline.map(job => job.startTime));
+      const latestEnd = Math.max(...timeline.map(job => job.endTime));
+      const wallTimeSec = (latestEnd - earliestStart) / 1000; // Convert milliseconds to seconds
+      const wallTimeDisplay = humanizeTime(wallTimeSec);
+      const headerText = `[${index + 1}] ${result.displayName} (${wallTimeDisplay}, ${result.metrics.totalJobs} jobs)`;
+      const headerLink = makeClickableLink(result.displayUrl, headerText);
+      console.error(`\n${headerLink}:`);
+    } else {
+      const headerText = `[${index + 1}] ${result.displayName} (${result.metrics.totalJobs} jobs)`;
+      const headerLink = makeClickableLink(result.displayUrl, headerText);
+      console.error(`\n${headerLink}:`);
+    }
+    generateTimelineVisualization(result.metrics, result.displayUrl, result.urlIndex);
+  });
+  
+  // Generate combined trace metadata
+  const traceTitle = `GitHub Actions: Multi-URL Analysis (${urlResults.length} URLs)`;
+  const traceMetadata = [
+    {
+      name: 'process_name', 
+      ph: 'M',
+      pid: 0,
+      args: { 
+        name: traceTitle,
+        url: 'https://perfetto.dev',
+        github_url: 'https://github.com'
+      }
+    }
+  ];
+
+  // Output JSON for Perfetto only if flag is specified
+  if (perfettoFile) {
+    const output = {
+      displayTimeUnit: 'ms',
+      traceEvents: [...traceMetadata, ...allTraceEvents.sort((a, b) => a.ts - b.ts)],
+      otherData: {
+        trace_title: traceTitle,
+        url_count: urlResults.length,
+        total_runs: combinedMetrics.totalRuns,
+        total_jobs: combinedMetrics.totalJobs,
+        success_rate: `${combinedMetrics.successRate}%`,
+        total_events: allTraceEvents.length,
+        urls: urlResults.map((result, index) => ({
+          index: index + 1,
+          owner: result.owner,
+          repo: result.repo,
+          type: result.type,
+          identifier: result.identifier,
+          display_name: result.displayName,
+          display_url: result.displayUrl,
+          total_runs: result.metrics.totalRuns,
+          total_jobs: result.metrics.totalJobs,
+          success_rate: result.metrics.successRate
+        })),
+        performance_analysis: {
+          slowest_jobs: slowJobs.map(job => ({
+            name: job.name,
+            duration_seconds: ((job.endTime - job.startTime) / 1000).toFixed(1),
+            url: job.url,
+            source_url: job.sourceUrl,
+            source_name: job.sourceName
+          }))
+        }
+      }
+    };
+    
+    try {
+      writeFileSync(perfettoFile, JSON.stringify(output, null, 2));
+      console.error(`\n💾 Perfetto trace saved to: ${perfettoFile}`);
+      
+      // Auto-open in Perfetto if requested
+      if (openInPerfetto) {
+        await openTraceInPerfetto(perfettoFile);
+      }
+    } catch (error) {
+      console.error(`Error writing perfetto trace to ${perfettoFile}:`, error);
+      process.exit(1);
+    }
+  }
+}
+
+// Export functions for testing
+export {
+  parseGitHubUrl,
+  getJobGroup,
+  calculateCombinedMetrics,
+  calculateCombinedSuccessRate,
+  calculateCombinedJobSuccessRate,
+  findBottleneckJobs,
+  humanizeTime
+};
+
+// Only run main if this is the entry point (not imported as a module)
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main();
+}

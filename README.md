@@ -75,6 +75,59 @@ cd gha-analyzer
 npm install
 ```
 
+## 🧪 Testing
+
+The project includes comprehensive validation tests using OSS repositories to ensure accuracy and reliability.
+
+### Test Suites
+
+#### Core Tests
+```bash
+npm test                    # Run all tests
+npm run test:helpers        # Run helper function tests
+npm run test:integration    # Run integration tests
+```
+
+#### Validation Tests
+```bash
+npm run test:ci            # Fast CI tests using small OSS repos
+npm run test:oss           # Comprehensive OSS validation tests
+npm run test:validation    # Run all validation tests
+```
+
+#### Test Coverage
+
+**CI Tests** (`test:ci`):
+- Uses small, stable OSS repos (octocat/Hello-World)
+- Fast execution (< 15 seconds)
+- Basic functionality validation
+- Error handling verification
+- Performance benchmarks
+
+**OSS Tests** (`test:oss`):
+- Uses popular OSS projects (Node.js, React, Vue.js)
+- Comprehensive validation against real GitHub data
+- Timeline accuracy verification
+- Job duration validation
+- Multi-URL support testing
+
+### Validation Features
+
+- **Real GitHub API Comparison**: Tests compare our output with actual GitHub API data
+- **Timeline Accuracy**: Validates that timeline start/end times match GitHub data
+- **Job Duration Verification**: Ensures job durations are calculated correctly
+- **Output Format Validation**: Checks that all required sections are present
+- **Error Handling**: Tests graceful handling of invalid URLs and edge cases
+
+### OSS Test Repositories
+
+The validation tests use these publicly accessible repositories:
+
+- **Node.js**: Large, active project with complex workflows
+- **React**: Popular framework with CI/CD pipelines
+- **Vue.js**: Another popular framework for comparison
+- **octocat/Hello-World**: Small, stable repo for CI testing
+
 ## 📖 Usage
 
 TODO: release via npm so we can simply do `npx gha-analyzer https://github.com/owner/repo/pull/123`
