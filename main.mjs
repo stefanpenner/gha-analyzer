@@ -1610,9 +1610,30 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
 
   // Output JSON for Perfetto only if flag is specified
   if (perfettoFile) {
+    // Re-normalize all trace events to use global earliest time
+    const renormalizedTraceEvents = allTraceEvents.map(event => {
+      if (event.ts !== undefined) {
+        // Find the URL-specific earliest time for this event
+        const eventUrlIndex = event.args?.url_index || 1;
+        const eventSource = event.args?.source_url;
+        const urlResult = urlResults.find(result => 
+          result.urlIndex === eventUrlIndex - 1 || 
+          result.displayUrl === eventSource
+        );
+        
+        if (urlResult) {
+          // Convert back to absolute time, then normalize against global earliest time
+          const absoluteTime = event.ts / 1000 + urlResult.earliestTime; // Convert from microseconds back to milliseconds, add URL earliest time
+          const renormalizedTime = (absoluteTime - globalEarliestTime) * 1000; // Normalize against global earliest time, convert to microseconds
+          return { ...event, ts: renormalizedTime };
+        }
+      }
+      return event;
+    });
+    
     const output = {
       displayTimeUnit: 'ms',
-      traceEvents: [...traceMetadata, ...allTraceEvents.sort((a, b) => a.ts - b.ts)],
+      traceEvents: [...traceMetadata, ...renormalizedTraceEvents.sort((a, b) => a.ts - b.ts)],
       otherData: {
         trace_title: traceTitle,
         url_count: urlResults.length,

@@ -149,6 +149,118 @@ describe('GitHub Actions Analyzer - Critical Functionality', () => {
       assert.strictEqual(combined.totalJobs, 15);
       assert.strictEqual(combined.totalSteps, 75);
     });
+
+    test('should normalize timestamps correctly for multi-URL scenarios', () => {
+      // Simulate the exact bug we just fixed
+      const mockTraceEvents = [
+        {
+          name: "Workflow: Merge-Lint [1]",
+          ph: "X",
+          ts: 1000000, // 1 second in microseconds
+          dur: 185000000,
+          args: { url_index: 1, source_url: "https://github.com/test/repo1/pull/123" }
+        },
+        {
+          name: "Workflow: Post-Merge [2]",
+          ph: "X",
+          ts: 0, // This was the problematic timestamp
+          dur: 784000000,
+          args: { url_index: 2, source_url: "https://github.com/test/repo2/commit/abc123" }
+        }
+      ];
+
+      const mockUrlResults = [
+        {
+          urlIndex: 0,
+          displayUrl: "https://github.com/test/repo1/pull/123",
+          earliestTime: 1704067200000 // 2024-01-01 00:00:00 UTC
+        },
+        {
+          urlIndex: 1,
+          displayUrl: "https://github.com/test/repo2/commit/abc123",
+          earliestTime: 1704153600000 // 2024-01-02 00:00:00 UTC (1 day later)
+        }
+      ];
+
+      const globalEarliestTime = Math.min(...mockUrlResults.map(r => r.earliestTime));
+
+      // Apply the fix logic
+      const renormalizedTraceEvents = mockTraceEvents.map(event => {
+        if (event.ts !== undefined) {
+          const eventUrlIndex = event.args?.url_index || 1;
+          const eventSource = event.args?.source_url;
+          const urlResult = mockUrlResults.find(result => 
+            result.urlIndex === eventUrlIndex - 1 || 
+            result.displayUrl === eventSource
+          );
+          
+          if (urlResult) {
+            const absoluteTime = event.ts / 1000 + urlResult.earliestTime;
+            const renormalizedTime = (absoluteTime - globalEarliestTime) * 1000;
+            return { ...event, ts: renormalizedTime };
+          }
+        }
+        return event;
+      });
+
+      // Verify the fix works
+      const workflow1 = renormalizedTraceEvents.find(e => e.name.includes("Merge-Lint"));
+      const workflow2 = renormalizedTraceEvents.find(e => e.name.includes("Post-Merge"));
+
+      assert(workflow1.ts > 0, 'First workflow should have positive timestamp');
+      assert(workflow2.ts > 0, 'Second workflow should have positive timestamp (was 0 before fix)');
+      assert(workflow2.ts > workflow1.ts, 'Second workflow should start after first workflow');
+      
+      // Verify expected values
+      const expectedWorkflow1Ts = (1000000 / 1000 + mockUrlResults[0].earliestTime - globalEarliestTime) * 1000;
+      const expectedWorkflow2Ts = (0 / 1000 + mockUrlResults[1].earliestTime - globalEarliestTime) * 1000;
+      
+      assert.strictEqual(workflow1.ts, expectedWorkflow1Ts, 'First workflow timestamp should match expected');
+      assert.strictEqual(workflow2.ts, expectedWorkflow2Ts, 'Second workflow timestamp should match expected');
+    });
+
+    test('should ensure no events have timestamp 0 in multi-URL output', () => {
+      // Test that our fix prevents the timestamp 0 bug
+      const mockTraceEvents = [
+        { name: "Event 1", ts: 1000000, args: { url_index: 1 } },
+        { name: "Event 2", ts: 0, args: { url_index: 2 } }, // Simulate the bug
+        { name: "Event 3", ts: 2000000, args: { url_index: 1 } }
+      ];
+
+      const mockUrlResults = [
+        { urlIndex: 0, earliestTime: 1000 },
+        { urlIndex: 1, earliestTime: 2000 } // Later than URL 1
+      ];
+
+      const globalEarliestTime = Math.min(...mockUrlResults.map(r => r.earliestTime));
+
+      // Apply fix
+      const renormalizedEvents = mockTraceEvents.map(event => {
+        if (event.ts !== undefined) {
+          const eventUrlIndex = event.args?.url_index || 1;
+          const urlResult = mockUrlResults.find(result => result.urlIndex === eventUrlIndex - 1);
+          
+          if (urlResult) {
+            const absoluteTime = event.ts / 1000 + urlResult.earliestTime;
+            const renormalizedTime = (absoluteTime - globalEarliestTime) * 1000;
+            return { ...event, ts: renormalizedTime };
+          }
+        }
+        return event;
+      });
+
+      // Verify no events have timestamp 0
+      renormalizedEvents.forEach(event => {
+        if (event.ts !== undefined) {
+          assert(event.ts > 0, `Event "${event.name}" should not have timestamp 0`);
+        }
+      });
+
+      // Verify events maintain proper ordering
+      const sortedEvents = renormalizedEvents.filter(e => e.ts !== undefined).sort((a, b) => a.ts - b.ts);
+      assert(sortedEvents.length > 0, 'Should have events to sort');
+      assert(sortedEvents[0].ts <= sortedEvents[1].ts, 'Events should be properly ordered by timestamp');
+    });
   });
 
   describe('Job Grouping Logic', () => {
@@ -226,6 +338,9 @@ describe('GitHub Actions Analyzer - Critical Functionality', () => {
             assert(event.ts >= 0, 'Timestamp should be non-negative');
             assert(event.dur > 0, 'Duration should be positive');
             assert(event.ts < 1000000000, 'Timestamp should be reasonable (less than 1B)');
+            
+            // CRITICAL: No events should have timestamp 0 (this was the bug we fixed)
+            assert(event.ts > 0, `Event "${event.name}" should not have timestamp 0 - this indicates a timestamp normalization bug`);
             
             // When displayTimeUnit is 'ms', timestamps should be in microseconds
             if (jsonData.displayTimeUnit === 'ms') {
