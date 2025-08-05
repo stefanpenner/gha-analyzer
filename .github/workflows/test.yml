@@ -25,11 +25,3 @@ jobs:
       
       - name: Run tests
         run: npm test
-      
-      - name: Run specific test files
-        run: |
-          echo "Running unit tests..."
-          npm run test:helpers
-          
-          echo "Running integration tests..."
-          npm run test:integration 
