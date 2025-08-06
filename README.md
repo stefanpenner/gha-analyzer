@@ -62,7 +62,7 @@ Slowest Steps:
 - **Hierarchical view**: Jobs and steps properly nested
 - **Clickable URLs**: Direct links to GitHub Actions from any event
 - **Rich metadata**: PR URLs, commit info, and performance data
-- **Professional naming**: "GitHub Actions: your-org/your-repo PR #123"
+- **reasonable track naming**: "GitHub Actions: your-org/your-repo PR #123"
 
 ## 🛠 Installation
 
