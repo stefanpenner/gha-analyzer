@@ -1153,6 +1153,14 @@ async function main() {
   const context = createContext(providedToken && !providedToken.startsWith('http') ? providedToken : undefined);
   
   if (urls.length === 0 || !context.githubToken) {
+    // Provide clear error messages before showing usage info
+    if (urls.length === 0) {
+      console.error('Error: No GitHub URLs provided.');
+    }
+    if (!context.githubToken) {
+      console.error('Error: GitHub token is required.');
+    }
+    console.error('');
     console.error('Usage: node main.mjs <github_url1> [github_url2] ... [token] [--perfetto=<file_name_for_trace.json>] [--open-in-perfetto]');
     console.error('');
     console.error('Supported URL formats:');
@@ -1432,7 +1440,11 @@ function calculateCombinedMetrics(urlResults, totalRuns, allJobStartTimes, allJo
  * Calculate combined success rate across all URLs
  */
 function calculateCombinedSuccessRate(urlResults) {
-  const totalSuccessful = urlResults.reduce((sum, result) => sum + (result.metrics.totalRuns * parseFloat(result.metrics.successRate) / 100), 0);
+  const totalSuccessful = urlResults.reduce((sum, result) => {
+    const rate = parseFloat(result.metrics.successRate);
+    const normalized = Number.isFinite(rate) ? rate : 0;
+    return sum + (result.metrics.totalRuns * normalized / 100);
+  }, 0);
   const totalRuns = urlResults.reduce((sum, result) => sum + result.metrics.totalRuns, 0);
   return totalRuns > 0 ? (totalSuccessful / totalRuns * 100).toFixed(1) : '0.0';
 }
@@ -1441,7 +1453,11 @@ function calculateCombinedSuccessRate(urlResults) {
  * Calculate combined job success rate across all URLs
  */
 function calculateCombinedJobSuccessRate(urlResults) {
-  const totalSuccessfulJobs = urlResults.reduce((sum, result) => sum + (result.metrics.totalJobs * parseFloat(result.metrics.jobSuccessRate) / 100), 0);
+  const totalSuccessfulJobs = urlResults.reduce((sum, result) => {
+    const rate = parseFloat(result.metrics.jobSuccessRate);
+    const normalized = Number.isFinite(rate) ? rate : 0;
+    return sum + (result.metrics.totalJobs * normalized / 100);
+  }, 0);
   const totalJobs = urlResults.reduce((sum, result) => sum + result.metrics.totalJobs, 0);
   return totalJobs > 0 ? (totalSuccessfulJobs / totalJobs * 100).toFixed(1) : '0.0';
 }

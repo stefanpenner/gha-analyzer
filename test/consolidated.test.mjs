@@ -382,6 +382,46 @@ describe('GitHub Actions Analyzer - Critical Functionality', () => {
     });
   });
 
+  describe('CLI Usage Validation', () => {
+    test('should error when no URLs are provided', async () => {
+      const originalToken = process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_TOKEN;
+
+      try {
+        const result = await runAnalyzer([]);
+
+        assert.strictEqual(result.exitCode, 1);
+        assert(result.stderr.includes('Error: No GitHub URLs provided.'));
+        assert(result.stderr.includes('Error: GitHub token is required.'));
+      } finally {
+        if (originalToken !== undefined) {
+          process.env.GITHUB_TOKEN = originalToken;
+        } else {
+          delete process.env.GITHUB_TOKEN;
+        }
+      }
+    });
+
+    test('should error when GitHub token is missing', async () => {
+      const originalToken = process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_TOKEN;
+
+      try {
+        const result = await runAnalyzer(['https://github.com/owner/repo/pull/123']);
+
+        assert.strictEqual(result.exitCode, 1);
+        assert(result.stderr.includes('Error: GitHub token is required.'));
+        assert(!result.stderr.includes('Error: No GitHub URLs provided.'));
+      } finally {
+        if (originalToken !== undefined) {
+          process.env.GITHUB_TOKEN = originalToken;
+        } else {
+          delete process.env.GITHUB_TOKEN;
+        }
+      }
+    });
+  });
+
   describe('Performance & Reliability', () => {
     test('should complete analysis within reasonable time', async () => {
       console.log('\n🔍 Testing performance...');

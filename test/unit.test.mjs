@@ -387,3 +387,18 @@ describe('Progress Bar Class', () => {
       assert.strictEqual(finalMetrics.jobSuccessRate, 0);
     });
   });
+
+  describe('Combined Success Rate Calculations', () => {
+    test('should treat missing success rates as zero', () => {
+      const urlResults = [
+        { metrics: { totalRuns: 2, successRate: '50.0', totalJobs: 4, jobSuccessRate: '75.0' } },
+        { metrics: { totalRuns: 3, totalJobs: 6 } }
+      ];
+
+      const workflowRate = calculateCombinedSuccessRate(urlResults);
+      const jobRate = calculateCombinedJobSuccessRate(urlResults);
+
+      assert.strictEqual(workflowRate, '20.0');
+      assert.strictEqual(jobRate, '30.0');
+    });
+  });
