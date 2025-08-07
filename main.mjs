@@ -1459,7 +1459,7 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
   
   // Professional summary report
   console.error(`\n${'='.repeat(80)}`);
-  console.error(`📊 ${makeClickableLink('https://perfetto.dev', 'GitHub Actions Performance Report - Multi-URL Analysis')}`);
+  console.error(`📊 ${makeClickableLink('https://ui.perfetto.dev', 'GitHub Actions Performance Report - Multi-URL Analysis')}`);
   console.error(`${'='.repeat(80)}`);
   
   // Summary of all URLs
@@ -1488,7 +1488,7 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
   }
   
   // Combined Analysis Section (moved to first)
-  console.error(`\n${makeClickableLink('https://perfetto.dev', 'Combined Analysis')}:`);
+  console.error(`\n${makeClickableLink('https://uiperfetto.dev', 'Combined Analysis')}:`);
   
   // List PRs and Commits ordered by start time
   const sortedResults = [...urlResults].sort((a, b) => a.earliestTime - b.earliestTime);
@@ -1688,7 +1688,25 @@ export {
   calculateCombinedSuccessRate,
   calculateCombinedJobSuccessRate,
   findBottleneckJobs,
-  humanizeTime
+  humanizeTime,
+  initializeMetrics,
+  findEarliestTimestamp,
+  calculateMaxConcurrency,
+  calculateFinalMetrics,
+  analyzeSlowJobs,
+  analyzeSlowSteps,
+  findOverlappingJobs,
+  categorizeStep,
+  getStepIcon,
+  makeClickableLink,
+  grayText,
+  greenText,
+  redText,
+  yellowText,
+  blueText,
+  createContext,
+  extractPRInfo,
+  ProgressBar
 };
 
 // Only run main if this is the entry point (not imported as a module)
