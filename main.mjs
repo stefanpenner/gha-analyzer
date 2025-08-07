@@ -1153,6 +1153,14 @@ async function main() {
   const context = createContext(providedToken && !providedToken.startsWith('http') ? providedToken : undefined);
   
   if (urls.length === 0 || !context.githubToken) {
+    // Provide clear error messages before showing usage info
+    if (urls.length === 0) {
+      console.error('Error: No GitHub URLs provided.');
+    }
+    if (!context.githubToken) {
+      console.error('Error: GitHub token is required.');
+    }
+    console.error('');
     console.error('Usage: node main.mjs <github_url1> [github_url2] ... [token] [--perfetto=<file_name_for_trace.json>] [--open-in-perfetto]');
     console.error('');
     console.error('Supported URL formats:');
