@@ -18,26 +18,31 @@ import fs from 'fs';
 import path from 'path';
 
 // Import core functions for unit testing
-import { 
-  parseGitHubUrl, 
-  getJobGroup, 
-  calculateCombinedMetrics, 
-  calculateCombinedSuccessRate, 
+import {
+  parseGitHubUrl,
+  getJobGroup,
+  calculateCombinedMetrics,
+  calculateCombinedSuccessRate,
   calculateCombinedJobSuccessRate,
   findBottleneckJobs,
-  humanizeTime
+  humanizeTime,
+  generateHighLevelTimeline,
+  fetchPRReviews
 } from '../main.mjs';
+
+import { createGitHubMock } from './github-mock.mjs';
 
 // Test configuration - Use only OSS projects to avoid exposing internal data
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const TEST_URL = 'https://github.com/facebook/react/pull/12345'; // Public OSS project with active CI
 
 // Helper function to run analyzer (for integration tests)
-async function runAnalyzer(urls, timeoutMs = 30000) {
-  return new Promise((resolve, reject) => {
-    const child = spawn('node', ['main.mjs', ...urls], {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
+  async function runAnalyzer(urls, timeoutMs = 30000) {
+    return new Promise((resolve, reject) => {
+      const child = spawn('node', ['main.mjs', ...urls], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, GITHUB_TOKEN: 'test-token' }
+      });
     
     let stdout = '';
     let stderr = '';
@@ -356,6 +361,64 @@ describe('GitHub Actions Analyzer - Critical Functionality', () => {
         // Skip trace validation if analyzer failed
         console.log('⏭️ Skipping trace validation - analyzer failed (expected for test URL)');
       }
+    });
+  });
+
+  describe('Review Event Timeline Markers', () => {
+    test('renders shippit approval marker at correct position', async () => {
+      const mock = createGitHubMock();
+      const owner = 'test-owner';
+      const repo = 'test-repo';
+      const prNumber = 123;
+      const reviewTime = '2024-01-01T10:02:00Z';
+      mock.mockReviews(owner, repo, prNumber, [
+        { id: 1, state: 'APPROVED', submitted_at: reviewTime, user: { login: 'reviewer1' } }
+      ]);
+
+      const context = { githubToken: 'test-token' };
+      const originalFetch = global.fetch;
+      global.fetch = async (url, options) => {
+        if (url.includes(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`)) {
+          return {
+            ok: true,
+            json: async () => [
+              { id: 1, state: 'APPROVED', submitted_at: reviewTime, user: { login: 'reviewer1' } }
+            ],
+            headers: new Map()
+          };
+        }
+        return originalFetch(url, options);
+      };
+      const reviews = await fetchPRReviews(owner, repo, prNumber, context);
+      global.fetch = originalFetch;
+      const reviewEvents = reviews
+        .filter(r => r.state === 'APPROVED' || /ship\s?it/i.test(r.body || ''))
+        .map(r => ({ type: 'shippit', time: r.submitted_at, reviewer: r.user.login }));
+
+      const jobStart = new Date('2024-01-01T10:01:00Z').getTime();
+      const jobEnd = new Date('2024-01-01T10:03:00Z').getTime();
+
+      const result = {
+        displayName: `PR #${prNumber}`,
+        displayUrl: `https://github.com/${owner}/${repo}/pull/${prNumber}`,
+        urlIndex: 0,
+        metrics: { jobTimeline: [{ name: 'test-job', startTime: jobStart, endTime: jobEnd, conclusion: 'success' }] },
+        reviewEvents
+      };
+
+      let output = '';
+      const origError = console.error;
+      console.error = msg => { output += msg + '\n'; };
+      generateHighLevelTimeline([result], 0, 0);
+      console.error = origError;
+      mock.cleanup();
+
+      const barLine = output.split('\n').find(line => line.includes(`PR #${prNumber}`));
+      const clean = barLine.replace(/\x1b\[[0-9;]*m/g, '');
+      const between = clean.split('│')[1];
+      const markerPos = between.indexOf('▲');
+      assert.strictEqual(markerPos, 30);
+      assert(clean.includes('▲ reviewer1'));
     });
   });
 
