@@ -22,7 +22,7 @@ Analyze GitHub Actions workflow performance and generate Chrome Tracing format o
 
 
 ### Perfetto UI
-Example from one of Nodejs's GHA runs
+Example from one of Node.js’s GHA runs
 
 <img width="1626" height="1042" alt="image" src="https://github.com/user-attachments/assets/7ebf33cb-5caf-4233-9e0d-c5f562a8e6ef" />
 
@@ -234,17 +234,16 @@ node --test test/helpers.test.mjs
 ```
 ├── main.mjs              # Main profiler script
 ├── test/
-│   ├── main.test.mjs     # Integration tests
-│   ├── helpers.test.mjs  # Unit tests
-│   ├── github-mock.mjs   # API mocking utilities
-│   └── debug.mjs         # Debug utilities
+│   ├── consolidated.test.mjs  # Integration tests
+│   ├── unit.test.mjs          # Unit tests
+│   └── github-mock.mjs        # API mocking utilities
 ├── package.json          # Project configuration
-└── README.md            # This file
+└── README.md             # This file
 ```
 
 ### Adding Features
 1. Add functionality to `main.mjs`
-2. Add tests to `test/helpers.test.mjs`
+2. Add tests to `test/unit.test.mjs`
 3. Update documentation
 4. Run tests: `npm test`
 
