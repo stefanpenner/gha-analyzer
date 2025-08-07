@@ -49,6 +49,19 @@ export class GitHubMock {
     return this;
   }
 
+  mockReviews(owner, repo, prNumber, reviews = []) {
+    const defaultReviews = reviews.length > 0 ? reviews : [
+      { id: 1, state: 'APPROVED', submitted_at: new Date().toISOString(), user: { login: 'reviewer' } }
+    ];
+
+    this.scope
+      .get(`/repos/${owner}/${repo}/pulls/${prNumber}/reviews`)
+      .query({ per_page: 100 })
+      .reply(200, defaultReviews);
+
+    return this;
+  }
+
   createMockRun(options = {}) {
     const baseTime = new Date('2024-01-01T10:00:00Z');
     return {

@@ -206,6 +206,11 @@ async function fetchWorkflowRuns(baseUrl, headSha, context) {
   return await fetchWithPagination(commitRunsUrl, context);
 }
 
+async function fetchPRReviews(owner, repo, prNumber, context) {
+  const reviewsUrl = `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews?per_page=100`;
+  return await fetchWithPagination(reviewsUrl, context);
+}
+
 async function fetchWithPagination(url, context) {
   const headers = {
     Authorization: `token ${context.githubToken}`,
@@ -1200,21 +1205,27 @@ async function main() {
       const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
       
       let headSha, branchName, displayName, displayUrl;
-      
+      let reviewEvents = [];
+
       if (type === 'pr') {
         // Handle PR
         const analyzingPrUrl = `https://github.com/${owner}/${repo}/pull/${identifier}`;
-        
+
         const prData = await fetchWithAuth(`${baseUrl}/pulls/${identifier}`, context);
         const prInfo = extractPRInfo(prData, analyzingPrUrl);
         headSha = prInfo.headSha;
         branchName = prInfo.branchName;
         displayName = `PR #${identifier}`;
         displayUrl = analyzingPrUrl;
+
+        const reviews = await fetchPRReviews(owner, repo, identifier, context);
+        reviewEvents = reviews
+          .filter(r => r.state === 'APPROVED' || /ship\s?it/i.test(r.body || ''))
+          .map(r => ({ type: 'shippit', time: r.submitted_at, reviewer: r.user.login }));
       } else {
         // Handle commit
         const analyzingCommitUrl = `https://github.com/${owner}/${repo}/commit/${identifier}`;
-        
+
         headSha = identifier;
         branchName = 'commit';
         displayName = `commit ${identifier.substring(0, 8)}`;
@@ -1266,7 +1277,8 @@ async function main() {
         urlIndex,
         jobStartTimes: urlJobStartTimes,
         jobEndTimes: urlJobEndTimes,
-        earliestTime: urlEarliestTime
+        earliestTime: urlEarliestTime,
+        reviewEvents
       });
 
       // Accumulate global data
@@ -1361,7 +1373,7 @@ function generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLate
     const hasFailedJobs = result.metrics.jobTimeline.some(job => job.conclusion === 'failure');
     const hasPendingJobs = result.metrics.pendingJobs && result.metrics.pendingJobs.length > 0;
     const hasSkippedJobs = result.metrics.jobTimeline.some(job => job.conclusion === 'skipped' || job.conclusion === 'cancelled');
-    
+
     // Format duration
     let timeDisplay;
     if (isNaN(wallTimeSec) || wallTimeSec <= 0) {
@@ -1369,31 +1381,48 @@ function generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLate
     } else {
       timeDisplay = humanizeTime(wallTimeSec);
     }
-    
+
+    // Prepare bar with potential review markers
+    const barChars = Array(barLength).fill('█');
+    const markerInfos = [];
+    if (result.reviewEvents && result.reviewEvents.length > 0) {
+      result.reviewEvents.forEach(event => {
+        const eventTime = new Date(event.time).getTime();
+        const column = Math.floor(((eventTime - timelineEarliestTime) / totalDuration) * scale);
+        const offset = column - startPos;
+        if (offset >= 0 && offset < barLength) {
+          barChars[offset] = '▲';
+          markerInfos.push(`▲ ${event.reviewer}`);
+        }
+      });
+    }
+    const barString = barChars.join('');
+
     // Create full text for clickable link with URL index
     const fullText = `[${result.urlIndex + 1}] ${result.displayName} (${timeDisplay})`;
-    
+
     // Choose color based on status
     let coloredBar, coloredLink;
     if (hasFailedJobs) {
-      coloredBar = redText('█'.repeat(barLength));
+      coloredBar = redText(barString);
       coloredLink = redText(makeClickableLink(result.displayUrl, fullText));
     } else if (hasPendingJobs) {
-      coloredBar = blueText('█'.repeat(barLength));
+      coloredBar = blueText(barString);
       coloredLink = blueText(makeClickableLink(result.displayUrl, fullText));
     } else if (hasSkippedJobs) {
-      coloredBar = grayText('█'.repeat(barLength));
+      coloredBar = grayText(barString);
       coloredLink = grayText(makeClickableLink(result.displayUrl, fullText));
     } else {
-      coloredBar = greenText('█'.repeat(barLength));
+      coloredBar = greenText(barString);
       coloredLink = greenText(makeClickableLink(result.displayUrl, fullText));
     }
-    
+
     // Create the timeline bar
     const padding = ' '.repeat(Math.max(0, startPos));
     const remaining = ' '.repeat(Math.max(0, scale - startPos - barLength));
-    
-    console.error(`│${padding}${coloredBar}${remaining}  │ ${coloredLink}`);
+    const markerLabel = markerInfos.length > 0 ? ' ' + markerInfos.join(' ') : '';
+
+    console.error(`│${padding}${coloredBar}${remaining}  │ ${coloredLink}${markerLabel}`);
   });
   
   console.error('└' + '─'.repeat(scale + 2) + '┘');
@@ -1704,6 +1733,8 @@ export {
   redText,
   yellowText,
   blueText,
+  generateHighLevelTimeline,
+  fetchPRReviews,
   createContext,
   extractPRInfo,
   ProgressBar
