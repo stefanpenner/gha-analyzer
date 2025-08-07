@@ -387,16 +387,18 @@ describe('GitHub Actions Analyzer - Critical Functionality', () => {
       const originalToken = process.env.GITHUB_TOKEN;
       delete process.env.GITHUB_TOKEN;
 
-      const result = await runAnalyzer([]);
+      try {
+        const result = await runAnalyzer([]);
 
-      assert.strictEqual(result.exitCode, 1);
-      assert(result.stderr.includes('Error: No GitHub URLs provided.'));
-      assert(result.stderr.includes('Error: GitHub token is required.'));
-
-      if (originalToken !== undefined) {
-        process.env.GITHUB_TOKEN = originalToken;
-      } else {
-        delete process.env.GITHUB_TOKEN;
+        assert.strictEqual(result.exitCode, 1);
+        assert(result.stderr.includes('Error: No GitHub URLs provided.'));
+        assert(result.stderr.includes('Error: GitHub token is required.'));
+      } finally {
+        if (originalToken !== undefined) {
+          process.env.GITHUB_TOKEN = originalToken;
+        } else {
+          delete process.env.GITHUB_TOKEN;
+        }
       }
     });
 
@@ -404,16 +406,18 @@ describe('GitHub Actions Analyzer - Critical Functionality', () => {
       const originalToken = process.env.GITHUB_TOKEN;
       delete process.env.GITHUB_TOKEN;
 
-      const result = await runAnalyzer(['https://github.com/owner/repo/pull/123']);
+      try {
+        const result = await runAnalyzer(['https://github.com/owner/repo/pull/123']);
 
-      assert.strictEqual(result.exitCode, 1);
-      assert(result.stderr.includes('Error: GitHub token is required.'));
-      assert(!result.stderr.includes('Error: No GitHub URLs provided.'));
-
-      if (originalToken !== undefined) {
-        process.env.GITHUB_TOKEN = originalToken;
-      } else {
-        delete process.env.GITHUB_TOKEN;
+        assert.strictEqual(result.exitCode, 1);
+        assert(result.stderr.includes('Error: GitHub token is required.'));
+        assert(!result.stderr.includes('Error: No GitHub URLs provided.'));
+      } finally {
+        if (originalToken !== undefined) {
+          process.env.GITHUB_TOKEN = originalToken;
+        } else {
+          delete process.env.GITHUB_TOKEN;
+        }
       }
     });
   });
