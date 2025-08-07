@@ -275,14 +275,20 @@ describe('Job Analysis Functions', () => {
           { name: 'Step4', duration: 8000 }
         ]
       };
-      
+
       const slowSteps = analyzeSlowSteps(mockMetrics, 2);
-      
+
       assert.strictEqual(slowSteps.length, 2);
       assert.strictEqual(slowSteps[0].name, 'Step4');
       assert.strictEqual(slowSteps[0].duration, 8000);
       assert.strictEqual(slowSteps[1].name, 'Step2');
       assert.strictEqual(slowSteps[1].duration, 5000);
+    });
+
+    test('should handle empty input', () => {
+      const mockMetrics = { stepDurations: [] };
+      const slowSteps = analyzeSlowSteps(mockMetrics);
+      assert.strictEqual(slowSteps.length, 0);
     });
   });
 
