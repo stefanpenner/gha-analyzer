@@ -27,6 +27,7 @@ import {
   findBottleneckJobs,
   humanizeTime,
   generateHighLevelTimeline,
+  generateTimelineVisualization,
   fetchPRReviews
 } from '../main.mjs';
 
@@ -415,10 +416,44 @@ describe('GitHub Actions Analyzer - Critical Functionality', () => {
 
       const barLine = output.split('\n').find(line => line.includes(`PR #${prNumber}`));
       const clean = barLine.replace(/\x1b\[[0-9;]*m/g, '');
+      // Strip OSC 8 clickable link sequences, preserving link text
+      const cleanNoLinks = clean
+        .replace(/\u001b]8;;[^\u0007]*\u0007/g, '')
+        .replace(/\u001b]8;;\u0007/g, '');
       const between = clean.split('│')[1];
       const markerPos = between.indexOf('▲');
       assert.strictEqual(markerPos, 30);
-      assert(clean.includes('▲ reviewer1'));
+      assert(cleanNoLinks.includes('▲ reviewer1'));
+    });
+
+    test('renders review and merged markers in Pipeline Timelines section', async () => {
+      const reviewTime = '2024-01-01T10:02:00Z';
+      const mergedTime = '2024-01-01T10:04:00Z';
+
+      const jobStart = new Date('2024-01-01T10:01:00Z').getTime();
+      const jobEnd = new Date('2024-01-01T10:05:00Z').getTime();
+
+      const metrics = { jobTimeline: [{ name: 'test-job', startTime: jobStart, endTime: jobEnd, conclusion: 'success' }] };
+      const reviewEvents = [
+        { type: 'shippit', time: reviewTime, reviewer: 'reviewer1' },
+        { type: 'merged', time: mergedTime, mergedBy: 'merger' }
+      ];
+
+      let output = '';
+      const origError = console.error;
+      console.error = msg => { output += (msg ?? '') + '\n'; };
+      generateTimelineVisualization(metrics, 'https://example.com', 0, reviewEvents);
+      console.error = origError;
+
+      const clean = output.replace(/\x1b\[[0-9;]*m/g, '');
+      const cleanNoLinks = clean
+        .replace(/\u001b]8;;[^\u0007]*\u0007/g, '')
+        .replace(/\u001b]8;;\u0007/g, '');
+      // Expect a line with markers bar and labels containing both ▲ reviewer and ◆ merged
+      const markerLine = cleanNoLinks.split('\n').find(line => line.includes('│') && line.includes('▲') && line.includes('◆'));
+      assert(markerLine, 'Should render both review (▲) and merged (◆) markers');
+      assert(markerLine.includes('▲ reviewer1'));
+      assert(markerLine.includes('◆ merged by merger'));
     });
   });
 

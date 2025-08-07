@@ -764,7 +764,7 @@ function blueText(text) {
   return `\u001b[34m${text}\u001b[0m`;
 }
 
-function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0) {
+function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0, reviewEvents = []) {
   if (!metrics.jobTimeline || metrics.jobTimeline.length === 0) {
     return '';
   }
@@ -800,6 +800,48 @@ function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0) {
   
   console.error(`│ ${startLabel}${middlePadding}${endLabel} │`);
   console.error('├' + '─'.repeat(scale + 2) + '┤');
+  
+  // Dedicated marker row for review/merge events across the pipeline
+  if (isFinite(earliestStart) && isFinite(latestEnd) && totalDuration > 0) {
+    const barChars = Array(scale).fill(' ');
+    const markerInfos = [];
+    for (const event of (reviewEvents || [])) {
+      const eventTime = new Date(event.time).getTime();
+      const column = Math.floor(((eventTime - earliestStart) / totalDuration) * scale);
+      const clamped = Math.min(Math.max(column, 0), Math.max(0, scale - 1));
+
+      // Build inline visible text (no links) for precise placement
+      let visibleText = '▲';
+      let infoLabel;
+      if (event.type === 'shippit' && event.reviewer) {
+        visibleText = `▲ ${event.reviewer}`;
+        infoLabel = `▲ ${makeClickableLink(`https://github.com/${event.reviewer}`, event.reviewer)}`;
+      } else if (event.type === 'merged') {
+        if (event.mergedBy) {
+          visibleText = `◆ merged by ${event.mergedBy}`;
+          infoLabel = `◆ merged by ${makeClickableLink(`https://github.com/${event.mergedBy}`, event.mergedBy)}`;
+        } else {
+          visibleText = '◆ merged';
+          infoLabel = '◆ merged';
+        }
+      } else {
+        infoLabel = '▲';
+      }
+
+      // Fit visibleText into the bar, shifting left if it would overflow
+      let startPos = clamped;
+      if (startPos + visibleText.length > scale) {
+        startPos = Math.max(0, scale - visibleText.length);
+      }
+      for (let i = 0; i < visibleText.length && (startPos + i) < scale; i++) {
+        barChars[startPos + i] = visibleText[i];
+      }
+      markerInfos.push(infoLabel);
+    }
+    const markersBar = barChars.join('');
+    const labels = markerInfos.length > 0 ? ` ${markerInfos.join(' ')}` : '';
+    console.error(`│${markersBar}  │${labels}`);
+  }
   
   // Group jobs by their prefix (before first ' / ')
   const jobGroups = {};
@@ -1230,6 +1272,15 @@ async function main() {
         reviewEvents = reviews
           .filter(r => r.state === 'APPROVED' || /ship\s?it/i.test(r.body || ''))
           .map(r => ({ type: 'shippit', time: r.submitted_at, reviewer: r.user.login }));
+
+        // Include PR merged timestamp as a timeline event if available
+        if (prData.merged_at) {
+          reviewEvents.push({
+            type: 'merged',
+            time: prData.merged_at,
+            mergedBy: prData.merged_by?.login || prData.merged_by?.name || null
+          });
+        }
       } else {
         // Handle commit
         const analyzingCommitUrl = `https://github.com/${owner}/${repo}/commit/${identifier}`;
@@ -1321,6 +1372,58 @@ async function main() {
   // Generate global concurrency counter events
   generateConcurrencyCounters(allJobStartTimes, allJobEndTimes, allTraceEvents, globalEarliestTime);
 
+  // Add review/merge instant events to trace for visualization
+  if (urlResults.length > 0) {
+    const metricsProcessId = 999;
+    const markersThreadId = 2;
+    // Thread metadata for review/merge markers
+    addThreadMetadata(allTraceEvents, metricsProcessId, markersThreadId, '🔖 Review & Merge Markers', 1);
+    // Create instant events for each review/merge
+    urlResults.forEach(result => {
+      if (result.reviewEvents && result.reviewEvents.length > 0) {
+        // Determine timeline bounds for clamping
+        let timelineStartMs = result.earliestTime;
+        let timelineEndMs = result.earliestTime;
+        if (result.metrics && Array.isArray(result.metrics.jobTimeline) && result.metrics.jobTimeline.length > 0) {
+          timelineStartMs = Math.min(...result.metrics.jobTimeline.map(j => j.startTime));
+          timelineEndMs = Math.max(...result.metrics.jobTimeline.map(j => j.endTime));
+        }
+        result.reviewEvents.forEach(event => {
+          const originalEventTimeMs = new Date(event.time).getTime();
+          // Clamp to timeline bounds to avoid extreme zoom-out
+          const clampedEventTimeMs = Math.max(timelineStartMs, Math.min(originalEventTimeMs, timelineEndMs));
+          // Normalize to URL earliest time then convert to microseconds
+          const ts = (clampedEventTimeMs - result.earliestTime) * 1000;
+          const name = event.type === 'merged' ? 'Merged' : 'Approved';
+          const user = event.type === 'merged' ? (event.mergedBy || '') : (event.reviewer || '');
+          const label = event.type === 'merged'
+            ? (user ? `merged by ${user}` : 'merged')
+            : (user ? `approved by ${user}` : 'approved');
+          const userUrl = user ? `https://github.com/${user}` : '';
+          allTraceEvents.push({
+            name,
+            ph: 'i',
+            s: 'p',
+            ts,
+            pid: metricsProcessId,
+            tid: markersThreadId,
+            args: {
+              url_index: result.urlIndex + 1,
+              source_url: result.displayUrl,
+              source_type: result.type,
+              source_identifier: result.identifier,
+              user,
+              user_url: userUrl,
+              label,
+              original_event_time_ms: originalEventTimeMs,
+              clamped: originalEventTimeMs !== clampedEventTimeMs
+            }
+          });
+        });
+      }
+    });
+  }
+
   // Calculate combined metrics
   const combinedMetrics = calculateCombinedMetrics(urlResults, totalRuns, allJobStartTimes, allJobEndTimes);
 
@@ -1393,15 +1496,36 @@ function generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLate
     // Prepare bar with potential review markers
     const barChars = Array(barLength).fill('█');
     const markerInfos = [];
+    // Always render markers row and label(s) on combined timeline line
     if (result.reviewEvents && result.reviewEvents.length > 0) {
       result.reviewEvents.forEach(event => {
         const eventTime = new Date(event.time).getTime();
         const column = Math.floor(((eventTime - timelineEarliestTime) / totalDuration) * scale);
         const offset = column - startPos;
-        if (offset >= 0 && offset < barLength) {
-          barChars[offset] = '▲';
-          markerInfos.push(`▲ ${event.reviewer}`);
+        // Always show a marker: clamp to the nearest edge if outside the bar
+        const clampedOffset = Math.min(Math.max(offset, 0), Math.max(0, barLength - 1));
+
+        // Choose symbol and label based on event type
+        let symbol = '▲';
+        let label;
+        if (event.reviewer) {
+          const linkUrl = `https://github.com/${event.reviewer}`;
+          label = `▲ ${makeClickableLink(linkUrl, event.reviewer)}`;
+        } else {
+          label = '▲';
         }
+        if (event.type === 'merged') {
+          symbol = '◆';
+          if (event.mergedBy) {
+            const linkUrl = `https://github.com/${event.mergedBy}`;
+            label = `◆ merged by ${makeClickableLink(linkUrl, event.mergedBy)}`;
+          } else {
+            label = '◆ merged';
+          }
+        }
+
+        barChars[clampedOffset] = symbol;
+        markerInfos.push(label);
       });
     }
     const barString = barChars.join('');
@@ -1532,24 +1656,22 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
     console.error(`\n  Note: Timeline shows current progress for pending jobs. Results may change as jobs complete.`);
   }
   
-  // Combined Analysis Section (moved to first)
-  console.error(`\n${makeClickableLink('https://uiperfetto.dev', 'Combined Analysis')}:`);
-  
-  // List PRs and Commits ordered by start time
+  // Combined Analysis only when multiple URLs
   const sortedResults = [...urlResults].sort((a, b) => a.earliestTime - b.earliestTime);
-  console.error(`\nIncluded URLs (ordered by start time):`);
-  sortedResults.forEach((result, index) => {
-    const repoUrl = `https://github.com/${result.owner}/${result.repo}`;
-    if (result.type === 'pr') {
-      console.error(`  ${index + 1}. ${makeClickableLink(result.displayUrl, result.displayName)} (${result.branchName}) - ${makeClickableLink(repoUrl, `${result.owner}/${result.repo}`)}`);
-    } else {
-      console.error(`  ${index + 1}. ${makeClickableLink(result.displayUrl, result.displayName)} - ${makeClickableLink(repoUrl, `${result.owner}/${result.repo}`)}`);
-    }
-  });
-  
-  // Combined pipeline timeline (PR/Commit level)
-  console.error(`\nCombined Pipeline Timeline:`);
-  generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLatestTime);
+  if (urlResults.length > 1) {
+    console.error(`\n${makeClickableLink('https://uiperfetto.dev', 'Combined Analysis')}:`);
+    console.error(`\nIncluded URLs (ordered by start time):`);
+    sortedResults.forEach((result, index) => {
+      const repoUrl = `https://github.com/${result.owner}/${result.repo}`;
+      if (result.type === 'pr') {
+        console.error(`  ${index + 1}. ${makeClickableLink(result.displayUrl, result.displayName)} (${result.branchName}) - ${makeClickableLink(repoUrl, `${result.owner}/${result.repo}`)}`);
+      } else {
+        console.error(`  ${index + 1}. ${makeClickableLink(result.displayUrl, result.displayName)} - ${makeClickableLink(repoUrl, `${result.owner}/${result.repo}`)}`);
+      }
+    });
+    console.error(`\nCombined Pipeline Timeline:`);
+    generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLatestTime);
+  }
   
   // Slowest jobs grouped by PR/Commit (ordered by start time like combined timeline)
   const allJobs = combinedMetrics.jobTimeline.sort((a, b) => (b.endTime - b.startTime) - (a.endTime - a.startTime));
@@ -1629,7 +1751,27 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
       const wallTimeDisplay = humanizeTime(wallTimeSec);
       const headerText = `[${index + 1}] ${result.displayName} (${wallTimeDisplay}, ${result.metrics.totalJobs} jobs)`;
       const headerLink = makeClickableLink(result.displayUrl, headerText);
-      console.error(`\n${headerLink}:`);
+      // Build markers summary with only usernames clickable
+      let markersSummary = '';
+      if (result.reviewEvents && result.reviewEvents.length > 0) {
+        const parts = [];
+        result.reviewEvents.forEach(ev => {
+          if (ev.type === 'shippit' && ev.reviewer) {
+            parts.push(`▲ ${makeClickableLink(`https://github.com/${ev.reviewer}`, ev.reviewer)}`);
+          }
+          if (ev.type === 'merged') {
+            if (ev.mergedBy) {
+              parts.push(`◆ merged by ${makeClickableLink(`https://github.com/${ev.mergedBy}`, ev.mergedBy)}`);
+            } else {
+              parts.push('◆ merged');
+            }
+          }
+        });
+        if (parts.length > 0) {
+          markersSummary = ` ${parts.join(' ')}`;
+        }
+      }
+      console.error(`\n${headerLink}:${markersSummary}`);
     } else {
       const headerText = `[${index + 1}] ${result.displayName} (${result.metrics.totalJobs} jobs)`;
       const headerLink = makeClickableLink(result.displayUrl, headerText);
@@ -1750,6 +1892,7 @@ export {
   yellowText,
   blueText,
   generateHighLevelTimeline,
+  generateTimelineVisualization,
   fetchPRReviews,
   createContext,
   extractPRInfo,
