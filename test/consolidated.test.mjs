@@ -37,11 +37,11 @@ const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const TEST_URL = 'https://github.com/facebook/react/pull/12345'; // Public OSS project with active CI
 
 // Helper function to run analyzer (for integration tests)
-  async function runAnalyzer(urls, timeoutMs = 30000) {
+  async function runAnalyzer(urls, timeoutMs = 30000, envOverrides = {}) {
     return new Promise((resolve, reject) => {
       const child = spawn('node', ['main.mjs', ...urls], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env, GITHUB_TOKEN: 'test-token' }
+        env: { ...process.env, ...envOverrides }
       });
     
     let stdout = '';
