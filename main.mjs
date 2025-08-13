@@ -1,48 +1,15 @@
 #!/usr/bin/env node
 
-/**
- * GitHub Actions Performance Profiler
- * 
- * Analyzes GitHub Actions workflow performance and generates Chrome Tracing format
- * output for visualization in Perfetto.dev or Chrome DevTools.
- * 
- * Features:
- * - Timeline visualization of jobs and steps
- * - Performance metrics and analysis
- * - Critical path identification
- * - Clickable links to GitHub Actions and PRs
- * - Chrome Tracing format for advanced analysis
- * 
- * Usage: node main.mjs <github_url> [github_token]
- *        GITHUB_TOKEN environment variable can be used instead of token argument
- *        
- * Supported URL formats:
- * - PR: https://github.com/owner/repo/pull/123
- * - Commit: https://github.com/owner/repo/commit/abc123...
- * 
- * @author GitHub Actions Performance Team
- * @version 1.0.0
- */
-
 import fs, { writeFileSync } from 'fs';
 import url from 'url';
 import { spawn } from 'child_process';
 import os from 'os';
 import path from 'path';
 
-// =============================================================================
-// CONFIGURATION AND VALIDATION
-// =============================================================================
-
-// Token will be extracted in main() function to handle multi-URL scenarios
-// Context object to hold global state
 const createContext = (token = process.env.GITHUB_TOKEN) => ({
   githubToken: token
 });
 
-/**
- * Progress bar utility for showing processing status
- */
 class ProgressBar {
   constructor(totalUrls, totalRuns) {
     this.totalUrls = totalUrls;
@@ -77,26 +44,15 @@ class ProgressBar {
     const runProgress = this.currentUrlRuns > 0 ? ` (${this.currentRun}/${this.currentUrlRuns} runs)` : '';
     const progressText = `Processing URL ${urlProgress}${runProgress}...`;
     
-    // Clear the current line and show progress
     process.stderr.write(`\r${progressText}`);
   }
 
   finish() {
     this.isProcessing = false;
-    // Clear the progress line
     process.stderr.write('\r' + ' '.repeat(50) + '\r');
   }
 }
 
-// =============================================================================
-// UTILITY FUNCTIONS
-// =============================================================================
-
-/**
- * Humanizes time duration to show the most appropriate unit
- * @param {number} seconds - Duration in seconds
- * @returns {string} - Humanized time string (e.g., "2h 3m 45s", "15m 30s", "45s")
- */
 function humanizeTime(seconds) {
   if (seconds === 0) {
     return '0s';
@@ -123,23 +79,98 @@ function humanizeTime(seconds) {
   return parts.join(' ');
 }
 
-/**
- * Extracts group prefix from job name (before first ' / ')
- * @param {string} jobName - Job name
- * @returns {string} - Group name
- */
+async function handleGithubError(response, requestUrl) {
+  const status = response.status;
+  const statusText = response.statusText || '';
+
+  let bodyText = '';
+  let message = '';
+  let documentationUrl = '';
+  try {
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      message = data?.message || '';
+      documentationUrl = data?.documentation_url || '';
+    } else {
+      bodyText = await response.text();
+    }
+  } catch {
+    // ignore parse errors
+  }
+
+  const ssoHeader = response.headers.get('x-github-sso');
+  const oauthScopes = response.headers.get('x-oauth-scopes');
+  const acceptedScopes = response.headers.get('x-accepted-oauth-scopes');
+  const rateRemaining = response.headers.get('x-ratelimit-remaining');
+
+  const base = `Error fetching ${requestUrl}: ${status} ${statusText}`;
+  const detail = message || bodyText || '';
+
+  if (status === 401) {
+    const lines = [
+      base + (detail ? ` - ${detail}` : ''),
+      '➡️  Authentication failed. Ensure a valid token (env GITHUB_TOKEN or CLI arg).',
+      '   - Fine-grained PAT: grant repository access and Read for: Contents, Actions, Pull requests, Checks.',
+      '   - Classic PAT: include repo scope for private repos.'
+    ];
+    if (documentationUrl) lines.push(`   Docs: ${documentationUrl}`);
+    throw new Error(lines.join('\n'));
+  }
+
+  if (status === 403) {
+    if (ssoHeader && /required/i.test(ssoHeader)) {
+      const match = ssoHeader.match(/url=([^;\s]+)/i);
+      const ssoUrl = match ? match[1] : null;
+      const lines = [
+        base + (detail ? ` - ${detail}` : ''),
+        '❌ GitHub API request forbidden due to SSO requirement for this token.'
+      ];
+      if (ssoUrl) {
+        lines.push(`➡️  Authorize SSO for this token by visiting:\n   ${ssoUrl}\nThen re-run the command.`);
+      } else {
+        lines.push('➡️  Authorize SSO for this token in your organization, then re-run.');
+      }
+      throw new Error(lines.join('\n'));
+    }
+
+    if (rateRemaining === '0') {
+      const lines = [
+        base + (detail ? ` - ${detail}` : ''),
+        '➡️  API rate limit reached. Wait for reset or use an authenticated token with higher limits.'
+      ];
+      throw new Error(lines.join('\n'));
+    }
+
+    const lines = [
+      base + (detail ? ` - ${detail}` : ''),
+      '➡️  Permission issue. Verify token access to this repository and required scopes.',
+    ];
+    if (acceptedScopes) lines.push(`   Required scopes (server hint): ${acceptedScopes}`);
+    if (oauthScopes) lines.push(`   Your token scopes: ${oauthScopes || '(none reported)'}`);
+    lines.push('   - Fine-grained PAT: grant repo access and Read for Contents, Actions, Pull requests, Checks.');
+    lines.push('   - Classic PAT: include repo scope for private repos.');
+    if (documentationUrl) lines.push(`   Docs: ${documentationUrl}`);
+    throw new Error(lines.join('\n'));
+  }
+
+  if (status === 404) {
+    const lines = [
+      base + (detail ? ` - ${detail}` : ''),
+      '➡️  Not found. On private repos, 404 can indicate insufficient token access. Check repository access and scopes.'
+    ];
+    throw new Error(lines.join('\n'));
+  }
+
+  throw new Error(base + (detail ? ` - ${detail}` : ''));
+}
+
 function getJobGroup(jobName) {
   // Split by '/' and take the first part as the group
   const parts = jobName.split(' / ');
   return parts.length > 1 ? parts[0] : jobName;
 }
 
-/**
- * Parses a GitHub PR URL or commit URL and extracts owner, repo, and identifier
- * @param {string} url - GitHub PR URL or commit URL
- * @returns {Object} - {owner, repo, type, identifier}
- * @throws {Error} - If URL format is invalid
- */
 function parseGitHubUrl(url) {
   const parsed = new URL(url);
   const pathParts = parsed.pathname.split('/').filter(Boolean);
@@ -167,11 +198,6 @@ function parseGitHubUrl(url) {
   throw new Error(`Invalid GitHub URL: ${url}. Expected format: PR: https://github.com/owner/repo/pull/123 or Commit: https://github.com/owner/repo/commit/abc123...`);
 }
 
-/**
- * Makes authenticated requests to GitHub API
- * @param {string} url - API endpoint URL
- * @returns {Promise<Object>} - JSON response
- */
 async function fetchWithAuth(url, context) {
   const headers = {
     Authorization: `token ${context.githubToken}`,
@@ -181,8 +207,7 @@ async function fetchWithAuth(url, context) {
   
   const response = await fetch(url, { headers });
   if (!response.ok) {
-    console.error(`Error fetching ${url}: ${response.status} ${response.statusText}`);
-    process.exit(1);
+    throw await handleGithubError(response, url);
   }
   return response.json();
 }
@@ -201,9 +226,41 @@ function extractPRInfo(prData, prUrl = null) {
   };
 }
 
-async function fetchWorkflowRuns(baseUrl, headSha, context) {
-  const commitRunsUrl = `${baseUrl}/actions/runs?head_sha=${headSha}&per_page=100`;
+async function fetchWorkflowRuns(baseUrl, headSha, context, options = {}) {
+  const params = new URLSearchParams();
+  params.set('head_sha', headSha);
+  params.set('per_page', '100');
+  if (options.branch) {
+    params.set('branch', options.branch);
+  }
+  if (options.event) {
+    params.set('event', options.event);
+  }
+  const commitRunsUrl = `${baseUrl}/actions/runs?${params.toString()}`;
   return await fetchWithPagination(commitRunsUrl, context);
+}
+
+async function fetchRepository(baseUrl, context) {
+  return await fetchWithAuth(baseUrl, context);
+}
+
+async function fetchCommitAssociatedPRs(owner, repo, sha, context) {
+  const endpoint = `https://api.github.com/repos/${owner}/${repo}/commits/${sha}/pulls?per_page=100`;
+  const headers = {
+    Authorization: `token ${context.githubToken}`,
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'Node'
+  };
+  const response = await fetch(endpoint, { headers });
+  if (!response.ok) {
+    await handleGithubError(response, endpoint);
+  }
+  return await response.json();
+}
+
+async function fetchCommit(baseUrl, sha, context) {
+  const commitUrl = `${baseUrl}/commits/${sha}`;
+  return await fetchWithAuth(commitUrl, context);
 }
 
 async function fetchPRReviews(owner, repo, prNumber, context) {
@@ -224,8 +281,7 @@ async function fetchWithPagination(url, context) {
   while (currentUrl) {
     const response = await fetch(currentUrl, { headers });
     if (!response.ok) {
-      console.error(`Error fetching ${currentUrl}: ${response.status}`);
-      break;
+      throw await handleGithubError(response, currentUrl);
     }
     
     const data = await response.json();
@@ -239,14 +295,6 @@ async function fetchWithPagination(url, context) {
   return allItems;
 }
 
-// =============================================================================
-// METRICS AND DATA PROCESSING
-// =============================================================================
-
-/**
- * Initializes metrics tracking object
- * @returns {Object} - Empty metrics object
- */
 function initializeMetrics() {
   return {
     totalRuns: 0,
@@ -278,31 +326,11 @@ function findEarliestTimestamp(allRuns) {
   return earliest;
 }
 
-// =============================================================================
-// TRACE EVENT PROCESSING
-// =============================================================================
-
-/**
- * Processes a workflow run and generates trace events
- * @param {Object} run - GitHub workflow run object
- * @param {number} runIndex - Index of the run
- * @param {number} processId - Process ID for trace events
- * @param {number} earliestTime - Earliest timestamp for normalization
- * @param {Object} metrics - Metrics tracking object
- * @param {Array} traceEvents - Array to store trace events
- * @param {Array} jobStartTimes - Array to track job start times
- * @param {Array} jobEndTimes - Array to track job end times
- * @param {string} owner - Repository owner
- * @param {string} repo - Repository name
- * @param {string} identifier - PR number or commit SHA
- */
 async function processWorkflowRun(run, runIndex, processId, earliestTime, metrics, traceEvents, jobStartTimes, jobEndTimes, owner, repo, identifier, urlIndex = 0, currentUrlResult = null, context = null, progressBar = null) {
-  // Update progress bar instead of console output
   if (progressBar) {
     progressBar.processRun();
   }
   
-  // Update run metrics
   metrics.totalRuns++;
   if (run.status === 'completed' && run.conclusion === 'success') {
     metrics.successfulRuns++;
@@ -310,18 +338,15 @@ async function processWorkflowRun(run, runIndex, processId, earliestTime, metric
     metrics.failedRuns++;
   }
   
-  // Fetch jobs for this run
   const baseUrl = `https://api.github.com/repos/${run.repository.owner.login}/${run.repository.name}`;
   const jobsUrl = `${baseUrl}/actions/runs/${run.id}/jobs?per_page=100`;
   const jobs = await fetchWithPagination(jobsUrl, context);
   
-  // Calculate run timing - use absolute timestamps for consistency
   const absoluteRunStartMs = new Date(run.created_at).getTime();
   const absoluteRunEndMs = new Date(run.updated_at).getTime();
   const runStartTs = absoluteRunStartMs; // Keep in milliseconds for Perfetto
   let runEndTs = Math.max(runStartTs + 1, absoluteRunEndMs); // Ensure minimum 1ms duration
   
-  // Find latest job completion for run end time
   for (const job of jobs) {
     if (job.completed_at) {
       const absoluteJobEndMs = new Date(job.completed_at).getTime();
@@ -786,62 +811,17 @@ function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0, re
   const latestEnd = Math.max(...timeline.map(job => job.endTime));
   const totalDuration = latestEnd - earliestStart;
   
-  // Removed redundant "Pipeline Timeline" line - now handled by the caller
-  
+  // Top header: start/end box header for the visualization
+  console.error('┌' + '─'.repeat(scale + 2) + '┐');
   // Format start and end times for display (timeline uses absolute timestamps)
   const startTimeFormatted = new Date(earliestStart).toLocaleTimeString();
   const endTimeFormatted = new Date(latestEnd).toLocaleTimeString();
-  
-  console.error('┌' + '─'.repeat(scale + 2) + '┐');
-  // Position start time on left, end time on right
-  const startLabel = `Start: ${startTimeFormatted}`;
-  const endLabel = `End: ${endTimeFormatted}`;
-  const middlePadding = ' '.repeat(scale - startLabel.length - endLabel.length);
-  
-  console.error(`│ ${startLabel}${middlePadding}${endLabel} │`);
+  const headerStart = `Start: ${startTimeFormatted}`;
+  const headerEnd = `End: ${endTimeFormatted}`;
+  const headerPadding = ' '.repeat(Math.max(0, scale - headerStart.length - headerEnd.length));
+  console.error(`│ ${headerStart}${headerPadding}${headerEnd} │`);
   console.error('├' + '─'.repeat(scale + 2) + '┤');
   
-  // Dedicated marker row for review/merge events across the pipeline
-  if (isFinite(earliestStart) && isFinite(latestEnd) && totalDuration > 0) {
-    const barChars = Array(scale).fill(' ');
-    const markerInfos = [];
-    for (const event of (reviewEvents || [])) {
-      const eventTime = new Date(event.time).getTime();
-      const column = Math.floor(((eventTime - earliestStart) / totalDuration) * scale);
-      const clamped = Math.min(Math.max(column, 0), Math.max(0, scale - 1));
-
-      // Build inline visible text (no links) for precise placement
-      let visibleText = '▲';
-      let infoLabel;
-      if (event.type === 'shippit' && event.reviewer) {
-        visibleText = `▲ ${event.reviewer}`;
-        infoLabel = `▲ ${makeClickableLink(`https://github.com/${event.reviewer}`, event.reviewer)}`;
-      } else if (event.type === 'merged') {
-        if (event.mergedBy) {
-          visibleText = `◆ merged by ${event.mergedBy}`;
-          infoLabel = `◆ merged by ${makeClickableLink(`https://github.com/${event.mergedBy}`, event.mergedBy)}`;
-        } else {
-          visibleText = '◆ merged';
-          infoLabel = '◆ merged';
-        }
-      } else {
-        infoLabel = '▲';
-      }
-
-      // Fit visibleText into the bar, shifting left if it would overflow
-      let startPos = clamped;
-      if (startPos + visibleText.length > scale) {
-        startPos = Math.max(0, scale - visibleText.length);
-      }
-      for (let i = 0; i < visibleText.length && (startPos + i) < scale; i++) {
-        barChars[startPos + i] = visibleText[i];
-      }
-      markerInfos.push(infoLabel);
-    }
-    const markersBar = barChars.join('');
-    const labels = markerInfos.length > 0 ? ` ${markerInfos.join(' ')}` : '';
-    console.error(`│${markersBar}  │${labels}`);
-  }
   
   // Group jobs by their prefix (before first ' / ')
   const jobGroups = {};
@@ -959,10 +939,95 @@ function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0, re
 
   });
   
-  console.error('└' + '─'.repeat(scale + 2) + '┘');
+  // Approvals & Merge as a dedicated directory-like group with one entry per event
+  const approvalAndMergeEvents = (reviewEvents || []).filter(ev => ev.type === 'shippit' || ev.type === 'merged');
+  if (approvalAndMergeEvents.length > 0 && totalDuration > 0) {
+    console.error(`│${' '.repeat(scale)}  │ 📁 Approvals & Merge (${approvalAndMergeEvents.length} items)`);
+    const sortedEvents = [...approvalAndMergeEvents].sort((a, b) => new Date(a.time) - new Date(b.time));
+    // Combined marker line rendering both ▲ review and ◆ merged markers on the same line
+    {
+      const markerSlots = Array(scale).fill(' ');
+      const reviewers = [];
+      let mergedByUser = null;
+      sortedEvents.forEach(ev => {
+        const eventTime = new Date(ev.time).getTime();
+        const relativeStart = Math.max(0, Math.min(eventTime, latestEnd) - earliestStart);
+        const col = Math.floor((relativeStart / totalDuration) * scale);
+        const clampedCol = Math.max(0, Math.min(col, Math.max(0, scale - 1)));
+        if (ev.type === 'merged') {
+          markerSlots[clampedCol] = '◆';
+          mergedByUser = ev.mergedBy || mergedByUser;
+        } else {
+          markerSlots[clampedCol] = markerSlots[clampedCol] === '◆' ? '◆' : '▲';
+          if (ev.reviewer) reviewers.push(ev.reviewer);
+        }
+      });
+      const markerLineLeft = markerSlots.join('');
+      const rightParts = [];
+      if (reviewers.length > 0) rightParts.push(yellowText(`▲ ${reviewers[0]}`));
+      if (mergedByUser) rightParts.push(greenText(`◆ merged by ${mergedByUser}`));
+      const combinedRight = rightParts.join('  ');
+      console.error(`│${markerLineLeft}  │ ${'└── '}${combinedRight}`);
+    }
+    sortedEvents.forEach((ev, index) => {
+      const eventTime = new Date(ev.time).getTime();
+      const relativeStart = Math.max(0, Math.min(eventTime, latestEnd) - earliestStart);
+      // Clamp column to [0, scale-1]
+      const col = Math.floor((relativeStart / totalDuration) * scale);
+      const clampedCol = Math.max(0, Math.min(col, Math.max(0, scale - 1)));
+      const padding = ' '.repeat(clampedCol);
+      const markerChar = ev.type === 'merged' ? '◆' : '▲';
+      const marker = ev.type === 'merged' ? greenText(markerChar) : yellowText(markerChar);
+      const remaining = ' '.repeat(Math.max(0, scale - clampedCol - 1));
+      const isLast = index === sortedEvents.length - 1;
+      const treePrefix = isLast ? '└── ' : '├── ';
+      const timeStr = new Date(ev.time).toLocaleTimeString();
+      let rightLabel;
+      if (ev.type === 'merged') {
+        const who = ev.mergedBy ? makeClickableLink(`https://github.com/${ev.mergedBy}`, ev.mergedBy) : 'merged';
+        rightLabel = greenText(`merged by ${who} (${timeStr})`);
+      } else {
+        const who = ev.reviewer ? makeClickableLink(`https://github.com/${ev.reviewer}`, ev.reviewer) : 'approved';
+        rightLabel = yellowText(`${who} (${timeStr})`);
+      }
+      console.error(`│${padding}${marker}${remaining}  │ ${treePrefix}${rightLabel}`);
+    });
+  }
+
+  // Timeline legend with colors + review markers (footer box)
+  // Footer box top border (same inner width as the main box: scale + 2 spaces between bars and right border)
+  console.error('┌' + '─'.repeat(scale + 2) + '┐');
+  const jobCount = timeline.length;
+  const wallTimeSec = (latestEnd - earliestStart) / 1000;
+  const footerText = `Timeline: ${startTimeFormatted} → ${endTimeFormatted} • ${humanizeTime(wallTimeSec)} • ${jobCount} jobs`;
+  // Footer content line ensures total inner width is scale + 2
+  const footerInnerWidth = scale + 2; // includes the leading space we add below
+  const footerLine = ` ${footerText}`;
+  const footerPadding = ' '.repeat(Math.max(0, footerInnerWidth - footerLine.length));
+  console.error(`│${footerLine}${footerPadding}│`);
+  // Professional summary merged here
+  const runsCount = metrics.totalRuns || 0;
+  const computeMs = timeline.reduce((sum, j) => sum + Math.max(0, j.endTime - j.startTime), 0);
+  const approvalsCount = (reviewEvents || []).filter(ev => ev.type === 'shippit').length;
+  const hasMerged = (reviewEvents || []).some(ev => ev.type === 'merged');
+  const summaryText = `Summary — runs: ${runsCount} • wall: ${humanizeTime(wallTimeSec)} • compute: ${humanizeTime(computeMs/1000)} • approvals: ${approvalsCount} • merged: ${hasMerged ? 'yes' : 'no'}`;
+  const summaryLine = ` ${summaryText}`;
+  const summaryPadding = ' '.repeat(Math.max(0, footerInnerWidth - summaryLine.length));
+  console.error(`│${summaryLine}${summaryPadding}│`);
   
-  // Timeline legend with colors
-  console.error(`Legend: ${greenText('█ Success')}  ${redText('█ Failed')}  ${blueText('▒ Pending/Running')}  ${grayText('░ Cancelled/Skipped')}`);
+  // Merge per-run summary into the footer if provided by caller (printed by caller right after this box)
+  // Caller prints a concise "Summary — runs: … • wall: … • compute: … • approvals: … • merged: …"
+  
+  // Legend row
+  const baseLegend = `Legend: ${greenText('█ Success')}  ${redText('█ Failed')}  ${blueText('▒ Pending/Running')}  ${grayText('░ Cancelled/Skipped')}`;
+  const markersLegend = `${approvalsCount > 0 ? '  ' + yellowText(`▲ approvals`) : ''}${hasMerged ? '  ' + greenText('◆ merged') : ''}`;
+  let legendLine = baseLegend + markersLegend;
+  const legendInnerWidth = scale + 2;
+  let legendContent = ` ${legendLine}`;
+  if (legendContent.length > legendInnerWidth) legendContent = legendContent.slice(0, legendInnerWidth);
+  const legendPadding = ' '.repeat(Math.max(0, legendInnerWidth - legendContent.length));
+  console.error(`│${legendContent}${legendPadding}│`);
+  console.error('└' + '─'.repeat(scale + 2) + '┘');
   
   // Show group time summaries sorted by wall time
   const groupTimeSummaries = sortedGroupNames.map(groupName => {
@@ -979,11 +1044,7 @@ function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0, re
   // Show concurrency insights using original timeline for analysis
   const sortedJobs = [...timeline].sort((a, b) => a.startTime - b.startTime);
   
-  // Show bottleneck jobs summary
-  if (timelineBottlenecks.length > 0) {
-    const bottleneckDuration = timelineBottlenecks.reduce((sum, job) => sum + (job.endTime - job.startTime), 0) / 1000;
-    console.error(`Bottleneck jobs: ${timelineBottlenecks.length} jobs, ${humanizeTime(bottleneckDuration)} total`);
-  }
+  // (Dropped aggregated bottleneck wall-time percentage to reduce confusion)
 }
 
 function findOverlappingJobs(jobs) {
@@ -1040,9 +1101,34 @@ function findBottleneckJobs(jobs) {
   return bottleneckJobs;
 }
 
+function calculateUnionDurationMs(intervals) {
+  if (!Array.isArray(intervals) || intervals.length === 0) return 0;
+  const ranges = intervals
+    .map(({ startTime, endTime }) => ({ start: Math.min(startTime, endTime), end: Math.max(startTime, endTime) }))
+    .filter(r => Number.isFinite(r.start) && Number.isFinite(r.end) && r.end > r.start)
+    .sort((a, b) => a.start - b.start);
+
+  if (ranges.length === 0) return 0;
+
+  let total = 0;
+  let currentStart = ranges[0].start;
+  let currentEnd = ranges[0].end;
+
+  for (let i = 1; i < ranges.length; i++) {
+    const r = ranges[i];
+    if (r.start <= currentEnd) {
+      currentEnd = Math.max(currentEnd, r.end);
+    } else {
+      total += currentEnd - currentStart;
+      currentStart = r.start;
+      currentEnd = r.end;
+    }
+  }
+  total += currentEnd - currentStart;
+  return total;
+}
 
 
-// Helper function to categorize steps based on their names
 function categorizeStep(stepName) {
   const name = stepName.toLowerCase();
   
@@ -1059,7 +1145,6 @@ function categorizeStep(stepName) {
   return 'step_other';
 }
 
-// Helper function to get appropriate icon for steps
 function getStepIcon(stepName, conclusion) {
   const name = stepName.toLowerCase();
   
@@ -1085,14 +1170,6 @@ function getStepIcon(stepName, conclusion) {
   return '▶️'; // Default step icon
 }
 
-// =============================================================================
-// PERFETTO INTEGRATION
-// =============================================================================
-
-/**
- * Downloads and uses the Perfetto open_trace_in_ui script to open a trace file
- * @param {string} traceFile - Path to the trace file to open
- */
 async function openTraceInPerfetto(traceFile) {
   const scriptName = 'open_trace_in_ui';
   const scriptUrl = 'https://raw.githubusercontent.com/google/perfetto/main/tools/open_trace_in_ui';
@@ -1163,13 +1240,6 @@ async function openTraceInPerfetto(traceFile) {
   }
 }
 
-// =============================================================================
-// MAIN EXECUTION
-// =============================================================================
-
-/**
- * Main function that orchestrates the entire profiling process
- */
 async function main() {
   // Parse command line arguments
   const args = process.argv.slice(2);
@@ -1271,27 +1341,103 @@ async function main() {
         const reviews = await fetchPRReviews(owner, repo, identifier, context);
         reviewEvents = reviews
           .filter(r => r.state === 'APPROVED' || /ship\s?it/i.test(r.body || ''))
-          .map(r => ({ type: 'shippit', time: r.submitted_at, reviewer: r.user.login }));
+          .map(r => ({ type: 'shippit', time: r.submitted_at, reviewer: r.user.login, url: r.html_url || analyzingPrUrl }));
 
         // Include PR merged timestamp as a timeline event if available
         if (prData.merged_at) {
           reviewEvents.push({
             type: 'merged',
             time: prData.merged_at,
-            mergedBy: prData.merged_by?.login || prData.merged_by?.name || null
+            mergedBy: prData.merged_by?.login || prData.merged_by?.name || null,
+            url: analyzingPrUrl
           });
         }
+        var mergedAtMs = prData.merged_at ? new Date(prData.merged_at).getTime() : null;
       } else {
         // Handle commit
         const analyzingCommitUrl = `https://github.com/${owner}/${repo}/commit/${identifier}`;
 
         headSha = identifier;
-        branchName = 'commit';
         displayName = `commit ${identifier.substring(0, 8)}`;
         displayUrl = analyzingCommitUrl;
+
+        // Determine the most relevant branch for this commit
+        // Prefer the base branch of an associated PR; fallback to repo default_branch
+        let targetBranch = null;
+        try {
+          const prs = await fetchCommitAssociatedPRs(owner, repo, headSha, context);
+          if (Array.isArray(prs) && prs.length > 0) {
+            targetBranch = prs[0]?.base?.ref || null;
+          }
+        } catch {
+          // ignore; we'll fallback below
+        }
+        if (!targetBranch) {
+          try {
+            const repoMeta = await fetchRepository(baseUrl, context);
+            targetBranch = repoMeta?.default_branch || null;
+          } catch {
+            // leave null
+          }
+        }
+        branchName = targetBranch || 'unknown';
       }
       
-      const allRuns = await fetchWorkflowRuns(baseUrl, headSha, context);
+      // For commit URLs: restrict to push runs on the inferred target branch and created at/after the commit time
+      let allRuns;
+      if (type === 'commit') {
+        // Fetch all runs for this head SHA (unfiltered)
+        const allRunsForHead = await fetchWorkflowRuns(
+          baseUrl,
+          headSha,
+          context
+        );
+        // Filtered runs (e.g., by branch/event/time window) used for timeline visualization
+        const runs = await fetchWorkflowRuns(
+          baseUrl,
+          headSha,
+          context,
+          { branch: branchName && branchName !== 'unknown' ? branchName : undefined, event: 'push' }
+        );
+        let commitTimeMs = null;
+        try {
+          const commitMeta = await fetchCommit(baseUrl, headSha, context);
+          const dateStr = commitMeta?.commit?.committer?.date || commitMeta?.commit?.author?.date || null;
+          if (dateStr) commitTimeMs = new Date(dateStr).getTime();
+        } catch {
+          // ignore; leave commitTimeMs null
+        }
+        allRuns = Array.isArray(runs) && commitTimeMs
+          ? runs.filter(r => {
+              const runCreated = new Date(r.created_at).getTime();
+              return isFinite(runCreated) && runCreated >= commitTimeMs;
+            })
+          : runs;
+
+        // Compute aggregate compute time across ALL runs for this commit head SHA
+        let allRunsComputeMs = 0;
+        try {
+          for (const run of (allRunsForHead || [])) {
+            const baseRepoUrl = `https://api.github.com/repos/${owner}/${repo}`;
+            const jobsUrl = `${baseRepoUrl}/actions/runs/${run.id}/jobs?per_page=100`;
+            const jobs = await fetchWithPagination(jobsUrl, context);
+            for (const job of jobs) {
+              if (job.started_at && job.completed_at) {
+                const s = new Date(job.started_at).getTime();
+                const e = new Date(job.completed_at).getTime();
+                if (isFinite(s) && isFinite(e) && e > s) {
+                  allRunsComputeMs += (e - s);
+                }
+              }
+            }
+          }
+        } catch {
+          // ignore failures computing full compute; leave as 0 if errors
+        }
+        var allRunsForHeadCount = (allRunsForHead || []).length;
+      } else {
+        allRuns = await fetchWorkflowRuns(baseUrl, headSha, context);
+      }
       if (allRuns.length === 0) {
         continue; // Skip this URL and continue with others
       }
@@ -1337,7 +1483,11 @@ async function main() {
         jobStartTimes: urlJobStartTimes,
         jobEndTimes: urlJobEndTimes,
         earliestTime: urlEarliestTime,
-        reviewEvents
+        reviewEvents,
+        mergedAtMs: typeof mergedAtMs === 'number' ? mergedAtMs : null,
+        commitTimeMs: typeof commitTimeMs === 'number' ? commitTimeMs : null
+        , allCommitRunsCount: typeof allRunsForHeadCount === 'number' ? allRunsForHeadCount : undefined
+        , allCommitRunsComputeMs: typeof allRunsComputeMs === 'number' ? allRunsComputeMs : undefined
       });
 
       // Accumulate global data
@@ -1397,8 +1547,8 @@ async function main() {
           const name = event.type === 'merged' ? 'Merged' : 'Approved';
           const user = event.type === 'merged' ? (event.mergedBy || '') : (event.reviewer || '');
           const label = event.type === 'merged'
-            ? (user ? `merged by ${user}` : 'merged')
-            : (user ? `approved by ${user}` : 'approved');
+            ? (user ? greenText(`◆ merged by ${user}`) : greenText('◆ merged'))
+            : (user ? yellowText(`▲ approved by ${user}`) : yellowText('▲ approved'));
           const userUrl = user ? `https://github.com/${user}` : '';
           allTraceEvents.push({
             name,
@@ -1465,7 +1615,7 @@ function generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLate
   console.error(`│ ${startLabel}${middlePadding}${endLabel} │`);
   console.error('├' + '─'.repeat(scale + 2) + '┤');
   
-  // Display each PR/Commit as a timeline bar
+    // Display each PR/Commit as a timeline bar
   sortedResults.forEach((result, index) => {
     // Calculate the actual wall time from the job timeline (earliest start to latest end)
     const resultEarliestTime = Math.min(...result.metrics.jobTimeline.map(job => job.startTime));
@@ -1493,39 +1643,25 @@ function generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLate
       timeDisplay = humanizeTime(wallTimeSec);
     }
 
-    // Prepare bar with potential review markers
+    // Prepare bar with bars + overlayed review markers (no per-user list here)
     const barChars = Array(barLength).fill('█');
-    const markerInfos = [];
-    // Always render markers row and label(s) on combined timeline line
+    let approvalCount = 0;
+    let mergedBy = null;
+    let mergedTimeMs = null;
     if (result.reviewEvents && result.reviewEvents.length > 0) {
       result.reviewEvents.forEach(event => {
         const eventTime = new Date(event.time).getTime();
         const column = Math.floor(((eventTime - timelineEarliestTime) / totalDuration) * scale);
         const offset = column - startPos;
-        // Always show a marker: clamp to the nearest edge if outside the bar
         const clampedOffset = Math.min(Math.max(offset, 0), Math.max(0, barLength - 1));
-
-        // Choose symbol and label based on event type
-        let symbol = '▲';
-        let label;
-        if (event.reviewer) {
-          const linkUrl = `https://github.com/${event.reviewer}`;
-          label = `▲ ${makeClickableLink(linkUrl, event.reviewer)}`;
-        } else {
-          label = '▲';
-        }
         if (event.type === 'merged') {
-          symbol = '◆';
-          if (event.mergedBy) {
-            const linkUrl = `https://github.com/${event.mergedBy}`;
-            label = `◆ merged by ${makeClickableLink(linkUrl, event.mergedBy)}`;
-          } else {
-            label = '◆ merged';
-          }
+          barChars[clampedOffset] = '◆';
+          mergedBy = event.mergedBy || mergedBy || null;
+          mergedTimeMs = eventTime;
+        } else {
+          barChars[clampedOffset] = '▲';
+          approvalCount++;
         }
-
-        barChars[clampedOffset] = symbol;
-        markerInfos.push(label);
       });
     }
     const barString = barChars.join('');
@@ -1552,7 +1688,18 @@ function generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLate
     // Create the timeline bar
     const padding = ' '.repeat(Math.max(0, startPos));
     const remaining = ' '.repeat(Math.max(0, scale - startPos - barLength));
-    const markerLabel = markerInfos.length > 0 ? ' ' + markerInfos.join(' ') : '';
+    // Compact suffix to avoid overwhelming inline labels; detailed list printed later
+    const suffixParts = [];
+    if (approvalCount > 0) suffixParts.push(yellowText(`▲ ${approvalCount}`));
+    if (mergedBy !== null) {
+      if (mergedTimeMs) {
+        const timeStr = new Date(mergedTimeMs).toLocaleTimeString();
+        suffixParts.push(greenText(`◆ merged by ${mergedBy} (${timeStr})`));
+      } else {
+        suffixParts.push(greenText('◆ merged'));
+      }
+    }
+    const markerLabel = suffixParts.length > 0 ? ' ' + suffixParts.join('  ') : '';
 
     console.error(`│${padding}${coloredBar}${remaining}  │ ${coloredLink}${markerLabel}`);
   });
@@ -1560,9 +1707,6 @@ function generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLate
   console.error('└' + '─'.repeat(scale + 2) + '┘');
 }
 
-/**
- * Calculate combined metrics from multiple URL results
- */
 function calculateCombinedMetrics(urlResults, totalRuns, allJobStartTimes, allJobEndTimes) {
   const combined = {
     totalRuns,
@@ -1589,9 +1733,6 @@ function calculateCombinedMetrics(urlResults, totalRuns, allJobStartTimes, allJo
   return combined;
 }
 
-/**
- * Calculate combined success rate across all URLs
- */
 function calculateCombinedSuccessRate(urlResults) {
   const totalSuccessful = urlResults.reduce((sum, result) => {
     const rate = parseFloat(result.metrics.successRate);
@@ -1602,9 +1743,6 @@ function calculateCombinedSuccessRate(urlResults) {
   return totalRuns > 0 ? (totalSuccessful / totalRuns * 100).toFixed(1) : '0.0';
 }
 
-/**
- * Calculate combined job success rate across all URLs
- */
 function calculateCombinedJobSuccessRate(urlResults) {
   const totalSuccessfulJobs = urlResults.reduce((sum, result) => {
     const rate = parseFloat(result.metrics.jobSuccessRate);
@@ -1615,27 +1753,20 @@ function calculateCombinedJobSuccessRate(urlResults) {
   return totalJobs > 0 ? (totalSuccessfulJobs / totalJobs * 100).toFixed(1) : '0.0';
 }
 
-/**
- * Output combined results from multiple URLs
- */
 async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents, globalEarliestTime, globalLatestTime, perfettoFile, openInPerfetto = false) {
-  // Simple completion message
   if (perfettoFile) {
     console.error(`\n✅ Generated ${allTraceEvents.length} trace events • Open in Perfetto.dev for analysis`);
   } else {
     console.error(`\n✅ Generated ${allTraceEvents.length} trace events • Use --perfetto=<filename> to save trace for Perfetto.dev analysis`);
   }
   
-  // Professional summary report
   console.error(`\n${'='.repeat(80)}`);
   console.error(`📊 ${makeClickableLink('https://ui.perfetto.dev', 'GitHub Actions Performance Report - Multi-URL Analysis')}`);
   console.error(`${'='.repeat(80)}`);
   
-  // Summary of all URLs
   console.error(`Analysis Summary: ${urlResults.length} URLs • ${combinedMetrics.totalRuns} runs • ${combinedMetrics.totalJobs} jobs • ${combinedMetrics.totalSteps} steps`);
   console.error(`Success Rate: ${combinedMetrics.successRate}% workflows, ${combinedMetrics.jobSuccessRate}% jobs • Peak Concurrency: ${combinedMetrics.maxConcurrency}`);
   
-  // Check for pending jobs across all URLs
   const allPendingJobs = [];
   urlResults.forEach(result => {
     if (result.metrics.pendingJobs && result.metrics.pendingJobs.length > 0) {
@@ -1656,7 +1787,6 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
     console.error(`\n  Note: Timeline shows current progress for pending jobs. Results may change as jobs complete.`);
   }
   
-  // Combined Analysis only when multiple URLs
   const sortedResults = [...urlResults].sort((a, b) => a.earliestTime - b.earliestTime);
   if (urlResults.length > 1) {
     console.error(`\n${makeClickableLink('https://uiperfetto.dev', 'Combined Analysis')}:`);
@@ -1671,6 +1801,57 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
     });
     console.error(`\nCombined Pipeline Timeline:`);
     generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLatestTime);
+  }
+
+  const commitAggregates = urlResults
+    .filter(r => r.type === 'commit')
+    .map(r => ({
+      name: r.displayName,
+      urlIndex: r.urlIndex,
+      totalRunsForCommit: r.allCommitRunsCount ?? r.metrics.totalRuns ?? 0,
+      totalComputeMsForCommit: r.allCommitRunsComputeMs ?? 0
+    }));
+  if (commitAggregates.length > 0) {
+    console.error(`\nCommit Runs (all runs for the commit head SHA):`);
+    commitAggregates.forEach(agg => {
+      const computeDisplay = humanizeTime((agg.totalComputeMsForCommit || 0) / 1000);
+      console.error(`  [${agg.urlIndex + 1}] ${agg.name}: runs=${agg.totalRunsForCommit}, compute=${computeDisplay}`);
+    });
+  }
+
+  // Summary of runs per URL with compute, wall time, and approvals
+  console.error(`\nRun Summary:`);
+  urlResults.forEach(result => {
+    const runsCount = result.metrics?.totalRuns ?? 0;
+    const jobs = result.metrics?.jobTimeline ?? [];
+    const computeMs = jobs.reduce((sum, j) => sum + Math.max(0, j.endTime - j.startTime), 0);
+    let wallMs = 0;
+    if (jobs.length > 0) {
+      const start = Math.min(...jobs.map(j => j.startTime));
+      const end = Math.max(...jobs.map(j => j.endTime));
+      wallMs = Math.max(0, end - start);
+    }
+    const approvals = (result.reviewEvents || []).filter(ev => ev.type === 'shippit').length;
+    const merged = (result.reviewEvents || []).some(ev => ev.type === 'merged');
+    const line = `  [${result.urlIndex + 1}] ${result.displayName}: runs=${runsCount}, wall=${humanizeTime(wallMs/1000)}, compute=${humanizeTime(computeMs/1000)}, approvals=${approvals}, merged=${merged ? 'yes' : 'no'}`;
+    console.error(line);
+  });
+
+  // Pre-commit runs (created before commit timestamp) summary when commit URL was included
+  const commitResults = urlResults.filter(r => r.type === 'commit');
+  if (commitResults.length > 0) {
+    console.error(`\nPre-commit Runs (created before commit time):`);
+    for (const result of commitResults) {
+      // We don't have raw runs list here; compute approximation from metrics timeline
+      const commitTimeMs = result.earliestTime; // For commit, earliestTime aligns with run timeline start baseline
+      const preJobs = (result.metrics?.jobTimeline || []).filter(j => j.startTime < commitTimeMs);
+      if (preJobs.length === 0) {
+        console.error(`  [${result.urlIndex + 1}] ${result.displayName}: none`);
+        continue;
+      }
+      const preComputeMs = preJobs.reduce((s, j) => s + Math.max(0, Math.min(j.endTime, commitTimeMs) - j.startTime), 0);
+      console.error(`  [${result.urlIndex + 1}] ${result.displayName}: compute=${humanizeTime(preComputeMs/1000)} across ${preJobs.length} jobs (prior activity)`);
+    }
   }
   
   // Slowest jobs grouped by PR/Commit (ordered by start time like combined timeline)
@@ -1751,33 +1932,37 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
       const wallTimeDisplay = humanizeTime(wallTimeSec);
       const headerText = `[${index + 1}] ${result.displayName} (${wallTimeDisplay}, ${result.metrics.totalJobs} jobs)`;
       const headerLink = makeClickableLink(result.displayUrl, headerText);
-      // Build markers summary with only usernames clickable
-      let markersSummary = '';
+      console.error(`\n${headerLink}:`);
+      // Concise per-run summary line
+      const computeMs = timeline.reduce((sum, j) => sum + Math.max(0, j.endTime - j.startTime), 0);
+      const approvals = (result.reviewEvents || []).filter(ev => ev.type === 'shippit').length;
+      const merged = (result.reviewEvents || []).some(ev => ev.type === 'merged');
+      console.error(`  Summary — runs: ${result.metrics.totalRuns} • wall: ${wallTimeDisplay} • compute: ${humanizeTime(computeMs/1000)} • approvals: ${approvals} • merged: ${merged ? 'yes' : 'no'}`);
       if (result.reviewEvents && result.reviewEvents.length > 0) {
-        const parts = [];
-        result.reviewEvents.forEach(ev => {
+        const sortedEvents = [...result.reviewEvents].sort((a, b) => new Date(a.time) - new Date(b.time));
+        sortedEvents.forEach(ev => {
+          const timeStr = new Date(ev.time).toLocaleTimeString();
+          const timeLink = makeClickableLink(ev.url || result.displayUrl, timeStr);
           if (ev.type === 'shippit' && ev.reviewer) {
-            parts.push(`▲ ${makeClickableLink(`https://github.com/${ev.reviewer}`, ev.reviewer)}`);
+            const userLink = makeClickableLink(`https://github.com/${ev.reviewer}`, ev.reviewer);
+            console.error(`  ${yellowText(`▲ ${userLink}`)} ${grayText(`(${timeLink})`)}`);
           }
           if (ev.type === 'merged') {
             if (ev.mergedBy) {
-              parts.push(`◆ merged by ${makeClickableLink(`https://github.com/${ev.mergedBy}`, ev.mergedBy)}`);
+              const userLink = makeClickableLink(`https://github.com/${ev.mergedBy}`, ev.mergedBy);
+              console.error(`  ${greenText(`◆ merged by ${userLink}`)} ${grayText(`(${timeLink})`)}`);
             } else {
-              parts.push('◆ merged');
+              console.error(`  ${greenText('◆ merged')} ${grayText(`(${timeLink})`)}`);
             }
           }
         });
-        if (parts.length > 0) {
-          markersSummary = ` ${parts.join(' ')}`;
-        }
       }
-      console.error(`\n${headerLink}:${markersSummary}`);
     } else {
       const headerText = `[${index + 1}] ${result.displayName} (${result.metrics.totalJobs} jobs)`;
       const headerLink = makeClickableLink(result.displayUrl, headerText);
       console.error(`\n${headerLink}:`);
     }
-    generateTimelineVisualization(result.metrics, result.displayUrl, result.urlIndex);
+    generateTimelineVisualization(result.metrics, result.displayUrl, result.urlIndex, result.reviewEvents || []);
   });
   
   // Generate combined trace metadata

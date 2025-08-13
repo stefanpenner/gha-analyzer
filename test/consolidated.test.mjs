@@ -423,7 +423,8 @@ describe('GitHub Actions Analyzer - Critical Functionality', () => {
       const between = clean.split('│')[1];
       const markerPos = between.indexOf('▲');
       assert.strictEqual(markerPos, 30);
-      assert(cleanNoLinks.includes('▲ reviewer1'));
+      // Combined timeline now shows compact counts instead of inline names
+      assert(cleanNoLinks.includes('▲ 1'));
     });
 
     test('renders review and merged markers in Pipeline Timelines section', async () => {
