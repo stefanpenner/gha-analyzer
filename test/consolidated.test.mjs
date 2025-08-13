@@ -20,15 +20,18 @@ import path from 'path';
 // Import core functions for unit testing
 import {
   parseGitHubUrl,
-  getJobGroup,
   calculateCombinedMetrics,
   calculateCombinedSuccessRate,
-  calculateCombinedJobSuccessRate,
+  calculateCombinedJobSuccessRate
+} from '../main.mjs';
+
+import {
+  getJobGroup,
   findBottleneckJobs,
   humanizeTime,
   generateHighLevelTimeline,
   generateTimelineVisualization
-} from '../main.mjs';
+} from '../src/visualization.mjs';
 
 import { fetchPRReviews } from '../src/fetching.mjs';
 
