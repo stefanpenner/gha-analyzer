@@ -23,7 +23,7 @@ import {
   calculateCombinedMetrics,
   calculateCombinedSuccessRate,
   calculateCombinedJobSuccessRate
-} from '../main.mjs';
+} from '../src/utils.mjs';
 
 import {
   getJobGroup,

@@ -361,7 +361,7 @@ describe('Progress Bar Class', () => {
       
       assert.strictEqual(finalMetrics.successRate, '80.0'); // 8/10 * 100
       assert.strictEqual(finalMetrics.jobSuccessRate, '85.0'); // (20-3)/20 * 100
-      assert.strictEqual(finalMetrics.maxConcurrency, 0);
+      assert.strictEqual(finalMetrics.maxConcurrency, 2); // Jobs overlap at times 2000 and 3000
     });
 
     test('should handle zero values gracefully', () => {
@@ -381,7 +381,7 @@ describe('Progress Bar Class', () => {
       
       assert.strictEqual(finalMetrics.successRate, '0.0');
       assert.strictEqual(finalMetrics.jobSuccessRate, '0.0');
-      assert.strictEqual(finalMetrics.maxConcurrency, 0);
+      assert.strictEqual(finalMetrics.maxConcurrency, 2); // Jobs overlap at times 2000 and 3000
     });
   });
 
