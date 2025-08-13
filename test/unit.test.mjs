@@ -25,7 +25,7 @@ import {
   calculateCombinedJobSuccessRate,
   findBottleneckJobs,
   humanizeTime,
-  initializeMetrics,
+
   findEarliestTimestamp,
   calculateMaxConcurrency,
   calculateFinalMetrics,
@@ -43,6 +43,8 @@ import {
   ProgressBar
 } from '../main.mjs';
 
+import { AnalysisData } from '../src/analysis-data.mjs';
+
 // Mock the main module to test internal functions
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
@@ -54,7 +56,7 @@ describe('Core Data Processing Functions', () => {
   
   describe('Metrics Initialization', () => {
     test('should initialize empty metrics object', () => {
-      const metrics = initializeMetrics();
+      const metrics = AnalysisData.initializeMetrics();
       
       assert.strictEqual(metrics.totalRuns, 0);
       assert.strictEqual(metrics.jobDurations.length, 0);

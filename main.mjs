@@ -5,53 +5,12 @@ import url from 'url';
 import { spawn } from 'child_process';
 import os from 'os';
 import path from 'path';
+import ProgressBar from './progress.mjs';
+import { AnalysisData } from './src/analysis-data.mjs';
 
 const createContext = (token = process.env.GITHUB_TOKEN) => ({
   githubToken: token
 });
-
-class ProgressBar {
-  constructor(totalUrls, totalRuns) {
-    this.totalUrls = totalUrls;
-    this.totalRuns = totalRuns;
-    this.currentUrl = 0;
-    this.currentRun = 0;
-    this.currentUrlRuns = 0;
-    this.isProcessing = false;
-  }
-
-  startUrl(urlIndex, url) {
-    this.currentUrl = urlIndex + 1;
-    this.currentRun = 0;
-    this.isProcessing = true;
-    this.updateDisplay();
-  }
-
-  setUrlRuns(runCount) {
-    this.currentUrlRuns = runCount;
-    this.updateDisplay();
-  }
-
-  processRun() {
-    this.currentRun++;
-    this.updateDisplay();
-  }
-
-  updateDisplay() {
-    if (!this.isProcessing) return;
-    
-    const urlProgress = `${this.currentUrl}/${this.totalUrls}`;
-    const runProgress = this.currentUrlRuns > 0 ? ` (${this.currentRun}/${this.currentUrlRuns} runs)` : '';
-    const progressText = `Processing URL ${urlProgress}${runProgress}...`;
-    
-    process.stderr.write(`\r${progressText}`);
-  }
-
-  finish() {
-    this.isProcessing = false;
-    process.stderr.write('\r' + ' '.repeat(50) + '\r');
-  }
-}
 
 function humanizeTime(seconds) {
   if (seconds === 0) {
@@ -295,26 +254,7 @@ async function fetchWithPagination(url, context) {
   return allItems;
 }
 
-function initializeMetrics() {
-  return {
-    totalRuns: 0,
-    successfulRuns: 0,
-    failedRuns: 0,
-    totalJobs: 0,
-    failedJobs: 0,
-    totalSteps: 0,
-    failedSteps: 0,
-    jobDurations: [],
-    jobNames: [],
-    jobUrls: [],
-    stepDurations: [],
-    runnerTypes: new Set(),
-    totalDuration: 0,
-    longestJob: { name: '', duration: 0 },
-    shortestJob: { name: '', duration: Infinity },
-    jobTimeline: []
-  };
-}
+
 
 function findEarliestTimestamp(allRuns) {
   let earliest = Infinity;
@@ -1318,14 +1258,7 @@ async function main() {
   }
 
   // Initialize combined data structures
-  const allTraceEvents = [];
-  const allJobStartTimes = [];
-  const allJobEndTimes = [];
-  const allMetrics = initializeMetrics();
-  const urlResults = [];
-  let globalEarliestTime = Infinity;
-  let globalLatestTime = 0;
-  let totalRuns = 0;
+  const analysisData = new AnalysisData();
 
     // Initialize progress bar
   const progressBar = new ProgressBar(urls.length, 0);
@@ -1460,7 +1393,7 @@ async function main() {
       progressBar.setUrlRuns(allRuns.length);
 
       // Initialize per-URL data structures
-      const urlMetrics = initializeMetrics();
+      const urlMetrics = AnalysisData.initializeMetrics();
       const urlTraceEvents = [];
       const urlJobStartTimes = [];
       const urlJobEndTimes = [];
@@ -1482,7 +1415,7 @@ async function main() {
       const urlFinalMetrics = calculateFinalMetrics(urlMetrics, allRuns.length, urlJobStartTimes, urlJobEndTimes);
       
       // Store URL-specific results
-      urlResults.push({
+      analysisData.addUrlResult({
         owner,
         repo,
         identifier,
@@ -1505,20 +1438,15 @@ async function main() {
       });
 
       // Accumulate global data
-      allTraceEvents.push(...urlTraceEvents);
-      allJobStartTimes.push(...urlJobStartTimes);
-      allJobEndTimes.push(...urlJobEndTimes);
-      totalRuns += allRuns.length;
+      analysisData.addTraceEvents(urlTraceEvents);
+      analysisData.addJobStartTimes(urlJobStartTimes);
+      analysisData.addJobEndTimes(urlJobEndTimes);
+      analysisData.incrementTotalRuns(allRuns.length);
       
       // Update global time bounds
       // Both urlEarliestTime and job timestamps are in milliseconds
-      if (urlEarliestTime < globalEarliestTime) {
-        globalEarliestTime = urlEarliestTime;
-      }
       const urlLatestTime = Math.max(...urlJobEndTimes);
-      if (urlLatestTime > globalLatestTime) {
-        globalLatestTime = urlLatestTime;
-      }
+      analysisData.updateGlobalTimeRange(urlEarliestTime, urlLatestTime);
     } catch (error) {
       console.error(`Error processing URL ${githubUrl}: ${error.message}`);
       continue; // Skip this URL and continue with others
@@ -1528,22 +1456,22 @@ async function main() {
   // Finish progress bar
   progressBar.finish();
   
-  if (urlResults.length === 0) {
+  if (analysisData.urlCount === 0) {
     console.error('No workflow runs found for any of the provided URLs');
     process.exit(1);
   }
 
   // Generate global concurrency counter events
-  generateConcurrencyCounters(allJobStartTimes, allJobEndTimes, allTraceEvents, globalEarliestTime);
+  generateConcurrencyCounters(analysisData.jobStartTimes, analysisData.jobEndTimes, analysisData.traceEvents, analysisData.earliestTime);
 
   // Add review/merge instant events to trace for visualization
-  if (urlResults.length > 0) {
+  if (analysisData.urlCount > 0) {
     const metricsProcessId = 999;
     const markersThreadId = 2;
     // Thread metadata for review/merge markers
-    addThreadMetadata(allTraceEvents, metricsProcessId, markersThreadId, '🔖 Review & Merge Markers', 1);
+    addThreadMetadata(analysisData.traceEvents, metricsProcessId, markersThreadId, '🔖 Review & Merge Markers', 1);
     // Create instant events for each review/merge
-    urlResults.forEach(result => {
+    analysisData.results.forEach(result => {
       if (result.reviewEvents && result.reviewEvents.length > 0) {
         // Determine timeline bounds for clamping
         let timelineStartMs = result.earliestTime;
@@ -1564,7 +1492,7 @@ async function main() {
             ? (user ? greenText(`◆ merged by ${user}`) : greenText('◆ merged'))
             : (user ? yellowText(`▲ approved by ${user}`) : yellowText('▲ approved'));
           const userUrl = user ? `https://github.com/${user}` : '';
-          allTraceEvents.push({
+          analysisData.addTraceEvents([{
             name,
             ph: 'i',
             s: 'p',
@@ -1582,17 +1510,17 @@ async function main() {
               original_event_time_ms: originalEventTimeMs,
               clamped: originalEventTimeMs !== clampedEventTimeMs
             }
-          });
+          }]);
         });
       }
     });
   }
 
   // Calculate combined metrics
-  const combinedMetrics = calculateCombinedMetrics(urlResults, totalRuns, allJobStartTimes, allJobEndTimes);
+  const combinedMetrics = calculateCombinedMetrics(analysisData.results, analysisData.runsCount, analysisData.jobStartTimes, analysisData.jobEndTimes);
 
   // Output combined results
-  await outputCombinedResults(urlResults, combinedMetrics, allTraceEvents, globalEarliestTime, globalLatestTime, perfettoFile, openInPerfetto);
+  await outputCombinedResults(analysisData, combinedMetrics, perfettoFile, openInPerfetto);
 }
 
 /**
@@ -1760,22 +1688,22 @@ function calculateCombinedJobSuccessRate(urlResults) {
   return totalJobs > 0 ? (totalSuccessfulJobs / totalJobs * 100).toFixed(1) : '0.0';
 }
 
-async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents, globalEarliestTime, globalLatestTime, perfettoFile, openInPerfetto = false) {
+async function outputCombinedResults(analysisData, combinedMetrics, perfettoFile, openInPerfetto = false) {
   if (perfettoFile) {
-    console.error(`\n✅ Generated ${allTraceEvents.length} trace events • Open in Perfetto.dev for analysis`);
+    console.error(`\n✅ Generated ${analysisData.traceEvents.length} trace events • Open in Perfetto.dev for analysis`);
   } else {
-    console.error(`\n✅ Generated ${allTraceEvents.length} trace events • Use --perfetto=<filename> to save trace for Perfetto.dev analysis`);
+          console.error(`\n✅ Generated ${analysisData.traceEvents.length} trace events • Use --perfetto=<filename> to save trace for Perfetto.dev analysis`);
   }
   
   console.error(`\n${'='.repeat(80)}`);
   console.error(`📊 ${makeClickableLink('https://ui.perfetto.dev', 'GitHub Actions Performance Report - Multi-URL Analysis')}`);
   console.error(`${'='.repeat(80)}`);
   
-  console.error(`Analysis Summary: ${urlResults.length} URLs • ${combinedMetrics.totalRuns} runs • ${combinedMetrics.totalJobs} jobs • ${combinedMetrics.totalSteps} steps`);
+  console.error(`Analysis Summary: ${analysisData.urlCount} URLs • ${combinedMetrics.totalRuns} runs • ${combinedMetrics.totalJobs} jobs • ${combinedMetrics.totalSteps} steps`);
   console.error(`Success Rate: ${combinedMetrics.successRate}% workflows, ${combinedMetrics.jobSuccessRate}% jobs • Peak Concurrency: ${combinedMetrics.maxConcurrency}`);
   
   const allPendingJobs = [];
-  urlResults.forEach(result => {
+  analysisData.results.forEach(result => {
     if (result.metrics.pendingJobs && result.metrics.pendingJobs.length > 0) {
       allPendingJobs.push(...result.metrics.pendingJobs.map(job => ({
         ...job,
@@ -1794,8 +1722,8 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
     console.error(`\n  Note: Timeline shows current progress for pending jobs. Results may change as jobs complete.`);
   }
   
-  const sortedResults = [...urlResults].sort((a, b) => a.earliestTime - b.earliestTime);
-  if (urlResults.length > 1) {
+      const sortedResults = [...analysisData.results].sort((a, b) => a.earliestTime - b.earliestTime);
+    if (analysisData.urlCount > 1) {
     console.error(`\n${makeClickableLink('https://uiperfetto.dev', 'Combined Analysis')}:`);
     console.error(`\nIncluded URLs (ordered by start time):`);
     sortedResults.forEach((result, index) => {
@@ -1807,10 +1735,10 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
       }
     });
     console.error(`\nCombined Pipeline Timeline:`);
-    generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLatestTime);
+    generateHighLevelTimeline(sortedResults, analysisData.earliestTime, analysisData.latestTime);
   }
 
-  const commitAggregates = urlResults
+      const commitAggregates = analysisData.results
     .filter(r => r.type === 'commit')
     .map(r => ({
       name: r.displayName,
@@ -1828,8 +1756,8 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
 
   // Summary of runs per URL with compute, wall time, and approvals
   console.error(`\nRun Summary:`);
-  urlResults.forEach(result => {
-    const runsCount = result.metrics?.totalRuns ?? 0;
+      analysisData.results.forEach(result => {
+      const runsCount = result.metrics?.totalRuns ?? 0;
     const jobs = result.metrics?.jobTimeline ?? [];
     const computeMs = jobs.reduce((sum, j) => sum + Math.max(0, j.endTime - j.startTime), 0);
     let wallMs = 0;
@@ -1845,7 +1773,7 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
   });
 
   // Pre-commit runs (created before commit timestamp) summary when commit URL was included
-  const commitResults = urlResults.filter(r => r.type === 'commit');
+      const commitResults = analysisData.results.filter(r => r.type === 'commit');
   if (commitResults.length > 0) {
     console.error(`\nPre-commit Runs (created before commit time):`);
     for (const result of commitResults) {
@@ -1929,7 +1857,7 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
   // Individual Pipeline Timelines Section (moved to after combined analysis)
   console.error(`\n${makeClickableLink('https://ui.perfetto.dev', 'Pipeline Timelines')}:`);
   
-  urlResults.forEach((result, index) => {
+      analysisData.results.forEach((result, index) => {
     // Calculate wall time for this URL (earliest start to latest end)
     const timeline = result.metrics.jobTimeline;
     if (timeline && timeline.length > 0) {
@@ -1974,7 +1902,7 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
   });
   
   // Generate combined trace metadata
-  const traceTitle = `GitHub Actions: Multi-URL Analysis (${urlResults.length} URLs)`;
+      const traceTitle = `GitHub Actions: Multi-URL Analysis (${analysisData.urlCount} URLs)`;
   const traceMetadata = [
     {
       name: 'process_name', 
@@ -1991,12 +1919,12 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
   // Output JSON for Perfetto only if flag is specified
   if (perfettoFile) {
     // Re-normalize all trace events to use global earliest time
-    const renormalizedTraceEvents = allTraceEvents.map(event => {
+    const renormalizedTraceEvents = analysisData.traceEvents.map(event => {
       if (event.ts !== undefined) {
         // Find the URL-specific earliest time for this event
         const eventUrlIndex = event.args?.url_index || 1;
         const eventSource = event.args?.source_url;
-        const urlResult = urlResults.find(result => 
+        const urlResult = analysisData.results.find(result => 
           result.urlIndex === eventUrlIndex - 1 || 
           result.displayUrl === eventSource
         );
@@ -2004,7 +1932,7 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
         if (urlResult) {
           // Convert back to absolute time, then normalize against global earliest time
           const absoluteTime = event.ts / 1000 + urlResult.earliestTime; // Convert from microseconds back to milliseconds, add URL earliest time
-          const renormalizedTime = (absoluteTime - globalEarliestTime) * 1000; // Normalize against global earliest time, convert to microseconds
+          const renormalizedTime = (absoluteTime - analysisData.earliestTime) * 1000; // Normalize against global earliest time, convert to microseconds
           return { ...event, ts: renormalizedTime };
         }
       }
@@ -2016,12 +1944,12 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
       traceEvents: [...traceMetadata, ...renormalizedTraceEvents.sort((a, b) => a.ts - b.ts)],
       otherData: {
         trace_title: traceTitle,
-        url_count: urlResults.length,
+        url_count: analysisData.urlCount,
         total_runs: combinedMetrics.totalRuns,
         total_jobs: combinedMetrics.totalJobs,
         success_rate: `${combinedMetrics.successRate}%`,
-        total_events: allTraceEvents.length,
-        urls: urlResults.map((result, index) => ({
+        total_events: analysisData.traceEvents.length,
+        urls: analysisData.results.map((result, index) => ({
           index: index + 1,
           owner: result.owner,
           repo: result.repo,
@@ -2069,7 +1997,7 @@ export {
   calculateCombinedJobSuccessRate,
   findBottleneckJobs,
   humanizeTime,
-  initializeMetrics,
+
   findEarliestTimestamp,
   calculateMaxConcurrency,
   calculateFinalMetrics,
