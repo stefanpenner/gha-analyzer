@@ -422,7 +422,7 @@ describe('GitHub Actions Analyzer - Critical Functionality', () => {
         .replace(/\u001b]8;;\u0007/g, '');
       const between = clean.split('│')[1];
       const markerPos = between.indexOf('▲');
-      assert.strictEqual(markerPos, 30);
+      assert.strictEqual(markerPos, 40); // Updated for 80-character width
       // Combined timeline now shows compact counts instead of inline names
       assert(cleanNoLinks.includes('▲ 1'));
     });
@@ -450,11 +450,14 @@ describe('GitHub Actions Analyzer - Critical Functionality', () => {
       const cleanNoLinks = clean
         .replace(/\u001b]8;;[^\u0007]*\u0007/g, '')
         .replace(/\u001b]8;;\u0007/g, '');
-      // Expect a line with markers bar and labels containing both ▲ reviewer and ◆ merged
-      const markerLine = cleanNoLinks.split('\n').find(line => line.includes('│') && line.includes('▲') && line.includes('◆'));
-      assert(markerLine, 'Should render both review (▲) and merged (◆) markers');
-      assert(markerLine.includes('▲ reviewer1'));
-      assert(markerLine.includes('◆ merged by merger'));
+      // Expect a line with markers bar containing only ▲ reviewer (merge info is shown in detailed events)
+      const markerLine = cleanNoLinks.split('\n').find(line => line.includes('└── ▲ reviewer1'));
+      assert(markerLine, 'Should render review (▲) marker in combined line');
+      
+      // Verify that merge information is NOT duplicated in the combined marker line
+      const combinedMarkerLine = cleanNoLinks.split('\n').find(line => line.includes('└── ▲ reviewer1'));
+      assert(combinedMarkerLine, 'Should have combined marker line');
+      assert(!combinedMarkerLine.includes('◆ merged by'), 'Should not show merge info in combined marker line to avoid duplication');
     });
   });
 

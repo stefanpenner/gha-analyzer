@@ -804,23 +804,24 @@ function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0, re
     const jobKey = `${job.name}-${job.startTime}-${job.endTime}`;
     bottleneckJobs.add(jobKey);
   });
-  const scale = 60; // Terminal width for timeline bars
+  const scale = 80; // Terminal width for timeline bars (80 characters)
+  const headerScale = 60; // Header box width (original size)
   
   // Calculate timeline bounds across all jobs
   const earliestStart = Math.min(...timeline.map(job => job.startTime));
   const latestEnd = Math.max(...timeline.map(job => job.endTime));
   const totalDuration = latestEnd - earliestStart;
   
-  // Top header: start/end box header for the visualization
-  console.error('┌' + '─'.repeat(scale + 2) + '┐');
+  // Top header: start/end box header for the visualization (60 characters)
+  console.error('┌' + '─'.repeat(headerScale + 2) + '┐');
   // Format start and end times for display (timeline uses absolute timestamps)
   const startTimeFormatted = new Date(earliestStart).toLocaleTimeString();
   const endTimeFormatted = new Date(latestEnd).toLocaleTimeString();
   const headerStart = `Start: ${startTimeFormatted}`;
   const headerEnd = `End: ${endTimeFormatted}`;
-  const headerPadding = ' '.repeat(Math.max(0, scale - headerStart.length - headerEnd.length));
+  const headerPadding = ' '.repeat(Math.max(0, headerScale - headerStart.length - headerEnd.length));
   console.error(`│ ${headerStart}${headerPadding}${headerEnd} │`);
-  console.error('├' + '─'.repeat(scale + 2) + '┤');
+  console.error('├' + '─'.repeat(headerScale + 2) + '┤');
   
   
   // Group jobs by their prefix (before first ' / ')
@@ -857,7 +858,7 @@ function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0, re
     const timeDisplay = humanizeTime(groupTotalSec);
     // Ensure group name is clean and doesn't contain any problematic characters
     const cleanGroupName = groupName.replace(/[^\w\s\-_/()]/g, '').trim();
-    console.error(`│${' '.repeat(scale)}  │ 📁 ${cleanGroupName} (${timeDisplay}, ${jobsInGroup.length} jobs)`);
+    console.error(`│${' '.repeat(headerScale)}  │ 📁 ${cleanGroupName} (${timeDisplay}, ${jobsInGroup.length} jobs)`);
     
     // Show jobs indented under the group
     sortedJobsInGroup.forEach((job, index) => {
@@ -865,9 +866,12 @@ function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0, re
       const duration = job.endTime - job.startTime;
       const durationSec = duration / 1000; // Convert milliseconds to seconds
       
-      // Calculate positions in the timeline
-      const startPos = Math.floor((relativeStart / totalDuration) * scale);
-      const barLength = Math.max(1, Math.floor((duration / totalDuration) * scale));
+      // Calculate positions in the timeline (use headerScale for consistency with header box)
+      const startPos = Math.floor((relativeStart / totalDuration) * headerScale);
+      const barLength = Math.max(1, Math.floor((duration / totalDuration) * headerScale));
+      
+      // Ensure bar length doesn't exceed available space in headerScale
+      const clampedBarLength = Math.min(barLength, headerScale - startPos);
       
       // Create the timeline bar with better formatting and colors
       const padding = ' '.repeat(Math.max(0, startPos));
@@ -876,22 +880,22 @@ function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0, re
       let statusIcon, coloredBar;
       if (job.conclusion === 'success') {
         statusIcon = '█';
-        coloredBar = greenText(statusIcon.repeat(Math.max(1, barLength)));
+        coloredBar = greenText(statusIcon.repeat(Math.max(1, clampedBarLength)));
       } else if (job.conclusion === 'failure') {
         statusIcon = '█';
-        coloredBar = redText(statusIcon.repeat(Math.max(1, barLength)));
+        coloredBar = redText(statusIcon.repeat(Math.max(1, clampedBarLength)));
       } else if (job.status === 'in_progress' || job.status === 'queued' || job.status === 'waiting') {
         statusIcon = '▒';
-        coloredBar = blueText(statusIcon.repeat(Math.max(1, barLength)));
+        coloredBar = blueText(statusIcon.repeat(Math.max(1, clampedBarLength)));
       } else if (job.conclusion === 'skipped' || job.conclusion === 'cancelled') {
         statusIcon = '░';
-        coloredBar = grayText(statusIcon.repeat(Math.max(1, barLength)));
+        coloredBar = grayText(statusIcon.repeat(Math.max(1, clampedBarLength)));
       } else {
         statusIcon = '░';
-        coloredBar = grayText(statusIcon.repeat(Math.max(1, barLength)));
+        coloredBar = grayText(statusIcon.repeat(Math.max(1, clampedBarLength)));
       }
       
-      const remaining = ' '.repeat(Math.max(0, scale - startPos - Math.max(1, barLength)));
+      const remaining = ' '.repeat(Math.max(0, headerScale - startPos - Math.max(1, clampedBarLength)));
       
       // Extract job name without group prefix and ensure it's clean
       const jobNameParts = job.name.split(' / ');
@@ -942,78 +946,88 @@ function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0, re
   // Approvals & Merge as a dedicated directory-like group with one entry per event
   const approvalAndMergeEvents = (reviewEvents || []).filter(ev => ev.type === 'shippit' || ev.type === 'merged');
   if (approvalAndMergeEvents.length > 0 && totalDuration > 0) {
-    console.error(`│${' '.repeat(scale)}  │ 📁 Approvals & Merge (${approvalAndMergeEvents.length} items)`);
+    console.error(`│${' '.repeat(headerScale)}  │ 📁 Approvals & Merge (${approvalAndMergeEvents.length} items)`);
     const sortedEvents = [...approvalAndMergeEvents].sort((a, b) => new Date(a.time) - new Date(b.time));
     // Combined marker line rendering both ▲ review and ◆ merged markers on the same line
     {
-      const markerSlots = Array(scale).fill(' ');
+      const markerSlots = Array(headerScale).fill(' ');
       const reviewers = [];
-      let mergedByUser = null;
+      // Note: Only show approval markers (▲) in combined line, merge markers (◆) shown in detailed events
       sortedEvents.forEach(ev => {
         const eventTime = new Date(ev.time).getTime();
         const relativeStart = Math.max(0, Math.min(eventTime, latestEnd) - earliestStart);
-        const col = Math.floor((relativeStart / totalDuration) * scale);
-        const clampedCol = Math.max(0, Math.min(col, Math.max(0, scale - 1)));
-        if (ev.type === 'merged') {
-          markerSlots[clampedCol] = '◆';
-          mergedByUser = ev.mergedBy || mergedByUser;
-        } else {
-          markerSlots[clampedCol] = markerSlots[clampedCol] === '◆' ? '◆' : '▲';
+        const col = Math.floor((relativeStart / totalDuration) * headerScale);
+        const clampedCol = Math.max(0, Math.min(col, Math.max(0, headerScale - 1)));
+        if (ev.type === 'shippit') {
+          markerSlots[clampedCol] = '▲';
           if (ev.reviewer) reviewers.push(ev.reviewer);
         }
+        // Merge markers (◆) are not shown in combined line to avoid duplication
       });
       const markerLineLeft = markerSlots.join('');
       const rightParts = [];
       if (reviewers.length > 0) rightParts.push(yellowText(`▲ ${reviewers[0]}`));
-      if (mergedByUser) rightParts.push(greenText(`◆ merged by ${mergedByUser}`));
+      // Note: Merge information is shown in the detailed events below, not here
       const combinedRight = rightParts.join('  ');
-      console.error(`│${markerLineLeft}  │ ${'└── '}${combinedRight}`);
+      
+      // Ensure the combined right label fits within the header box width
+      const maxCombinedWidth = headerScale - 4; // Account for padding and tree prefix
+      let displayCombined = combinedRight;
+      if (displayCombined.length > maxCombinedWidth) {
+        // Truncate and add ellipsis if too long
+        displayCombined = displayCombined.substring(0, maxCombinedWidth - 3) + '...';
+      }
+      
+      console.error(`│${markerLineLeft}  │ ${'└── '}${displayCombined}`);
     }
     sortedEvents.forEach((ev, index) => {
       const eventTime = new Date(ev.time).getTime();
       const relativeStart = Math.max(0, Math.min(eventTime, latestEnd) - earliestStart);
-      // Clamp column to [0, scale-1]
-      const col = Math.floor((relativeStart / totalDuration) * scale);
-      const clampedCol = Math.max(0, Math.min(col, Math.max(0, scale - 1)));
+      // Clamp column to [0, headerScale-1]
+      const col = Math.floor((relativeStart / totalDuration) * headerScale);
+      const clampedCol = Math.max(0, Math.min(col, Math.max(0, headerScale - 1)));
       const padding = ' '.repeat(clampedCol);
       const markerChar = ev.type === 'merged' ? '◆' : '▲';
       const marker = ev.type === 'merged' ? greenText(markerChar) : yellowText(markerChar);
-      const remaining = ' '.repeat(Math.max(0, scale - clampedCol - 1));
+      const remaining = ' '.repeat(Math.max(0, headerScale - clampedCol - 1));
       const isLast = index === sortedEvents.length - 1;
       const treePrefix = isLast ? '└── ' : '├── ';
       const timeStr = new Date(ev.time).toLocaleTimeString();
       let rightLabel;
       if (ev.type === 'merged') {
         const who = ev.mergedBy ? makeClickableLink(`https://github.com/${ev.mergedBy}`, ev.mergedBy) : 'merged';
-        rightLabel = greenText(`merged by ${who} (${timeStr})`);
+        const timeLink = ev.url ? makeClickableLink(ev.url, timeStr) : timeStr;
+        rightLabel = greenText(`merged by ${who} (${timeLink})`);
       } else {
         const who = ev.reviewer ? makeClickableLink(`https://github.com/${ev.reviewer}`, ev.reviewer) : 'approved';
-        rightLabel = yellowText(`${who} (${timeStr})`);
+        const timeLink = ev.url ? makeClickableLink(ev.url, timeStr) : timeStr;
+        rightLabel = yellowText(`${who} (${timeLink})`);
       }
+      
+      // Note: Removed truncation to show full information with clickable links
+      
       console.error(`│${padding}${marker}${remaining}  │ ${treePrefix}${rightLabel}`);
     });
   }
 
   // Timeline legend with colors + review markers (footer box)
-  // Footer box top border (same inner width as the main box: scale + 2 spaces between bars and right border)
-  console.error('┌' + '─'.repeat(scale + 2) + '┐');
+  // Footer box top border (same inner width as the header box: headerScale + 2)
+  console.error('┌' + '─'.repeat(headerScale + 2) + '┐');
   const jobCount = timeline.length;
   const wallTimeSec = (latestEnd - earliestStart) / 1000;
   const footerText = `Timeline: ${startTimeFormatted} → ${endTimeFormatted} • ${humanizeTime(wallTimeSec)} • ${jobCount} jobs`;
-  // Footer content line ensures total inner width is scale + 2
-  const footerInnerWidth = scale + 2; // includes the leading space we add below
+  // Footer content line ensures total inner width is headerScale + 2
+  const footerInnerWidth = headerScale + 2; // includes the leading space we add below
   const footerLine = ` ${footerText}`;
   const footerPadding = ' '.repeat(Math.max(0, footerInnerWidth - footerLine.length));
   console.error(`│${footerLine}${footerPadding}│`);
-  // Professional summary merged here
+  // Note: Summary information is printed by the caller above, not duplicated here
+  
+  // Calculate values needed for legend (not for summary display)
   const runsCount = metrics.totalRuns || 0;
   const computeMs = timeline.reduce((sum, j) => sum + Math.max(0, j.endTime - j.startTime), 0);
-  const approvalsCount = (reviewEvents || []).filter(ev => ev.type === 'shippit').length;
+  const approvalsCount = (reviewEvents || []).filter(ev => ev.type === 'shippit' || ev.type === 'merged').length;
   const hasMerged = (reviewEvents || []).some(ev => ev.type === 'merged');
-  const summaryText = `Summary — runs: ${runsCount} • wall: ${humanizeTime(wallTimeSec)} • compute: ${humanizeTime(computeMs/1000)} • approvals: ${approvalsCount} • merged: ${hasMerged ? 'yes' : 'no'}`;
-  const summaryLine = ` ${summaryText}`;
-  const summaryPadding = ' '.repeat(Math.max(0, footerInnerWidth - summaryLine.length));
-  console.error(`│${summaryLine}${summaryPadding}│`);
   
   // Merge per-run summary into the footer if provided by caller (printed by caller right after this box)
   // Caller prints a concise "Summary — runs: … • wall: … • compute: … • approvals: … • merged: …"
@@ -1022,12 +1036,12 @@ function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0, re
   const baseLegend = `Legend: ${greenText('█ Success')}  ${redText('█ Failed')}  ${blueText('▒ Pending/Running')}  ${grayText('░ Cancelled/Skipped')}`;
   const markersLegend = `${approvalsCount > 0 ? '  ' + yellowText(`▲ approvals`) : ''}${hasMerged ? '  ' + greenText('◆ merged') : ''}`;
   let legendLine = baseLegend + markersLegend;
-  const legendInnerWidth = scale + 2;
+  const legendInnerWidth = headerScale + 2;
   let legendContent = ` ${legendLine}`;
   if (legendContent.length > legendInnerWidth) legendContent = legendContent.slice(0, legendInnerWidth);
   const legendPadding = ' '.repeat(Math.max(0, legendInnerWidth - legendContent.length));
   console.error(`│${legendContent}${legendPadding}│`);
-  console.error('└' + '─'.repeat(scale + 2) + '┘');
+  console.error('└' + '─'.repeat(headerScale + 2) + '┘');
   
   // Show group time summaries sorted by wall time
   const groupTimeSummaries = sortedGroupNames.map(groupName => {
@@ -1585,7 +1599,7 @@ async function main() {
  * Generate high-level timeline showing PR/Commit execution times
  */
 function generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLatestTime) {
-  const scale = 60;
+  const scale = 80;
   
   // Calculate timeline bounds from actual job data
   let timelineEarliestTime = Infinity;
@@ -1691,14 +1705,7 @@ function generateHighLevelTimeline(sortedResults, globalEarliestTime, globalLate
     // Compact suffix to avoid overwhelming inline labels; detailed list printed later
     const suffixParts = [];
     if (approvalCount > 0) suffixParts.push(yellowText(`▲ ${approvalCount}`));
-    if (mergedBy !== null) {
-      if (mergedTimeMs) {
-        const timeStr = new Date(mergedTimeMs).toLocaleTimeString();
-        suffixParts.push(greenText(`◆ merged by ${mergedBy} (${timeStr})`));
-      } else {
-        suffixParts.push(greenText('◆ merged'));
-      }
-    }
+    // Note: Merge information is shown in the detailed timeline, not here
     const markerLabel = suffixParts.length > 0 ? ' ' + suffixParts.join('  ') : '';
 
     console.error(`│${padding}${coloredBar}${remaining}  │ ${coloredLink}${markerLabel}`);
@@ -1831,7 +1838,7 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
       const end = Math.max(...jobs.map(j => j.endTime));
       wallMs = Math.max(0, end - start);
     }
-    const approvals = (result.reviewEvents || []).filter(ev => ev.type === 'shippit').length;
+    const approvals = (result.reviewEvents || []).filter(ev => ev.type === 'shippit' || ev.type === 'merged').length;
     const merged = (result.reviewEvents || []).some(ev => ev.type === 'merged');
     const line = `  [${result.urlIndex + 1}] ${result.displayName}: runs=${runsCount}, wall=${humanizeTime(wallMs/1000)}, compute=${humanizeTime(computeMs/1000)}, approvals=${approvals}, merged=${merged ? 'yes' : 'no'}`;
     console.error(line);
@@ -1935,28 +1942,29 @@ async function outputCombinedResults(urlResults, combinedMetrics, allTraceEvents
       console.error(`\n${headerLink}:`);
       // Concise per-run summary line
       const computeMs = timeline.reduce((sum, j) => sum + Math.max(0, j.endTime - j.startTime), 0);
-      const approvals = (result.reviewEvents || []).filter(ev => ev.type === 'shippit').length;
+      const approvals = (result.reviewEvents || []).filter(ev => ev.type === 'shippit' || ev.type === 'merged').length;
       const merged = (result.reviewEvents || []).some(ev => ev.type === 'merged');
       console.error(`  Summary — runs: ${result.metrics.totalRuns} • wall: ${wallTimeDisplay} • compute: ${humanizeTime(computeMs/1000)} • approvals: ${approvals} • merged: ${merged ? 'yes' : 'no'}`);
-      if (result.reviewEvents && result.reviewEvents.length > 0) {
-        const sortedEvents = [...result.reviewEvents].sort((a, b) => new Date(a.time) - new Date(b.time));
-        sortedEvents.forEach(ev => {
-          const timeStr = new Date(ev.time).toLocaleTimeString();
-          const timeLink = makeClickableLink(ev.url || result.displayUrl, timeStr);
-          if (ev.type === 'shippit' && ev.reviewer) {
-            const userLink = makeClickableLink(`https://github.com/${ev.reviewer}`, ev.reviewer);
-            console.error(`  ${yellowText(`▲ ${userLink}`)} ${grayText(`(${timeLink})`)}`);
-          }
-          if (ev.type === 'merged') {
-            if (ev.mergedBy) {
-              const userLink = makeClickableLink(`https://github.com/${ev.mergedBy}`, ev.mergedBy);
-              console.error(`  ${greenText(`◆ merged by ${userLink}`)} ${grayText(`(${timeLink})`)}`);
-            } else {
-              console.error(`  ${greenText('◆ merged')} ${grayText(`(${timeLink})`)}`);
-            }
-          }
-        });
-      }
+      // Note: Review and merge events are shown in the timeline visualization below, not duplicated here
+      // if (result.reviewEvents && result.reviewEvents.length > 0) {
+      //   const sortedEvents = [...result.reviewEvents].sort((a, b) => new Date(a.time) - new Date(b.time));
+      //   sortedEvents.forEach(ev => {
+      //     const timeStr = new Date(ev.time).toLocaleTimeString();
+      //     const timeLink = makeClickableLink(ev.url || result.displayUrl, timeStr);
+      //     if (ev.type === 'shippit' && ev.reviewer) {
+      //       const userLink = makeClickableLink(`https://github.com/${ev.reviewer}`, ev.reviewer);
+      //       console.error(`  ${yellowText(`▲ ${userLink}`)} ${grayText(`(${timeLink})`)}`);
+      //     }
+      //     if (ev.type === 'merged') {
+      //       if (ev.mergedBy) {
+      //       const userLink = makeClickableLink(`https://github.com/${ev.mergedBy}`, ev.mergedBy);
+      //       console.error(`  ${yellowText(`◆ merged by ${userLink}`)} ${grayText(`(${timeLink})`)}`);
+      //       } else {
+      //         console.error(`  ${greenText('◆ merged')} ${grayText(`(${timeLink})`)}`);
+      //       }
+      //     }
+      //   });
+      // }
     } else {
       const headerText = `[${index + 1}] ${result.displayName} (${result.metrics.totalJobs} jobs)`;
       const headerLink = makeClickableLink(result.displayUrl, headerText);
