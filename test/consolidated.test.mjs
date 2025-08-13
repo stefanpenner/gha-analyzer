@@ -27,9 +27,10 @@ import {
   findBottleneckJobs,
   humanizeTime,
   generateHighLevelTimeline,
-  generateTimelineVisualization,
-  fetchPRReviews
+  generateTimelineVisualization
 } from '../main.mjs';
+
+import { fetchPRReviews } from '../src/fetching.mjs';
 
 import { createGitHubMock } from './github-mock.mjs';
 
