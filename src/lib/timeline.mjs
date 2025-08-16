@@ -1,4 +1,4 @@
-import { makeClickableLink, grayText, greenText, redText, yellowText, blueText, humanizeTime } from './text.mjs';
+import { makeClickableLink, grayText, greenText, redText, yellowText, blueText, humanizeTime, padToWidth, visibleLength } from './text.mjs';
 import { getJobGroup } from './analysis.mjs';
 
 export function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0, reviewEvents = []) {
@@ -174,9 +174,8 @@ export function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex 
   const wallTimeSec = (latestEnd - earliestStart) / 1000;
   const footerText = `Timeline: ${new Date(earliestStart).toLocaleTimeString()} → ${new Date(latestEnd).toLocaleTimeString()} • ${humanizeTime(wallTimeSec)} • ${jobCount} jobs`;
   const footerInnerWidth = headerScale + 2;
-  const footerLine = ` ${footerText}`;
-  const footerPadding = ' '.repeat(Math.max(0, footerInnerWidth - footerLine.length));
-  console.error(`│${footerLine}${footerPadding}│`);
+  const footerLineRaw = ` ${footerText}`;
+  console.error(`│${padToWidth(footerLineRaw, footerInnerWidth)}│`);
 
   const runsCount = metrics.totalRuns || 0;
   const computeMs = timeline.reduce((sum, j) => sum + Math.max(0, j.endTime - j.startTime), 0);
@@ -187,10 +186,15 @@ export function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex 
   const markersLegend = `${approvalsCount > 0 ? '  ' + yellowText(`▲ approvals`) : ''}${hasMerged ? '  ' + greenText('◆ merged') : ''}`;
   let legendLine = baseLegend + markersLegend;
   const legendInnerWidth = headerScale + 2;
-  let legendContent = ` ${legendLine}`;
-  if (legendContent.length > legendInnerWidth) legendContent = legendContent.slice(0, legendInnerWidth);
-  const legendPadding = ' '.repeat(Math.max(0, legendInnerWidth - legendContent.length));
-  console.error(`│${legendContent}${legendPadding}│`);
+  let legendContentRaw = ` ${legendLine}`;
+  if (visibleLength(legendContentRaw) > legendInnerWidth) {
+    let acc = '';
+    for (const ch of legendContentRaw) {
+      if (visibleLength(acc + ch) <= legendInnerWidth) acc += ch; else break;
+    }
+    legendContentRaw = acc;
+  }
+  console.error(`│${padToWidth(legendContentRaw, legendInnerWidth)}│`);
   console.error('└' + '─'.repeat(headerScale + 2) + '┘');
 }
 

@@ -42,6 +42,22 @@ export function blueText(text) {
   return `\u001b[34m${text}\u001b[0m`;
 }
 
+// Visible-length helpers for proper box padding with ANSI/OSC sequences
+function visibleLength(text) {
+  if (!text) return 0;
+  let stripped = text.replace(/\u001b\[[0-9;]*m/g, '');
+  stripped = stripped
+    .replace(/\u001b\]8;;[^\u0007]*\u0007/g, '')
+    .replace(/\u001b\]8;;\u0007/g, '');
+  return stripped.length;
+}
+
+function padToWidth(content, width) {
+  const visible = visibleLength(content);
+  const padding = Math.max(0, width - visible);
+  return content + ' '.repeat(padding);
+}
+
 // Time formatting utility
 export function humanizeTime(seconds) {
   if (seconds === 0) {
@@ -437,11 +453,9 @@ export function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex 
   const jobCount = timeline.length;
   const wallTimeSec = (latestEnd - earliestStart) / 1000;
   const footerText = `Timeline: ${startTimeFormatted} → ${endTimeFormatted} • ${humanizeTime(wallTimeSec)} • ${jobCount} jobs`;
-  // Footer content line ensures total inner width is headerScale + 2
   const footerInnerWidth = headerScale + 2; // includes the leading space we add below
-  const footerLine = ` ${footerText}`;
-  const footerPadding = ' '.repeat(Math.max(0, footerInnerWidth - footerLine.length));
-  console.error(`│${footerLine}${footerPadding}│`);
+  const footerLineRaw = ` ${footerText}`;
+  console.error(`│${padToWidth(footerLineRaw, footerInnerWidth)}│`);
   // Note: Summary information is printed by the caller above, not duplicated here
   
   // Calculate values needed for legend (not for summary display)
@@ -458,10 +472,16 @@ export function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex 
   const markersLegend = `${approvalsCount > 0 ? '  ' + yellowText(`▲ approvals`) : ''}${hasMerged ? '  ' + greenText('◆ merged') : ''}`;
   let legendLine = baseLegend + markersLegend;
   const legendInnerWidth = headerScale + 2;
-  let legendContent = ` ${legendLine}`;
-  if (legendContent.length > legendInnerWidth) legendContent = legendContent.slice(0, legendInnerWidth);
-  const legendPadding = ' '.repeat(Math.max(0, legendInnerWidth - legendContent.length));
-  console.error(`│${legendContent}${legendPadding}│`);
+  let legendContentRaw = ` ${legendLine}`;
+  if (visibleLength(legendContentRaw) > legendInnerWidth) {
+    // crude truncate: slice string while ensuring visible length <= legendInnerWidth
+    let acc = '';
+    for (const ch of legendContentRaw) {
+      if (visibleLength(acc + ch) <= legendInnerWidth) acc += ch; else break;
+    }
+    legendContentRaw = acc;
+  }
+  console.error(`│${padToWidth(legendContentRaw, legendInnerWidth)}│`);
   console.error('└' + '─'.repeat(headerScale + 2) + '┘');
   
   // Show group time summaries sorted by wall time
@@ -781,23 +801,7 @@ export async function outputCombinedResults(analysisData, combinedMetrics, perfe
 
   // Removed: Commit Runs (all runs for the commit head SHA)
 
-  // Summary of runs per URL with compute, wall time, and approvals
-  console.error(`\nRun Summary:`);
-      analysisData.results.forEach(result => {
-      const runsCount = result.metrics?.totalRuns ?? 0;
-    const jobs = result.metrics?.jobTimeline ?? [];
-    const computeMs = jobs.reduce((sum, j) => sum + Math.max(0, j.endTime - j.startTime), 0);
-    let wallMs = 0;
-    if (jobs.length > 0) {
-      const start = Math.min(...jobs.map(j => j.startTime));
-      const end = Math.max(...jobs.map(j => j.endTime));
-      wallMs = Math.max(0, end - start);
-    }
-    const approvals = (result.reviewEvents || []).filter(ev => ev.type === 'shippit' || ev.type === 'merged').length;
-    const merged = (result.reviewEvents || []).some(ev => ev.type === 'merged');
-    const line = `  [${result.urlIndex + 1}] ${result.displayName}: runs=${runsCount}, wall=${humanizeTime(wallMs/1000)}, compute=${humanizeTime(computeMs/1000)}, approvals=${approvals}, merged=${merged ? 'yes' : 'no'}`;
-    console.error(line);
-  });
+  // Removed: Run Summary section
 
   // Removed: Pre-commit Runs (created before commit time)
   

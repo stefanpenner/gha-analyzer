@@ -122,24 +122,9 @@ export default class ProgressBar {
       clearInterval(this.timer);
       this.timer = null;
     }
-    const totalTime = Date.now() - this.startTime;
-    const totalTimeStr = this.formatDuration(totalTime);
-    
-    // Show final progress state briefly before clearing
+    // Clear the progress line and leave a clean newline; no completion box
     setTimeout(() => {
-      // Clear the progress line and write completion
-      process.stderr.write('\r\x1b[K');
-      
-      const completion = [
-        `✅ Analysis Complete!`,
-        `╭${'─'.repeat(78)}╮`,
-        `│ 🎯 Processed ${this.totalUrls} URLs in ${totalTimeStr}`,
-        `│ 📈 Total workflow runs analyzed: ${this.totalRuns}`,
-        `│ 🚀 Average time per URL: ${this.formatDuration(totalTime / this.totalUrls)}`,
-        `╰${'─'.repeat(78)}╯`
-      ].join('\n');
-      
-      process.stderr.write(completion + '\n');
-    }, 100); // Small delay to show final progress state
+      process.stderr.write('\r\x1b[K\n');
+    }, 50);
   }
 }

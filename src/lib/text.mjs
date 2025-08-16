@@ -51,4 +51,22 @@ export function humanizeTime(seconds) {
   return parts.join(' ');
 }
 
+// Utility: visible length ignoring ANSI color codes and OSC 8 hyperlinks
+export function visibleLength(text) {
+  if (!text) return 0;
+  // Strip SGR (color) sequences
+  let stripped = text.replace(/\u001b\[[0-9;]*m/g, '');
+  // Strip OSC 8 hyperlinks open and close sequences, but keep display text
+  stripped = stripped
+    .replace(/\u001b\]8;;[^\u0007]*\u0007/g, '') // open with URL
+    .replace(/\u001b\]8;;\u0007/g, ''); // close
+  return stripped.length;
+}
+
+export function padToWidth(content, width) {
+  const visible = visibleLength(content);
+  const padding = Math.max(0, width - visible);
+  return content + ' '.repeat(padding);
+}
+
 
