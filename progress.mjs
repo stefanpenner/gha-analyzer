@@ -59,9 +59,15 @@ export default class ProgressBar {
   }
 
   renderUrlProgress() {
-    const urlPercent = (this.currentUrl / this.totalUrls * 100).toFixed(1);
-    const urlBar = this.createProgressBar(this.currentUrl, this.totalUrls, 20);
-    return `URL ${this.currentUrl}/${this.totalUrls} ${urlBar} ${urlPercent}%`;
+    const width = 20;
+    if (this.currentUrlRuns > 0) {
+      const urlPercent = ((this.currentRun / this.currentUrlRuns) * 100).toFixed(1);
+      const urlBar = this.createProgressBar(this.currentRun, this.currentUrlRuns, width);
+      return `URL ${this.currentUrl}/${this.totalUrls} ${urlBar} ${urlPercent}%`;
+    } else {
+      const urlBar = this.createProgressBar(0, 1, width);
+      return `URL ${this.currentUrl}/${this.totalUrls} ${urlBar} 0.0%`;
+    }
   }
 
   renderRunProgress() {
@@ -76,10 +82,15 @@ export default class ProgressBar {
     const elapsedStr = this.formatDuration(elapsed);
     
     let etaStr = '';
-    if (this.currentUrl > 0 && this.currentUrl < this.totalUrls) {
-      const avgTimePerUrl = elapsed / this.currentUrl;
-      const remainingUrls = this.totalUrls - this.currentUrl;
-      const eta = avgTimePerUrl * remainingUrls;
+    // Estimate ETA using fractional progress within current URL when possible
+    let completedUnits = Math.max(0, this.currentUrl - 1);
+    if (this.currentUrlRuns > 0 && this.currentRun > 0) {
+      completedUnits += Math.min(1, this.currentRun / this.currentUrlRuns);
+    }
+    if (completedUnits > 0 && completedUnits < this.totalUrls) {
+      const avgTimePerUnit = elapsed / completedUnits;
+      const remainingUnits = Math.max(0, this.totalUrls - completedUnits);
+      const eta = avgTimePerUnit * remainingUnits;
       etaStr = ` | ETA: ${this.formatDuration(eta)}`;
     }
     
