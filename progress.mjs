@@ -16,6 +16,8 @@ export default class ProgressBar {
     this.spinnerIndex = 0;
     this.lastUpdate = 0;
     this.updateInterval = 50; // Update every 50ms for smoother animation
+    this.timer = null;
+    this.statusMessage = '';
   }
 
   startUrl(urlIndex, url) {
@@ -23,6 +25,8 @@ export default class ProgressBar {
     this.currentRun = 0;
     this.isProcessing = true;
     this.urlStartTime = Date.now();
+    this.statusMessage = 'Contacting GitHub…';
+    this.startTicker();
     this.updateDisplay();
   }
 
@@ -36,12 +40,21 @@ export default class ProgressBar {
     this.updateDisplay();
   }
 
+  setStatus(message) {
+    this.statusMessage = message || '';
+    this.updateDisplay();
+  }
+
+  startTicker() {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = setInterval(() => {
+      if (!this.isProcessing) return;
+      this.updateDisplay();
+    }, this.updateInterval);
+  }
+
   updateDisplay() {
     if (!this.isProcessing) return;
-    
-    const now = Date.now();
-    if (now - this.lastUpdate < this.updateInterval) return;
-    this.lastUpdate = now;
     
     // Update spinner
     this.spinnerIndex = (this.spinnerIndex + 1) % this.spinnerFrames.length;
@@ -52,7 +65,8 @@ export default class ProgressBar {
     const timing = this.renderTiming();
     
     // Single-line progress that updates in-place
-    const progressLine = `${spinner} Processing: ${urlProgress}${runProgress} | ${timing}`;
+    const label = this.statusMessage ? this.statusMessage : 'Processing';
+    const progressLine = `${spinner} ${label}: ${urlProgress}${runProgress} | ${timing}`;
     
     // Clear line and write new progress
     process.stderr.write(`\r\x1b[K${progressLine}`);
@@ -71,7 +85,7 @@ export default class ProgressBar {
   }
 
   renderRunProgress() {
-    if (this.currentUrlRuns === 0) return '';
+    if (this.currentUrlRuns === 0) return ' | Discovering runs…';
     
     // Simplified run progress - just show count without percentage bars
     return ` | Runs ${this.currentRun}/${this.currentUrlRuns}`;
@@ -80,21 +94,7 @@ export default class ProgressBar {
   renderTiming() {
     const elapsed = Date.now() - this.startTime;
     const elapsedStr = this.formatDuration(elapsed);
-    
-    let etaStr = '';
-    // Estimate ETA using fractional progress within current URL when possible
-    let completedUnits = Math.max(0, this.currentUrl - 1);
-    if (this.currentUrlRuns > 0 && this.currentRun > 0) {
-      completedUnits += Math.min(1, this.currentRun / this.currentUrlRuns);
-    }
-    if (completedUnits > 0 && completedUnits < this.totalUrls) {
-      const avgTimePerUnit = elapsed / completedUnits;
-      const remainingUnits = Math.max(0, this.totalUrls - completedUnits);
-      const eta = avgTimePerUnit * remainingUnits;
-      etaStr = ` | ETA: ${this.formatDuration(eta)}`;
-    }
-    
-    return `⏱️ ${elapsedStr}${etaStr}`;
+    return `⏱️ ${elapsedStr}`;
   }
 
   createProgressBar(current, total, width) {
@@ -118,6 +118,10 @@ export default class ProgressBar {
 
   finish() {
     this.isProcessing = false;
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
     const totalTime = Date.now() - this.startTime;
     const totalTimeStr = this.formatDuration(totalTime);
     

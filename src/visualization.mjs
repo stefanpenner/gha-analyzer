@@ -160,26 +160,133 @@ export function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex 
     const earliestB = Math.min(...jobGroups[b].map(job => job.startTime));
     return earliestA - earliestB;
   });
+
+  // Collapse view when the workflow has exactly one job
+  if (timeline.length === 1) {
+    const job = timeline[0];
+    const relativeStart = job.startTime - earliestStart;
+    const duration = job.endTime - job.startTime;
+    const durationSec = duration / 1000;
+    const startPos = Math.floor((relativeStart / totalDuration) * headerScale);
+    const barLength = Math.max(1, Math.floor((duration / totalDuration) * headerScale));
+    const clampedBarLength = Math.min(barLength, headerScale - startPos);
+    const padding = ' '.repeat(Math.max(0, startPos));
+    let statusIcon, coloredBar;
+    if (job.conclusion === 'success') {
+      statusIcon = '█';
+      coloredBar = greenText(statusIcon.repeat(Math.max(1, clampedBarLength)));
+    } else if (job.conclusion === 'failure') {
+      statusIcon = '█';
+      coloredBar = redText(statusIcon.repeat(Math.max(1, clampedBarLength)));
+    } else if (job.status === 'in_progress' || job.status === 'queued' || job.status === 'waiting') {
+      statusIcon = '▒';
+      coloredBar = blueText(statusIcon.repeat(Math.max(1, clampedBarLength)));
+    } else if (job.conclusion === 'skipped' || job.conclusion === 'cancelled') {
+      statusIcon = '░';
+      coloredBar = grayText(statusIcon.repeat(Math.max(1, clampedBarLength)));
+    } else {
+      statusIcon = '░';
+      coloredBar = grayText(statusIcon.repeat(Math.max(1, clampedBarLength)));
+    }
+    const remaining = ' '.repeat(Math.max(0, headerScale - startPos - Math.max(1, clampedBarLength)));
+    const jobNameParts = job.name.split(' / ');
+    const jobNameWithoutPrefix = jobNameParts.length > 1 ? jobNameParts.slice(1).join(' / ') : job.name;
+    const cleanJobName = jobNameWithoutPrefix.replace(/[^\w\s\-_/()]/g, '').trim();
+    const jobNameAndTime = `${cleanJobName} (${humanizeTime(durationSec)})`;
+    const jobLink = job.url ? makeClickableLink(job.url, jobNameAndTime) : jobNameAndTime;
+    let displayJobText;
+    if (job.conclusion === 'success') {
+      displayJobText = greenText(jobLink);
+    } else if (job.conclusion === 'failure') {
+      displayJobText = redText(jobLink);
+    } else if (job.status === 'in_progress' || job.status === 'queued' || job.status === 'waiting') {
+      displayJobText = blueText(`⏳ ${jobLink}`);
+    } else if (job.conclusion === 'skipped' || job.conclusion === 'cancelled') {
+      displayJobText = grayText(jobLink);
+    } else {
+      displayJobText = jobLink;
+    }
+    const treePrefix = '└── ';
+    console.error(`│${padding}${coloredBar}${remaining}  │ ${treePrefix}${displayJobText}`);
+  } else {
   
-  // Display each group with tree view
-  sortedGroupNames.forEach(groupName => {
+  // Display each group with tree view (collapse groups with a single job)
+  sortedGroupNames.forEach((groupName, groupIndex) => {
     const jobsInGroup = jobGroups[groupName];
-    
+
     // Calculate wall time for this group (earliest start to latest end)
     const groupStartTime = Math.min(...jobsInGroup.map(job => job.startTime));
     const groupEndTime = Math.max(...jobsInGroup.map(job => job.endTime));
     const groupWallTime = groupEndTime - groupStartTime;
     const groupTotalSec = groupWallTime / 1000; // Convert milliseconds to seconds
-    
+
     // Sort jobs within the group by start time
     const sortedJobsInGroup = jobsInGroup.sort((a, b) => a.startTime - b.startTime);
-    
+
+    if (jobsInGroup.length === 1) {
+      // Collapse: print the single job inline without a folder header/tree prefix
+      const job = sortedJobsInGroup[0];
+      const relativeStart = job.startTime - earliestStart;
+      const duration = job.endTime - job.startTime;
+      const durationSec = duration / 1000; // Convert milliseconds to seconds
+
+      const startPos = Math.floor((relativeStart / totalDuration) * headerScale);
+      const barLength = Math.max(1, Math.floor((duration / totalDuration) * headerScale));
+      const clampedBarLength = Math.min(barLength, headerScale - startPos);
+
+      const padding = ' '.repeat(Math.max(0, startPos));
+
+      let statusIcon, coloredBar;
+      if (job.conclusion === 'success') {
+        statusIcon = '█';
+        coloredBar = greenText(statusIcon.repeat(Math.max(1, clampedBarLength)));
+      } else if (job.conclusion === 'failure') {
+        statusIcon = '█';
+        coloredBar = redText(statusIcon.repeat(Math.max(1, clampedBarLength)));
+      } else if (job.status === 'in_progress' || job.status === 'queued' || job.status === 'waiting') {
+        statusIcon = '▒';
+        coloredBar = blueText(statusIcon.repeat(Math.max(1, clampedBarLength)));
+      } else if (job.conclusion === 'skipped' || job.conclusion === 'cancelled') {
+        statusIcon = '░';
+        coloredBar = grayText(statusIcon.repeat(Math.max(1, clampedBarLength)));
+      } else {
+        statusIcon = '░';
+        coloredBar = grayText(statusIcon.repeat(Math.max(1, clampedBarLength)));
+      }
+
+      const remaining = ' '.repeat(Math.max(0, headerScale - startPos - Math.max(1, clampedBarLength)));
+
+      const jobNameParts = job.name.split(' / ');
+      const jobNameWithoutPrefix = jobNameParts.length > 1 ? jobNameParts.slice(1).join(' / ') : job.name;
+      const cleanJobName = jobNameWithoutPrefix.replace(/[^\w\s\-_/()]/g, '').trim();
+
+      const jobNameAndTime = `${cleanJobName} (${humanizeTime(durationSec)})`;
+      const jobLink = job.url ? makeClickableLink(job.url, jobNameAndTime) : jobNameAndTime;
+
+      let displayJobText;
+      if (job.conclusion === 'success') {
+        displayJobText = greenText(jobLink);
+      } else if (job.conclusion === 'failure') {
+        displayJobText = redText(jobLink);
+      } else if (job.status === 'in_progress' || job.status === 'queued' || job.status === 'waiting') {
+        displayJobText = blueText(`⏳ ${jobLink}`);
+      } else if (job.conclusion === 'skipped' || job.conclusion === 'cancelled') {
+        displayJobText = grayText(jobLink);
+      } else {
+        displayJobText = jobLink;
+      }
+
+      const groupTreePrefix = groupIndex === (sortedGroupNames.length - 1) ? '└── ' : '├── ';
+      console.error(`│${padding}${coloredBar}${remaining}  │ ${groupTreePrefix}${displayJobText}`);
+      return; // Done for this group
+    }
+
     // Show group header with total time
     const timeDisplay = humanizeTime(groupTotalSec);
-    // Ensure group name is clean and doesn't contain any problematic characters
     const cleanGroupName = groupName.replace(/[^\w\s\-_/()]/g, '').trim();
-    console.error(`│${' '.repeat(headerScale)}  │ 📁 ${cleanGroupName} (${timeDisplay}, ${jobsInGroup.length} jobs)`);
-    
+    const groupTreePrefix = groupIndex === (sortedGroupNames.length - 1) ? '└── ' : '├── ';
+    console.error(`│${' '.repeat(headerScale)}  │ ${groupTreePrefix}📁 ${cleanGroupName} (${timeDisplay}, ${jobsInGroup.length} jobs)`);
+
     // Show jobs indented under the group
     sortedJobsInGroup.forEach((job, index) => {
       const relativeStart = job.startTime - earliestStart;
@@ -252,9 +359,10 @@ export function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex 
       
       console.error(`│${padding}${coloredBar}${remaining}  │ ${displayText}`);
     });
-    
+  
 
   });
+  }
   
   // Approvals & Merge as a dedicated directory-like group with one entry per event
   const approvalAndMergeEvents = (reviewEvents || []).filter(ev => ev.type === 'shippit' || ev.type === 'merged');
@@ -671,21 +779,7 @@ export async function outputCombinedResults(analysisData, combinedMetrics, perfe
     generateHighLevelTimeline(sortedResults, analysisData.earliestTime, analysisData.latestTime);
   }
 
-      const commitAggregates = analysisData.results
-    .filter(r => r.type === 'commit')
-    .map(r => ({
-      name: r.displayName,
-      urlIndex: r.urlIndex,
-      totalRunsForCommit: r.allCommitRunsCount ?? r.metrics.totalRuns ?? 0,
-      totalComputeMsForCommit: r.allCommitRunsComputeMs ?? 0
-    }));
-  if (commitAggregates.length > 0) {
-    console.error(`\nCommit Runs (all runs for the commit head SHA):`);
-    commitAggregates.forEach(agg => {
-      const computeDisplay = humanizeTime((agg.totalComputeMsForCommit || 0) / 1000);
-      console.error(`  [${agg.urlIndex + 1}] ${agg.name}: runs=${agg.totalRunsForCommit}, compute=${computeDisplay}`);
-    });
-  }
+  // Removed: Commit Runs (all runs for the commit head SHA)
 
   // Summary of runs per URL with compute, wall time, and approvals
   console.error(`\nRun Summary:`);
@@ -705,22 +799,7 @@ export async function outputCombinedResults(analysisData, combinedMetrics, perfe
     console.error(line);
   });
 
-  // Pre-commit runs (created before commit timestamp) summary when commit URL was included
-      const commitResults = analysisData.results.filter(r => r.type === 'commit');
-  if (commitResults.length > 0) {
-    console.error(`\nPre-commit Runs (created before commit time):`);
-    for (const result of commitResults) {
-      // We don't have raw runs list here; compute approximation from metrics timeline
-      const commitTimeMs = result.earliestTime; // For commit, earliestTime aligns with run timeline start baseline
-      const preJobs = (result.metrics?.jobTimeline || []).filter(j => j.startTime < commitTimeMs);
-      if (preJobs.length === 0) {
-        console.error(`  [${result.urlIndex + 1}] ${result.displayName}: none`);
-        continue;
-      }
-      const preComputeMs = preJobs.reduce((s, j) => s + Math.max(0, Math.min(j.endTime, commitTimeMs) - j.startTime), 0);
-      console.error(`  [${result.urlIndex + 1}] ${result.displayName}: compute=${humanizeTime(preComputeMs/1000)} across ${preJobs.length} jobs (prior activity)`);
-    }
-  }
+  // Removed: Pre-commit Runs (created before commit time)
   
   // Slowest jobs grouped by PR/Commit (ordered by start time like combined timeline)
   const allJobs = combinedMetrics.jobTimeline.sort((a, b) => (b.endTime - b.startTime) - (a.endTime - a.startTime));

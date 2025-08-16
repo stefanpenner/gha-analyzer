@@ -147,9 +147,11 @@ export class AnalysisData {
     const baseUrl = `https://api.github.com/repos/${owner}/${repo}`;
     
     // Extract URL-specific information
+    progressBar.setStatus('Parsing URL…');
     const urlInfo = await this.extractUrlInfo(type, identifier, owner, repo, baseUrl, session);
     
     // Fetch workflow runs
+    progressBar.setStatus('Fetching workflow runs…');
     const allRuns = await this.fetchWorkflowRunsForUrl(type, identifier, baseUrl, urlInfo, session);
     
     if (allRuns.length === 0) {
@@ -158,6 +160,11 @@ export class AnalysisData {
     
     // Update progress bar
     progressBar.setUrlRuns(allRuns.length);
+    if (allRuns.length === 0) {
+      progressBar.setStatus('No runs found');
+    } else {
+      progressBar.setStatus('Processing runs…');
+    }
     
     // Process workflow runs
     const urlData = await this.processWorkflowRunsForUrl(allRuns, urlIndex, owner, repo, identifier, type, urlInfo, session, progressBar);
@@ -172,6 +179,7 @@ export class AnalysisData {
     this.incrementTotalRuns(allRuns.length);
     this.updateGlobalTimeRange(urlData.earliestTime, Math.max(...urlData.jobEndTimes));
     
+    progressBar.setStatus('Done');
     return true;
   }
 
