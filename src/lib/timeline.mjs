@@ -1,5 +1,5 @@
 import { makeClickableLink, grayText, greenText, redText, yellowText, blueText, humanizeTime } from './text.mjs';
-import { getJobGroup, findBottleneckJobs } from './analysis.mjs';
+import { getJobGroup } from './analysis.mjs';
 
 export function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex = 0, reviewEvents = []) {
   if (!metrics.jobTimeline || metrics.jobTimeline.length === 0) {
@@ -8,12 +8,7 @@ export function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex 
 
   const timeline = metrics.jobTimeline;
 
-  const timelineBottlenecks = findBottleneckJobs(timeline);
-  const bottleneckJobs = new Set();
-  timelineBottlenecks.forEach(job => {
-    const jobKey = `${job.name}-${job.startTime}-${job.endTime}`;
-    bottleneckJobs.add(jobKey);
-  });
+  // bottleneck jobs removed
   const headerScale = 60;
 
   const earliestStart = Math.min(...timeline.map(job => job.startTime));
@@ -99,11 +94,7 @@ export function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex 
       const isLastJob = index === sortedJobsInGroup.length - 1;
       const treePrefix = isLastJob ? '└── ' : '├── ';
 
-      const jobKey = `${job.name}-${job.startTime}-${job.endTime}`;
-      const isBottleneck = bottleneckJobs.has(jobKey);
-      const bottleneckIndicator = isBottleneck ? ' 🔥' : '';
-
-      const jobNameAndTime = `${cleanJobName}${groupIndicator} (${humanizeTime(durationSec)})${bottleneckIndicator}`;
+      const jobNameAndTime = `${cleanJobName}${groupIndicator} (${humanizeTime(durationSec)})`;
       const jobLink = job.url ? makeClickableLink(job.url, jobNameAndTime) : jobNameAndTime;
 
       let displayJobText;

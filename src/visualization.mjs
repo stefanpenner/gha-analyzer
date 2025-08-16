@@ -123,14 +123,7 @@ export function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex 
 
   const timeline = metrics.jobTimeline;
   
-  // Calculate bottleneck jobs for this timeline
-  const timelineBottlenecks = findBottleneckJobs(timeline);
-  const bottleneckJobs = new Set();
-  timelineBottlenecks.forEach(job => {
-    // Create a unique identifier for the job to match against timeline jobs
-    const jobKey = `${job.name}-${job.startTime}-${job.endTime}`;
-    bottleneckJobs.add(jobKey);
-  });
+  // Bottleneck job indication removed
   const scale = 80; // Terminal width for timeline bars (80 characters)
   const headerScale = 60; // Header box width (original size)
   
@@ -238,15 +231,8 @@ export function generateTimelineVisualization(metrics, repoActionsUrl, urlIndex 
       const isLastJob = index === sortedJobsInGroup.length - 1;
       const treePrefix = isLastJob ? '└── ' : '├── ';
       
-      // Check if this job is a bottleneck
-      const jobKey = `${job.name}-${job.startTime}-${job.endTime}`;
-      const isBottleneck = bottleneckJobs.has(jobKey);
-      
-      // Add bottleneck indicator for high-impact optimization opportunities
-      const bottleneckIndicator = isBottleneck ? ' 🔥' : '';
-      
       // Create text for job name and time (without tree prefix)
-      const jobNameAndTime = `${cleanJobName}${groupIndicator} (${humanizeTime(durationSec)})${bottleneckIndicator}`;
+      const jobNameAndTime = `${cleanJobName}${groupIndicator} (${humanizeTime(durationSec)})`;
       const jobLink = job.url ? makeClickableLink(job.url, jobNameAndTime) : jobNameAndTime;
       
       // Color the job name and time based on status
@@ -640,8 +626,6 @@ export async function openTraceInPerfetto(traceFile) {
 export async function outputCombinedResults(analysisData, combinedMetrics, perfettoFile, openInPerfetto = false) {
   if (perfettoFile) {
     console.error(`\n✅ Generated ${analysisData.traceEvents.length} trace events • Open in Perfetto.dev for analysis`);
-  } else {
-          console.error(`\n✅ Generated ${analysisData.traceEvents.length} trace events • Use --perfetto=<filename> to save trace for Perfetto.dev analysis`);
   }
   
   console.error(`\n${'='.repeat(80)}`);
@@ -744,17 +728,7 @@ export async function outputCombinedResults(analysisData, combinedMetrics, perfe
   
   if (slowJobs.length > 0) {
     console.error(`\nSlowest Jobs (grouped by PR/Commit):`);
-    
-    // Calculate bottleneck jobs for each URL to identify high-impact optimizations
-    const bottleneckJobs = new Set();
-    sortedResults.forEach(result => {
-      const bottlenecks = findBottleneckJobs(result.metrics.jobTimeline);
-      bottlenecks.forEach(job => {
-        // Create a unique identifier for the job to match against slowJobs
-        const jobKey = `${job.name}-${job.startTime}-${job.endTime}`;
-        bottleneckJobs.add(jobKey);
-      });
-    });
+    // Bottleneck jobs removed
     
     // Group jobs by their source URL and sort by start time to match combined timeline order
     const jobsBySource = {};
@@ -778,29 +752,13 @@ export async function outputCombinedResults(analysisData, combinedMetrics, perfe
         const sortedJobs = jobs.sort((a, b) => (b.endTime - b.startTime) - (a.endTime - a.startTime));
         sortedJobs.forEach((job, i) => {
           const duration = ((job.endTime - job.startTime) / 1000);
-          
-          // Check if this job is a bottleneck
-          const jobKey = `${job.name}-${job.startTime}-${job.endTime}`;
-          const isBottleneck = bottleneckJobs.has(jobKey);
-          
-          // Add bottleneck indicator for high-impact optimization opportunities
-          const bottleneckIndicator = isBottleneck ? ' 🔥' : '';
-          const fullText = `${i + 1}. ${humanizeTime(duration)} - ${job.name}${bottleneckIndicator}`;
+          const fullText = `${i + 1}. ${humanizeTime(duration)} - ${job.name}`;
           const jobLink = job.url ? makeClickableLink(job.url, fullText) : fullText;
           console.error(`    ${jobLink}`);
         });
       }
     });
-    
-    // Add explanation for bottleneck indicator
-    const hasBottleneckJobs = slowJobs.some(job => {
-      const jobKey = `${job.name}-${job.startTime}-${job.endTime}`;
-      return bottleneckJobs.has(jobKey);
-    });
-    
-    if (hasBottleneckJobs) {
-      console.error(`\n  🔥 Bottleneck jobs - optimizing these will have the most impact on total pipeline time`);
-    }
+    // Bottleneck indicator explanation removed
   }
   
   // Individual Pipeline Timelines Section (moved to after combined analysis)
