@@ -13,6 +13,7 @@
     "test:unit": "node --test test/unit.test.mjs",
     "test:integration": "node --test test/consolidated.test.mjs",
     "test:watch": "node --test --watch test/*.test.mjs",
+    "perfetto:check": "node scripts/perfetto-ui-check.mjs --minimal",
     "lint": "echo 'No linter configured - consider adding ESLint'",
     "clean": "rm -f *.json trace-*.json output-*.json"
   },
@@ -43,6 +44,7 @@
   },
   "devDependencies": {
     "nock": "^13.4.0",
+    "puppeteer": "^22.15.0",
     "undici": "^5.29.0"
   }
 }

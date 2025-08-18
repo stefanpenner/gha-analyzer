@@ -467,9 +467,10 @@ export class AnalysisData {
           const ts = (clampedEventTimeMs - result.earliestTime) * 1000;
           const name = event.type === 'merged' ? 'Merged' : 'Approved';
           const user = event.type === 'merged' ? (event.mergedBy || '') : (event.reviewer || '');
+          // Store plain labels in trace args (no ANSI) to avoid UI render issues
           const label = event.type === 'merged'
-            ? (user ? greenText(`◆ merged by ${user}`) : greenText('◆ merged'))
-            : (user ? yellowText(`▲ approved by ${user}`) : yellowText('▲ approved'));
+            ? (user ? `◆ merged by ${user}` : '◆ merged')
+            : (user ? `▲ approved by ${user}` : '▲ approved');
           const userUrl = user ? `https://github.com/${user}` : '';
           
           this.addTraceEvents([{

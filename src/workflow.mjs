@@ -25,6 +25,42 @@ export async function processWorkflowRun(run, runIndex, processId, earliestTime,
   const runStartTs = absoluteRunStartMs; // Keep in milliseconds for Perfetto
   let runEndTs = Math.max(runStartTs + 1, absoluteRunEndMs); // Ensure minimum 1ms duration
   
+  // Ensure process metadata exists so Perfetto can name the process
+  traceEvents.push({
+    name: 'process_name',
+    ph: 'M',
+    pid: processId,
+    args: { name: `${owner}/${repo} • ${run.name || 'Workflow'} #${run.run_number || run.id}` }
+  });
+
+  // Add a thread for the run itself so Perfetto can render the run lane
+  const runTid = 0;
+  traceEvents.push({
+    name: 'thread_name',
+    ph: 'M',
+    pid: processId,
+    tid: runTid,
+    args: { name: `Run ${run.run_number || run.id}` }
+  });
+  traceEvents.push({
+    name: 'thread_sort_index',
+    ph: 'M',
+    pid: processId,
+    tid: runTid,
+    args: { sort_index: -1 }
+  });
+
+  const declaredThreads = new Set();
+  let jobSortIndex = 0;
+  const jobIdToTid = new Map();
+  let nextTid = 1;
+  function getTidForJob(jobId) {
+    if (!jobIdToTid.has(jobId)) {
+      jobIdToTid.set(jobId, nextTid++);
+    }
+    return jobIdToTid.get(jobId);
+  }
+
   for (const job of jobs) {
     if (job.started_at && job.completed_at) {
       const jobStartMs = new Date(job.started_at).getTime();
@@ -35,9 +71,9 @@ export async function processWorkflowRun(run, runIndex, processId, earliestTime,
         const jobStartTs = (jobStartMs - earliestTime) * 1000; // Convert to microseconds
         const jobEndTs = (jobEndMs - earliestTime) * 1000;
         
-        // Store job timing data
-        jobStartTimes.push(jobStartMs);
-        jobEndTimes.push(jobEndMs);
+        // Store job timing data as sweep events
+        jobStartTimes.push({ ts: jobStartMs, type: 'start' });
+        jobEndTimes.push({ ts: jobEndMs, type: 'end' });
         
         // Update metrics
         metrics.totalJobs++;
@@ -53,6 +89,27 @@ export async function processWorkflowRun(run, runIndex, processId, earliestTime,
           status: job.status
         });
         
+        // Declare thread metadata once per job to label tracks in Perfetto
+        const jobTid = getTidForJob(job.id);
+        if (!declaredThreads.has(jobTid)) {
+          declaredThreads.add(jobTid);
+          traceEvents.push({
+            name: 'thread_name',
+            ph: 'M',
+            pid: processId,
+            tid: jobTid,
+            args: { name: job.name }
+          });
+          traceEvents.push({
+            name: 'thread_sort_index',
+            ph: 'M',
+            pid: processId,
+            tid: jobTid,
+            args: { sort_index: jobSortIndex++ }
+          });
+        }
+
+        // Always account for duration metrics
         if (job.conclusion === 'success') {
           metrics.totalDuration += jobDuration;
           metrics.jobDurations.push(jobDuration);
@@ -66,71 +123,71 @@ export async function processWorkflowRun(run, runIndex, processId, earliestTime,
           if (jobDuration < metrics.shortestJob.duration) {
             metrics.shortestJob = { name: job.name, duration: jobDuration };
           }
-          
-          // Process job steps
-          if (job.steps) {
-            for (const step of job.steps) {
-              if (step.started_at && step.completed_at) {
-                const stepStartMs = new Date(step.started_at).getTime();
-                const stepEndMs = new Date(step.completed_at).getTime();
-                
-                if (isFinite(stepStartMs) && isFinite(stepEndMs) && stepEndMs > stepStartMs) {
-                  const stepDuration = stepEndMs - stepStartMs;
-                  const stepStartTs = (stepStartMs - earliestTime) * 1000;
-                  const stepEndTs = (stepEndMs - earliestTime) * 1000;
-                  
-                  metrics.totalSteps++;
-                  if (step.conclusion === 'success') {
-                    metrics.stepDurations.push(stepDuration);
-                  } else {
-                    metrics.failedSteps++;
-                  }
-                  
-                  // Add step to trace events
-                  traceEvents.push({
-                    name: step.name,
-                    ph: 'X',
-                    pid: processId,
-                    tid: job.id,
-                    ts: stepStartTs,
-                    dur: stepEndTs - stepStartTs,
-                    args: {
-                      step_name: step.name,
-                      step_conclusion: step.conclusion,
-                      job_name: job.name,
-                      run_id: run.id,
-                      url_index: urlIndex + 1,
-                      source_url: currentUrlResult?.displayUrl || '',
-                      source_type: currentUrlResult?.type || '',
-                      source_identifier: currentUrlResult?.identifier || ''
-                    }
-                  });
-                }
-              }
-            }
-          }
-          
-          // Add job to trace events
-          traceEvents.push({
-            name: job.name,
-            ph: 'X',
-            pid: processId,
-            tid: job.id,
-            ts: jobStartTs,
-            dur: jobEndTs - jobStartTs,
-            args: {
-              job_name: job.name,
-              job_conclusion: job.conclusion,
-              run_id: run.id,
-              url_index: urlIndex + 1,
-              source_url: currentUrlResult?.displayUrl || '',
-              source_type: currentUrlResult?.type || '',
-              source_identifier: currentUrlResult?.identifier || ''
-            }
-          });
         } else {
           metrics.failedJobs++;
         }
+
+        // Process job steps (record all with valid times)
+        if (job.steps) {
+          for (const step of job.steps) {
+            if (step.started_at && step.completed_at) {
+              const stepStartMs = new Date(step.started_at).getTime();
+              const stepEndMs = new Date(step.completed_at).getTime();
+              
+              if (isFinite(stepStartMs) && isFinite(stepEndMs) && stepEndMs > stepStartMs) {
+                const stepDuration = stepEndMs - stepStartMs;
+                const stepStartTs = (stepStartMs - earliestTime) * 1000;
+                const stepEndTs = (stepEndMs - earliestTime) * 1000;
+                
+                metrics.totalSteps++;
+                if (step.conclusion === 'success') {
+                  metrics.stepDurations.push(stepDuration);
+                } else {
+                  metrics.failedSteps++;
+                }
+                
+                // Add step to trace events
+                traceEvents.push({
+                  name: step.name,
+                  ph: 'X',
+                  pid: processId,
+                  tid: getTidForJob(job.id),
+                  ts: stepStartTs,
+                  dur: stepEndTs - stepStartTs,
+                  args: {
+                    step_name: step.name,
+                    step_conclusion: step.conclusion,
+                    job_name: job.name,
+                    run_id: run.id,
+                    url_index: urlIndex + 1,
+                    source_url: currentUrlResult?.displayUrl || '',
+                    source_type: currentUrlResult?.type || '',
+                    source_identifier: currentUrlResult?.identifier || ''
+                  }
+                });
+              }
+            }
+          }
+        }
+
+        // Add job to trace events (regardless of conclusion)
+        traceEvents.push({
+          name: job.name,
+          ph: 'X',
+          pid: processId,
+          tid: getTidForJob(job.id),
+          ts: jobStartTs,
+          dur: jobEndTs - jobStartTs,
+          args: {
+            job_name: job.name,
+            job_conclusion: job.conclusion,
+            run_id: run.id,
+            url_index: urlIndex + 1,
+            source_url: currentUrlResult?.displayUrl || '',
+            source_type: currentUrlResult?.type || '',
+            source_identifier: currentUrlResult?.identifier || ''
+          }
+        });
         
         // Track runner type
         if (job.runner_name) {
@@ -145,7 +202,7 @@ export async function processWorkflowRun(run, runIndex, processId, earliestTime,
     name: `Run ${run.id}`,
     ph: 'X',
     pid: processId,
-    tid: run.id,
+    tid: runTid,
     ts: (runStartTs - earliestTime) * 1000,
     dur: (runEndTs - earliestTime) * 1000,
     args: {

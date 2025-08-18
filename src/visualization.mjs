@@ -685,69 +685,51 @@ export async function openTraceInPerfetto(traceFile) {
   const scriptUrl = 'https://raw.githubusercontent.com/google/perfetto/main/tools/open_trace_in_ui';
   const tmpDir = os.tmpdir();
   const scriptPath = path.join(tmpDir, scriptName);
-  
-  try {
-    console.error(`\n🚀 Opening trace in Perfetto UI...`);
-    
-    // Check if script already exists in temp directory
-    if (!fs.existsSync(scriptPath)) {
-      console.error(`📥 Downloading ${scriptName} from Perfetto...`);
-      
-      // Download the script using curl to temp directory
-      const downloadResult = await new Promise((resolve, reject) => {
-        const curl = spawn('curl', ['-L', '-o', scriptPath, scriptUrl], { stdio: 'inherit' });
-        curl.on('close', (code) => {
-          if (code === 0) {
-            resolve();
-          } else {
-            reject(new Error(`Failed to download ${scriptName} (exit code: ${code})`));
-          }
-        });
-        curl.on('error', reject);
-      });
-      
-      // Make the script executable
-      await new Promise((resolve, reject) => {
-        const chmod = spawn('chmod', ['+x', scriptPath], { stdio: 'inherit' });
-        chmod.on('close', (code) => {
-          if (code === 0) {
-            resolve();
-          } else {
-            reject(new Error(`Failed to make ${scriptName} executable (exit code: ${code})`));
-          }
-        });
-        chmod.on('error', reject);
-      });
-    } else {
-      console.error(`📁 Using existing script: ${scriptPath}`);
-    }
-    
-    // Open the trace file using the script
-    console.error(`🔗 Opening ${traceFile} in Perfetto UI...`);
-    const openResult = await new Promise((resolve, reject) => {
-      const openScript = spawn(scriptPath, [traceFile], { 
-        stdio: 'inherit',
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
-      });
-      openScript.on('close', (code) => {
+
+  console.error(`\n🚀 Opening trace in Perfetto UI...`);
+
+  // Check if script already exists in temp directory
+  if (!fs.existsSync(scriptPath)) {
+    console.error(`📥 Downloading ${scriptName} from Perfetto...`);
+
+    // Download the script using curl to temp directory
+    const downloadResult = await new Promise((resolve, reject) => {
+      const curl = spawn('curl', ['-fsSL', '-o', scriptPath, scriptUrl], { stdio: 'inherit' });
+      curl.on('close', (code) => {
         if (code === 0) {
           resolve();
         } else {
-          reject(new Error(`Failed to open trace in Perfetto (exit code: ${code})`));
+          reject(new Error(`Failed to download ${scriptName} (exit code: ${code})`));
         }
       });
-      openScript.on('error', (error) => {
-        reject(new Error(`Failed to execute script: ${error.message}`));
-      });
+      curl.on('error', reject);
     });
-    
-    console.error(`✅ Trace opened successfully in Perfetto UI!`);
-    
-  } catch (error) {
-    console.error(`❌ Failed to open trace in Perfetto: ${error.message}`);
-    console.error(`💡 You can manually open the trace at: https://ui.perfetto.dev`);
-    console.error(`   Then click "Open trace file" and select: ${traceFile}`);
+
+    // Make the script executable
+    await new Promise((resolve, reject) => {
+      const chmod = spawn('chmod', ['+x', scriptPath], { stdio: 'inherit' });
+      chmod.on('close', (code) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          reject(new Error(`Failed to make ${scriptName} executable (exit code: ${code})`));
+        }
+      });
+      chmod.on('error', reject);
+    });
+  } else {
+    console.error(`📁 Using existing script: ${scriptPath}`);
   }
+
+  // Attempt to launch the script in a non-blocking way (detached)
+  console.error(`🔗 Launching Perfetto UI for ${traceFile}...`);
+  const child = spawn(scriptPath, [traceFile], {
+    stdio: 'ignore',
+    env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+  });
+  console.error(`✅ Perfetto UI launch initiated.`);
+  // Keep process alive briefly so the helper server can fully serve the file
+  await new Promise((r) => setTimeout(r, 8000));
 }
 
 // Main output function

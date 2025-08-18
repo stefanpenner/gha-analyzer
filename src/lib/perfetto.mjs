@@ -30,14 +30,22 @@ export async function openTraceInPerfetto(traceFile) {
       console.error(`📁 Using existing script: ${scriptPath}`);
     }
 
-    console.error(`🔗 Opening ${traceFile} in Perfetto UI...`);
-    await new Promise((resolve, reject) => {
-      const openScript = spawn(scriptPath, [traceFile], { stdio: 'inherit', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
-      openScript.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`Failed to open trace in Perfetto (exit code: ${code})`))));
-      openScript.on('error', (error) => reject(new Error(`Failed to execute script: ${error.message}`)));
-    });
+    console.error(`🔗 Launching Perfetto UI for ${traceFile}...`);
+    try {
+      const child = spawn(scriptPath, [traceFile], { stdio: 'ignore', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+      console.error(`✅ Perfetto UI launch initiated.`);
+      await new Promise((r) => setTimeout(r, 8000));
+    } catch (e) {
+      console.error(`⚠️  Launch script failed (${e.message}). Falling back to opening Perfetto UI site...`);
+      try {
+        const openCmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+        spawn(openCmd, ['https://ui.perfetto.dev'], { stdio: 'ignore', shell: true, detached: true }).unref();
+      } catch {
+        // ignore
+      }
+    }
 
-    console.error(`✅ Trace opened successfully in Perfetto UI!`);
+    // Note: Do not run headless validation here; keep validation limited to tests and the standalone script.
   } catch (error) {
     console.error(`❌ Failed to open trace in Perfetto: ${error.message}`);
     console.error(`💡 You can manually open the trace at: https://ui.perfetto.dev`);
