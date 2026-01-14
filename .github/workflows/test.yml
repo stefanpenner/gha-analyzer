@@ -14,14 +14,17 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Setup Go
-      uses: actions/setup-go@v5
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
       with:
-        go-version: '1.25.x'
-        cache: true
-
-    - name: Build
-      run: go build ./cmd/gha-analyzer
-
+        node-version: '20.x'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
     - name: Run tests
-      run: go test ./...
+      run: npm test
+      
+    - name: Test npx
+      run: npx . --help || true

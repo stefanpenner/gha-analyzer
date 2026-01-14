@@ -117,7 +117,7 @@ func GenerateHighLevelTimeline(w io.Writer, results []analyzer.URLResult, global
 			coloredLink = utils.GrayText(utils.MakeClickableLink(result.DisplayURL, fullText))
 		} else {
 			coloredBar = utils.GreenText(barString)
-			coloredLink = utils.GreenText(utils.MakeClickableLink(result.DisplayURL, fullText))
+			coloredLink = utils.MakeClickableLink(result.DisplayURL, fullText)
 		}
 
 		paddingLeft := strings.Repeat(" ", maxInt(0, startPos))
@@ -252,16 +252,21 @@ func GenerateTimelineVisualization(w io.Writer, metrics analyzer.FinalMetrics, r
 			if job.URL != "" {
 				jobLink = utils.MakeClickableLink(job.URL, jobNameAndTime)
 			}
+			statusPrefix := ""
 			var displayJobText string
 			switch {
 			case job.Conclusion == "success":
-				displayJobText = utils.GreenText(jobLink)
+				statusPrefix = "✅ "
+				displayJobText = statusPrefix + jobLink
 			case job.Conclusion == "failure":
-				displayJobText = utils.RedText(jobLink)
+				statusPrefix = "❌ "
+				displayJobText = utils.RedText(statusPrefix + jobLink)
 			case job.Status == "in_progress" || job.Status == "queued" || job.Status == "waiting":
-				displayJobText = utils.BlueText("⏳ " + jobLink)
+				statusPrefix = "⏳ "
+				displayJobText = utils.BlueText(statusPrefix + jobLink)
 			case job.Conclusion == "skipped" || job.Conclusion == "cancelled":
-				displayJobText = utils.GrayText(jobLink)
+				statusPrefix = "⏸️ "
+				displayJobText = utils.GrayText(statusPrefix + jobLink)
 			default:
 				displayJobText = jobLink
 			}

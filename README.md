@@ -103,7 +103,6 @@ go build ./cmd/gha-analyzer
 # Run all tests
 go test ./...
 ```
-
 ## 🤝 Contributing
 
 1. Fork the repository
@@ -123,3 +122,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [UI.Perfetto](https://ui.perfetto.dev) for the excellent tracing visualization
 - [GitHub Actions API](https://docs.github.com/en/rest/actions) for workflow data
 - Chrome DevTools team for the tracing format specification 
+
