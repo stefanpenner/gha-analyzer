@@ -1,0 +1,853 @@
+package analyzer
+
+import (
+	"fmt"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
+	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+)
+
+type ProgressReporter interface {
+	StartURL(urlIndex int, url string)
+	SetURLRuns(runCount int)
+	SetPhase(phase string)
+	SetDetail(detail string)
+	ProcessRun()
+	Finish()
+}
+
+type URLError struct {
+	URL string
+	Err error
+}
+
+func (e URLError) Error() string {
+	return fmt.Sprintf("Error processing URL %s: %s", e.URL, e.Err.Error())
+}
+
+func AnalyzeURLs(urls []string, client *githubapi.Client, reporter ProgressReporter) ([]URLResult, []TraceEvent, int64, int64, []URLError) {
+	allTraceEvents := []TraceEvent{}
+	allJobStartTimes := []JobEvent{}
+	allJobEndTimes := []JobEvent{}
+	urlResults := []URLResult{}
+	globalEarliestTime := int64(1<<63 - 1)
+	globalLatestTime := int64(0)
+	urlErrors := []URLError{}
+
+	for urlIndex, githubURL := range urls {
+		if reporter != nil {
+			reporter.StartURL(urlIndex, githubURL)
+		}
+		result, err := processURL(githubURL, urlIndex, client, reporter)
+		if err != nil {
+			urlErrors = append(urlErrors, URLError{URL: githubURL, Err: err})
+			continue
+		}
+		if result == nil {
+			continue
+		}
+		urlResults = append(urlResults, *result)
+		allTraceEvents = append(allTraceEvents, result.TraceEvents...)
+		allJobStartTimes = append(allJobStartTimes, result.JobStartTimes...)
+		allJobEndTimes = append(allJobEndTimes, result.JobEndTimes...)
+
+		if result.EarliestTime < globalEarliestTime {
+			globalEarliestTime = result.EarliestTime
+		}
+		urlLatest := maxJobEnd(result.JobEndTimes)
+		if urlLatest > globalLatestTime {
+			globalLatestTime = urlLatest
+		}
+	}
+
+	if reporter != nil {
+		reporter.Finish()
+	}
+
+	if len(urlResults) == 0 {
+		return nil, nil, 0, 0, urlErrors
+	}
+
+	GenerateConcurrencyCounters(allJobStartTimes, allJobEndTimes, &allTraceEvents, globalEarliestTime)
+	addReviewMarkersToTrace(urlResults, &allTraceEvents)
+
+	combinedTrace := append([]TraceEvent{}, allTraceEvents...)
+	allTraceEvents = combinedTrace
+	return urlResults, allTraceEvents, globalEarliestTime, globalLatestTime, urlErrors
+}
+
+func processURL(githubURL string, urlIndex int, client *githubapi.Client, reporter ProgressReporter) (*URLResult, error) {
+	parsed, err := utils.ParseGitHubURL(githubURL)
+	if err != nil {
+		return nil, err
+	}
+	if reporter != nil {
+		reporter.SetPhase("Parsing URL")
+		reporter.SetDetail(fmt.Sprintf("%s/%s", parsed.Owner, parsed.Repo))
+	}
+	baseURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", parsed.Owner, parsed.Repo)
+
+	var headSHA, branchName, displayName, displayURL string
+	var reviewEvents []ReviewEvent
+	var mergedAtMs *int64
+	var commitTimeMs *int64
+	allCommitRunsCount := 0
+	var allCommitRunsComputeMs int64
+
+	if parsed.Type == "pr" {
+		if reporter != nil {
+			reporter.SetPhase("Fetching PR metadata")
+			reporter.SetDetail(parsed.Identifier)
+		}
+		analyzingPRURL := fmt.Sprintf("https://github.com/%s/%s/pull/%s", parsed.Owner, parsed.Repo, parsed.Identifier)
+		prData, err := githubapi.FetchPullRequest(client, baseURL, parsed.Identifier)
+		if err != nil {
+			return nil, err
+		}
+		if prData.Head.Ref == "" || prData.Head.SHA == "" {
+			return nil, fmt.Errorf("Invalid PR response - missing head or base information")
+		}
+		headSHA = prData.Head.SHA
+		branchName = prData.Head.Ref
+		displayName = fmt.Sprintf("PR #%s", parsed.Identifier)
+		displayURL = analyzingPRURL
+
+		if reporter != nil {
+			reporter.SetPhase("Fetching PR reviews")
+			reporter.SetDetail(parsed.Identifier)
+		}
+		reviews, err := githubapi.FetchPRReviews(client, parsed.Owner, parsed.Repo, parsed.Identifier)
+		if err != nil {
+			return nil, err
+		}
+		for _, review := range reviews {
+			if review.State == "APPROVED" || shipItMatch(review.Body) {
+				reviewEvents = append(reviewEvents, ReviewEvent{
+					Type:     "shippit",
+					Time:     review.SubmittedAt,
+					Reviewer: review.User.Login,
+					URL:      firstNonEmpty(review.HTMLURL, analyzingPRURL),
+				})
+			}
+		}
+		if prData.MergedAt != nil && *prData.MergedAt != "" {
+			reviewEvents = append(reviewEvents, ReviewEvent{
+				Type:     "merged",
+				Time:     *prData.MergedAt,
+				MergedBy: resolvedUser(prData.MergedBy),
+				URL:      analyzingPRURL,
+			})
+			if t, ok := utils.ParseTime(*prData.MergedAt); ok {
+				ms := t.UnixMilli()
+				mergedAtMs = &ms
+			}
+		}
+	} else {
+		analyzingCommitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", parsed.Owner, parsed.Repo, parsed.Identifier)
+		headSHA = parsed.Identifier
+		displayName = fmt.Sprintf("commit %s", headSHA[:minInt(8, len(headSHA))])
+		displayURL = analyzingCommitURL
+
+		targetBranch := ""
+		if reporter != nil {
+			reporter.SetPhase("Resolving commit branch")
+			reporter.SetDetail(headSHA)
+		}
+		prs, err := githubapi.FetchCommitAssociatedPRs(client, parsed.Owner, parsed.Repo, headSHA)
+		if err == nil && len(prs) > 0 {
+			targetBranch = prs[0].Base.Ref
+		}
+		if targetBranch == "" {
+			if repoMeta, err := githubapi.FetchRepository(client, baseURL); err == nil && repoMeta.DefaultBranch != "" {
+				targetBranch = repoMeta.DefaultBranch
+			}
+		}
+		branchName = targetBranch
+		if branchName == "" {
+			branchName = "unknown"
+		}
+
+		if reporter != nil {
+			reporter.SetPhase("Fetching commit runs")
+			reporter.SetDetail(headSHA)
+		}
+		allRunsForHead, err := githubapi.FetchWorkflowRuns(client, baseURL, headSHA, "", "")
+		if err != nil {
+			return nil, err
+		}
+		allCommitRunsCount = len(allRunsForHead)
+
+		runs, err := githubapi.FetchWorkflowRuns(client, baseURL, headSHA, branchName, "push")
+		if err != nil {
+			return nil, err
+		}
+		if reporter != nil {
+			reporter.SetPhase("Fetching commit metadata")
+			reporter.SetDetail(headSHA)
+		}
+		commitMeta, err := githubapi.FetchCommit(client, baseURL, headSHA)
+		if err == nil {
+			dateStr := commitMeta.Commit.Committer.Date
+			if dateStr == "" {
+				dateStr = commitMeta.Commit.Author.Date
+			}
+			if t, ok := utils.ParseTime(dateStr); ok {
+				ms := t.UnixMilli()
+				commitTimeMs = &ms
+			}
+		}
+
+		if commitTimeMs != nil {
+			filtered := []githubapi.WorkflowRun{}
+			for _, run := range runs {
+				if t, ok := utils.ParseTime(run.CreatedAt); ok {
+					if t.UnixMilli() >= *commitTimeMs {
+						filtered = append(filtered, run)
+					}
+				}
+			}
+			runs = filtered
+		}
+
+		if reporter != nil {
+			reporter.SetPhase("Computing commit job durations")
+			reporter.SetDetail(fmt.Sprintf("%d runs", len(allRunsForHead)))
+		}
+		for _, run := range allRunsForHead {
+			baseRepoURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", parsed.Owner, parsed.Repo)
+			jobsURL := fmt.Sprintf("%s/actions/runs/%d/jobs?per_page=100", baseRepoURL, run.ID)
+			jobs, err := githubapi.FetchJobsPaginated(client, jobsURL)
+			if err != nil {
+				continue
+			}
+			for _, job := range jobs {
+				if start, ok := utils.ParseTime(job.StartedAt); ok {
+					if end, ok := utils.ParseTime(job.CompletedAt); ok {
+						if end.After(start) {
+							allCommitRunsComputeMs += end.Sub(start).Milliseconds()
+						}
+					}
+				}
+			}
+		}
+
+		if len(runs) == 0 {
+			return nil, nil
+		}
+
+		return buildURLResult(parsed, urlIndex, headSHA, branchName, displayName, displayURL, reviewEvents, mergedAtMs, commitTimeMs, allCommitRunsCount, allCommitRunsComputeMs, runs, client, reporter)
+	}
+
+	if reporter != nil {
+		reporter.SetPhase("Fetching workflow runs")
+		reporter.SetDetail(headSHA)
+	}
+	runs, err := githubapi.FetchWorkflowRuns(client, baseURL, headSHA, "", "")
+	if err != nil {
+		return nil, err
+	}
+	if len(runs) == 0 {
+		return nil, nil
+	}
+	return buildURLResult(parsed, urlIndex, headSHA, branchName, displayName, displayURL, reviewEvents, mergedAtMs, commitTimeMs, allCommitRunsCount, allCommitRunsComputeMs, runs, client, reporter)
+}
+
+func buildURLResult(parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchName, displayName, displayURL string, reviewEvents []ReviewEvent, mergedAtMs, commitTimeMs *int64, allCommitRunsCount int, allCommitRunsComputeMs int64, runs []githubapi.WorkflowRun, client *githubapi.Client, reporter ProgressReporter) (*URLResult, error) {
+	if reporter != nil {
+		reporter.SetURLRuns(len(runs))
+		reporter.SetPhase("Processing workflow runs")
+		reporter.SetDetail(fmt.Sprintf("%d runs", len(runs)))
+	}
+	metrics := InitializeMetrics()
+	traceEvents := []TraceEvent{}
+	jobStartTimes := []JobEvent{}
+	jobEndTimes := []JobEvent{}
+	urlEarliestTime := FindEarliestTimestamp(runs)
+
+	type runResult struct {
+		metrics     Metrics
+		traceEvents []TraceEvent
+		jobStarts   []JobEvent
+		jobEnds     []JobEvent
+		err         error
+	}
+
+	workerCount := minInt(runtime.GOMAXPROCS(0), len(runs))
+	if workerCount == 0 {
+		workerCount = 1
+	}
+
+	jobsCh := make(chan struct {
+		index int
+		run   githubapi.WorkflowRun
+	})
+	resultsCh := make(chan runResult, len(runs))
+	var wg sync.WaitGroup
+
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobsCh {
+				processID := (urlIndex+1)*1000 + job.index + 1
+				runMetrics, runTrace, runStarts, runEnds, err := processWorkflowRun(job.run, job.index, processID, urlEarliestTime, parsed.Owner, parsed.Repo, parsed.Identifier, urlIndex, displayURL, parsed.Type, client, reporter)
+				resultsCh <- runResult{
+					metrics:     runMetrics,
+					traceEvents: runTrace,
+					jobStarts:   runStarts,
+					jobEnds:     runEnds,
+					err:         err,
+				}
+			}
+		}()
+	}
+
+	for runIndex, run := range runs {
+		jobsCh <- struct {
+			index int
+			run   githubapi.WorkflowRun
+		}{index: runIndex, run: run}
+	}
+	close(jobsCh)
+	wg.Wait()
+	close(resultsCh)
+
+	for result := range resultsCh {
+		if result.err != nil {
+			return nil, result.err
+		}
+		mergeMetrics(&metrics, result.metrics)
+		traceEvents = append(traceEvents, result.traceEvents...)
+		jobStartTimes = append(jobStartTimes, result.jobStarts...)
+		jobEndTimes = append(jobEndTimes, result.jobEnds...)
+		if reporter != nil {
+			reporter.ProcessRun()
+		}
+	}
+
+	finalMetrics := CalculateFinalMetrics(metrics, len(runs), jobStartTimes, jobEndTimes)
+	result := URLResult{
+		Owner:                  parsed.Owner,
+		Repo:                   parsed.Repo,
+		Identifier:             parsed.Identifier,
+		BranchName:             branchName,
+		HeadSHA:                headSHA,
+		Metrics:                finalMetrics,
+		TraceEvents:            traceEvents,
+		Type:                   parsed.Type,
+		DisplayName:            displayName,
+		DisplayURL:             displayURL,
+		URLIndex:               urlIndex,
+		JobStartTimes:          jobStartTimes,
+		JobEndTimes:            jobEndTimes,
+		EarliestTime:           urlEarliestTime,
+		ReviewEvents:           reviewEvents,
+		MergedAtMs:             mergedAtMs,
+		CommitTimeMs:           commitTimeMs,
+		AllCommitRunsCount:     allCommitRunsCount,
+		AllCommitRunsComputeMs: allCommitRunsComputeMs,
+	}
+	return &result, nil
+}
+
+func processWorkflowRun(run githubapi.WorkflowRun, runIndex, processID int, earliestTime int64, owner, repo, identifier string, urlIndex int, displayURL, sourceType string, client *githubapi.Client, reporter ProgressReporter) (Metrics, []TraceEvent, []JobEvent, []JobEvent, error) {
+	metrics := InitializeMetrics()
+	traceEvents := []TraceEvent{}
+	jobStartTimes := []JobEvent{}
+	jobEndTimes := []JobEvent{}
+
+	metrics.TotalRuns = 1
+	if run.Status == "completed" && run.Conclusion == "success" {
+		metrics.SuccessfulRuns = 1
+	} else {
+		metrics.FailedRuns = 1
+	}
+
+	baseURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", run.Repository.Owner.Login, run.Repository.Name)
+	jobsURL := fmt.Sprintf("%s/actions/runs/%d/jobs?per_page=100", baseURL, run.ID)
+	if reporter != nil {
+		reporter.SetPhase("Fetching jobs")
+		reporter.SetDetail(defaultRunName(run))
+	}
+	jobs, err := githubapi.FetchJobsPaginated(client, jobsURL)
+	if err != nil {
+		return metrics, traceEvents, jobStartTimes, jobEndTimes, err
+	}
+
+	runStart, ok := utils.ParseTime(run.CreatedAt)
+	if !ok {
+		return metrics, traceEvents, jobStartTimes, jobEndTimes, nil
+	}
+	runEnd, ok := utils.ParseTime(run.UpdatedAt)
+	if !ok {
+		runEnd = runStart.Add(time.Millisecond)
+	}
+
+	runEndTs := runEnd.UnixMilli()
+	runStartTs := runStart.UnixMilli()
+	for _, job := range jobs {
+		if t, ok := utils.ParseTime(job.CompletedAt); ok {
+			if t.UnixMilli() > runEndTs {
+				runEndTs = t.UnixMilli()
+			}
+		}
+	}
+	runDurationMs := runEndTs - runStartTs
+	metrics.TotalDuration += float64(runDurationMs)
+
+	sourceInfo := sourceType
+	if sourceType == "pr" {
+		sourceInfo = fmt.Sprintf("PR #%s", identifier)
+	} else {
+		sourceInfo = fmt.Sprintf("commit %s", truncateString(identifier, 8))
+	}
+
+	processName := fmt.Sprintf("[%d] %s - %s (%s)", urlIndex+1, sourceInfo, defaultRunName(run), run.Status)
+	colors := []string{"#4285f4", "#ea4335", "#fbbc04", "#34a853", "#ff6d01", "#46bdc6", "#7b1fa2", "#d81b60"}
+	colorIndex := urlIndex % len(colors)
+
+	traceEvents = append(traceEvents, TraceEvent{
+		Name: "process_name",
+		Ph:   "M",
+		Pid:  processID,
+		Args: map[string]interface{}{
+			"name":              processName,
+			"source_url":        displayURL,
+			"source_type":       sourceType,
+			"source_identifier": identifier,
+			"repository":        fmt.Sprintf("%s/%s", owner, repo),
+		},
+	})
+	traceEvents = append(traceEvents, TraceEvent{
+		Name: "process_color",
+		Ph:   "M",
+		Pid:  processID,
+		Args: map[string]interface{}{
+			"color":      colors[colorIndex],
+			"color_name": fmt.Sprintf("url_%d_color", urlIndex+1),
+		},
+	})
+
+	workflowThreadID := 1
+	AddThreadMetadata(&traceEvents, processID, workflowThreadID, "📋 Workflow Overview", intPtr(0))
+
+	workflowURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID)
+	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%s", owner, repo, identifier)
+
+	normalizedRunStart := (runStartTs - earliestTime) * 1000
+	normalizedRunEnd := (runEndTs - earliestTime) * 1000
+	traceEvents = append(traceEvents, TraceEvent{
+		Name: fmt.Sprintf("Workflow: %s [%d]", defaultRunName(run), urlIndex+1),
+		Ph:   "X",
+		Ts:   normalizedRunStart,
+		Dur:  normalizedRunEnd - normalizedRunStart,
+		Pid:  processID,
+		Tid:  workflowThreadID,
+		Cat:  "workflow",
+		Args: map[string]interface{}{
+			"status":            run.Status,
+			"conclusion":        run.Conclusion,
+			"run_id":            run.ID,
+			"duration_ms":       runDurationMs,
+			"job_count":         len(jobs),
+			"url":               workflowURL,
+			"github_url":        workflowURL,
+			"pr_url":            prURL,
+			"pr_number":         identifier,
+			"repository":        fmt.Sprintf("%s/%s", owner, repo),
+			"source_url":        displayURL,
+			"source_type":       sourceType,
+			"source_identifier": identifier,
+			"url_index":         urlIndex + 1,
+		},
+	})
+
+	for jobIndex, job := range jobs {
+		jobThreadID := jobIndex + 10
+		processJob(job, jobIndex, run, jobThreadID, processID, earliestTime, &metrics, &traceEvents, &jobStartTimes, &jobEndTimes, prURL, urlIndex, displayURL, sourceType, identifier)
+	}
+	return metrics, traceEvents, jobStartTimes, jobEndTimes, nil
+}
+
+func processJob(job githubapi.Job, jobIndex int, run githubapi.WorkflowRun, jobThreadID, processID int, earliestTime int64, metrics *Metrics, traceEvents *[]TraceEvent, jobStartTimes, jobEndTimes *[]JobEvent, prURL string, urlIndex int, displayURL, sourceType, identifier string) {
+	if job.StartedAt == "" {
+		return
+	}
+	isPending := job.Status != "completed" || job.CompletedAt == ""
+	if isPending {
+		jobURL := job.HTMLURL
+		if jobURL == "" {
+			jobURL = fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/job/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID, job.ID)
+		}
+		metrics.PendingJobs = append(metrics.PendingJobs, PendingJob{
+			Name:      job.Name,
+			Status:    job.Status,
+			StartedAt: job.StartedAt,
+			URL:       jobURL,
+		})
+	}
+
+	absoluteJobStart, ok := utils.ParseTime(job.StartedAt)
+	if !ok {
+		return
+	}
+	absoluteJobEnd := time.Now()
+	if !isPending {
+		if t, ok := utils.ParseTime(job.CompletedAt); ok {
+			absoluteJobEnd = t
+		}
+	}
+
+	metrics.TotalJobs++
+	if !isPending && (job.Status != "completed" || job.Conclusion != "success") {
+		metrics.FailedJobs++
+	}
+
+	jobStartTs := absoluteJobStart.UnixMilli()
+	jobEndTs := maxInt64(jobStartTs+1, absoluteJobEnd.UnixMilli())
+	jobDuration := jobEndTs - jobStartTs
+	if jobStartTs >= jobEndTs || jobDuration <= 0 {
+		return
+	}
+
+	metrics.JobDurations = append(metrics.JobDurations, float64(jobDuration))
+	metrics.JobNames = append(metrics.JobNames, job.Name)
+	jobURL := job.HTMLURL
+	if jobURL == "" {
+		jobURL = fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/job/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID, job.ID)
+	}
+	metrics.JobURLs = append(metrics.JobURLs, jobURL)
+	if jobDuration > int64(metrics.LongestJob.Duration) {
+		metrics.LongestJob = JobDuration{Name: job.Name, Duration: float64(jobDuration)}
+	}
+	if float64(jobDuration) < metrics.ShortestJob.Duration {
+		metrics.ShortestJob = JobDuration{Name: job.Name, Duration: float64(jobDuration)}
+	}
+	if job.RunnerName != "" {
+		metrics.RunnerTypes[job.RunnerName] = struct{}{}
+	}
+
+	*jobStartTimes = append(*jobStartTimes, JobEvent{Ts: jobStartTs, Type: "start"})
+	*jobEndTimes = append(*jobEndTimes, JobEvent{Ts: jobEndTs, Type: "end"})
+
+	jobIcon := "❓"
+	switch {
+	case isPending:
+		jobIcon = "⏳"
+	case job.Conclusion == "success":
+		jobIcon = "✅"
+	case job.Conclusion == "failure":
+		jobIcon = "❌"
+	case job.Conclusion == "skipped" || job.Conclusion == "cancelled":
+		jobIcon = "⏸️"
+	}
+
+	metrics.JobTimeline = append(metrics.JobTimeline, TimelineJob{
+		Name:       job.Name,
+		StartTime:  jobStartTs,
+		EndTime:    jobEndTs,
+		Conclusion: job.Conclusion,
+		Status:     job.Status,
+		URL:        jobURL,
+	})
+
+	AddThreadMetadata(traceEvents, processID, jobThreadID, fmt.Sprintf("%s %s", jobIcon, job.Name), intPtr(jobIndex+10))
+
+	normalizedJobStart := (jobStartTs - earliestTime) * 1000
+	normalizedJobEnd := (jobEndTs - earliestTime) * 1000
+	*traceEvents = append(*traceEvents, TraceEvent{
+		Name: fmt.Sprintf("Job: %s [%d]", job.Name, urlIndex+1),
+		Ph:   "X",
+		Ts:   normalizedJobStart,
+		Dur:  normalizedJobEnd - normalizedJobStart,
+		Pid:  processID,
+		Tid:  jobThreadID,
+		Cat:  "job",
+		Args: map[string]interface{}{
+			"status":            job.Status,
+			"conclusion":        job.Conclusion,
+			"duration_ms":       jobDuration,
+			"runner_name":       defaultString(job.RunnerName, "unknown"),
+			"step_count":        len(job.Steps),
+			"url":               jobURL,
+			"github_url":        jobURL,
+			"pr_url":            prURL,
+			"pr_number":         lastPathSegment(prURL),
+			"repository":        repoFromURL(prURL),
+			"job_id":            job.ID,
+			"source_url":        displayURL,
+			"source_type":       sourceType,
+			"source_identifier": identifier,
+			"url_index":         urlIndex + 1,
+		},
+	})
+
+	for _, step := range job.Steps {
+		processStep(step, job, run, jobThreadID, processID, earliestTime, jobEndTs, metrics, traceEvents, prURL, urlIndex, displayURL, sourceType, identifier)
+	}
+}
+
+func processStep(step githubapi.Step, job githubapi.Job, run githubapi.WorkflowRun, jobThreadID, processID int, earliestTime, jobEndTs int64, metrics *Metrics, traceEvents *[]TraceEvent, prURL string, urlIndex int, displayURL, sourceType, identifier string) {
+	if step.StartedAt == "" || step.CompletedAt == "" {
+		return
+	}
+	metrics.TotalSteps++
+	if step.Conclusion == "failure" {
+		metrics.FailedSteps++
+	}
+	start, ok := utils.ParseTime(step.StartedAt)
+	if !ok {
+		return
+	}
+	end, ok := utils.ParseTime(step.CompletedAt)
+	if !ok {
+		return
+	}
+	stepStart := start.UnixMilli()
+	stepEnd := maxInt64(stepStart+1, end.UnixMilli())
+	if stepEnd > jobEndTs {
+		stepEnd = maxInt64(stepStart+1, jobEndTs)
+	}
+	duration := stepEnd - stepStart
+	if stepStart >= stepEnd || duration <= 0 {
+		return
+	}
+
+	stepIcon := utils.GetStepIcon(step.Name, step.Conclusion)
+	stepCategory := utils.CategorizeStep(step.Name)
+	stepURL := job.HTMLURL
+	if stepURL == "" {
+		stepURL = fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/job/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID, job.ID)
+	}
+
+	metrics.StepDurations = append(metrics.StepDurations, StepDuration{
+		Name:     fmt.Sprintf("%s %s", stepIcon, step.Name),
+		Duration: float64(duration),
+		URL:      stepURL,
+		JobName:  job.Name,
+	})
+
+	normalizedStepStart := (stepStart - earliestTime) * 1000
+	normalizedStepEnd := (stepEnd - earliestTime) * 1000
+	*traceEvents = append(*traceEvents, TraceEvent{
+		Name: fmt.Sprintf("%s %s [%d]", stepIcon, step.Name, urlIndex+1),
+		Ph:   "X",
+		Ts:   normalizedStepStart,
+		Dur:  normalizedStepEnd - normalizedStepStart,
+		Pid:  processID,
+		Tid:  jobThreadID,
+		Cat:  stepCategory,
+		Args: map[string]interface{}{
+			"status":            step.Status,
+			"conclusion":        step.Conclusion,
+			"duration_ms":       duration,
+			"job_name":          job.Name,
+			"url":               stepURL,
+			"github_url":        stepURL,
+			"pr_url":            prURL,
+			"pr_number":         lastPathSegment(prURL),
+			"repository":        repoFromURL(prURL),
+			"step_number":       step.Number,
+			"source_url":        displayURL,
+			"source_type":       sourceType,
+			"source_identifier": identifier,
+			"url_index":         urlIndex + 1,
+		},
+	})
+}
+
+func addReviewMarkersToTrace(results []URLResult, events *[]TraceEvent) {
+	metricsProcessID := 999
+	markersThreadID := 2
+	AddThreadMetadata(events, metricsProcessID, markersThreadID, "🔖 Review & Merge Markers", intPtr(1))
+
+	for _, result := range results {
+		if len(result.ReviewEvents) == 0 {
+			continue
+		}
+		timelineStart := result.EarliestTime
+		timelineEnd := result.EarliestTime
+		if len(result.Metrics.JobTimeline) > 0 {
+			timelineStart = result.Metrics.JobTimeline[0].StartTime
+			timelineEnd = result.Metrics.JobTimeline[0].EndTime
+			for _, job := range result.Metrics.JobTimeline {
+				if job.StartTime < timelineStart {
+					timelineStart = job.StartTime
+				}
+				if job.EndTime > timelineEnd {
+					timelineEnd = job.EndTime
+				}
+			}
+		}
+
+		for _, event := range result.ReviewEvents {
+			originalEventTime := event.TimeMillis()
+			clampedEventTime := maxInt64(timelineStart, minInt64(originalEventTime, timelineEnd))
+			ts := (clampedEventTime - result.EarliestTime) * 1000
+			name := "Approved"
+			user := event.Reviewer
+			label := utils.YellowText("▲ approved")
+			if event.Type == "merged" {
+				name = "Merged"
+				user = event.MergedBy
+				label = utils.GreenText("◆ merged")
+			}
+			if user != "" {
+				if event.Type == "merged" {
+					label = utils.GreenText(fmt.Sprintf("◆ merged by %s", user))
+				} else {
+					label = utils.YellowText(fmt.Sprintf("▲ approved by %s", user))
+				}
+			}
+
+			userURL := ""
+			if user != "" {
+				userURL = fmt.Sprintf("https://github.com/%s", user)
+			}
+			*events = append(*events, TraceEvent{
+				Name: name,
+				Ph:   "i",
+				S:    "p",
+				Ts:   ts,
+				Pid:  metricsProcessID,
+				Tid:  markersThreadID,
+				Args: map[string]interface{}{
+					"url_index":              result.URLIndex + 1,
+					"source_url":             result.DisplayURL,
+					"source_type":            result.Type,
+					"source_identifier":      result.Identifier,
+					"user":                   user,
+					"user_url":               userURL,
+					"label":                  label,
+					"original_event_time_ms": originalEventTime,
+					"clamped":                originalEventTime != clampedEventTime,
+				},
+			})
+		}
+	}
+}
+
+func shipItMatch(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(lower, "ship it") || strings.Contains(lower, "shipit")
+}
+
+func resolvedUser(user *githubapi.UserInfo) string {
+	if user == nil {
+		return ""
+	}
+	if user.Login != "" {
+		return user.Login
+	}
+	return user.Name
+}
+
+func truncateString(value string, max int) string {
+	if len(value) <= max {
+		return value
+	}
+	return value[:max]
+}
+
+func defaultRunName(run githubapi.WorkflowRun) string {
+	if run.Name != "" {
+		return run.Name
+	}
+	return fmt.Sprintf("Run %d", run.ID)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func defaultString(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func lastPathSegment(urlValue string) string {
+	parts := strings.Split(strings.TrimRight(urlValue, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
+}
+
+func repoFromURL(urlValue string) string {
+	parts := strings.Split(strings.TrimRight(urlValue, "/"), "/")
+	if len(parts) < 4 {
+		return ""
+	}
+	return strings.Join(parts[len(parts)-4:len(parts)-2], "/")
+}
+
+func maxJobEnd(events []JobEvent) int64 {
+	max := int64(0)
+	for _, event := range events {
+		if event.Type == "end" && event.Ts > max {
+			max = event.Ts
+		}
+	}
+	return max
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func minInt64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func mergeMetrics(target *Metrics, source Metrics) {
+	target.TotalRuns += source.TotalRuns
+	target.SuccessfulRuns += source.SuccessfulRuns
+	target.FailedRuns += source.FailedRuns
+	target.TotalJobs += source.TotalJobs
+	target.FailedJobs += source.FailedJobs
+	target.TotalSteps += source.TotalSteps
+	target.FailedSteps += source.FailedSteps
+	target.TotalDuration += source.TotalDuration
+
+	target.JobDurations = append(target.JobDurations, source.JobDurations...)
+	target.JobNames = append(target.JobNames, source.JobNames...)
+	target.JobURLs = append(target.JobURLs, source.JobURLs...)
+	target.StepDurations = append(target.StepDurations, source.StepDurations...)
+	target.JobTimeline = append(target.JobTimeline, source.JobTimeline...)
+	target.PendingJobs = append(target.PendingJobs, source.PendingJobs...)
+
+	for runner := range source.RunnerTypes {
+		target.RunnerTypes[runner] = struct{}{}
+	}
+
+	if source.LongestJob.Duration > target.LongestJob.Duration {
+		target.LongestJob = source.LongestJob
+	}
+	if source.ShortestJob.Duration < target.ShortestJob.Duration {
+		target.ShortestJob = source.ShortestJob
+	}
+}

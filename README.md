@@ -9,14 +9,9 @@ Analyze GitHub Actions workflow performance and generate Chrome Tracing format o
 - Interactive terminal output with clickable links
 - Chrome Tracing format for ui.Perfetto.dev analysis
 
-## TODO
-- [ ] release as npm module, so it can be used via npx
-- [ ] provide clickable perfetto example
-- [ ] see if it's easy enough to bundle perfetto (or similar) UI
-- [ ] even more actionable output
-- [ ] explore ability to compare multiple runs and provide deeper repo-wide insights
-- [ ] explore ability to make this a GHA action itself, so that all PR can surface these details
-- [ ] ???
+## Requirements
+
+- Go 1.25+
 
 ## 📊 Sample Output
 
@@ -25,7 +20,7 @@ Example from one of Node.js’s GHA runs
 
 <img width="1626" height="1042" alt="image" src="https://github.com/user-attachments/assets/7ebf33cb-5caf-4233-9e0d-c5f562a8e6ef" />
 
-### Terminal Analysis
+### Terminal Analysis (Text)
 ```bash
 GitHub Actions Performance Report
 ================================================================================
@@ -62,12 +57,12 @@ Slowest Steps:
 #### With Environment Variable (Recommended)
 ```bash
 export GITHUB_TOKEN=ghp_your_token_here
-node main.mjs https://github.com/owner/repo/pull/123 <commit-or-pr-urls...>
+go run ./cmd/gha-analyzer https://github.com/owner/repo/pull/123 <commit-or-pr-urls...>
 ```
 
 #### With Command Line Token
 ```bash
-node main.mjs https://github.com/owner/repo/pull/123 <github_token>
+go run ./cmd/gha-analyzer https://github.com/owner/repo/pull/123 <github_token>
 ```
 
 ### GitHub Token Setup
@@ -80,14 +75,33 @@ node main.mjs https://github.com/owner/repo/pull/123 <github_token>
 export GITHUB_TOKEN=ghp_your_token_here
 
 # Now you can run without specifying token each time
-node main.mjs https://github.com/owner/repo/pull/123
+go run ./cmd/gha-analyzer https://github.com/owner/repo/pull/123
+```
+
+### Markdown Output
+
+```bash
+go run ./cmd/gha-analyzer https://github.com/owner/repo/pull/123 --format=markdown
+```
+
+### Perfetto Trace Output
+
+```bash
+go run ./cmd/gha-analyzer https://github.com/owner/repo/pull/123 --perfetto=trace.json
+```
+
+### Build
+
+```bash
+go build ./cmd/gha-analyzer
+./gha-analyzer https://github.com/owner/repo/pull/123
 ```
 
 ## 🧪 Testing
 
 ```bash
 # Run all tests
-npm test
+go test ./...
 ```
 
 ## 🤝 Contributing
@@ -95,7 +109,7 @@ npm test
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/amazing-feature`
 3. Add tests for your changes
-4. Ensure all tests pass: `npm test`
+4. Ensure all tests pass: `go test ./...`
 5. Commit your changes: `git commit -m 'Add amazing feature'`
 6. Push to the branch: `git push origin feature/amazing-feature`
 7. Open a Pull Request
