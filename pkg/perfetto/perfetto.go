@@ -9,9 +9,10 @@ import (
 	"path/filepath"
 
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	"go.opentelemetry.io/otel/sdk/trace"
 )
 
-func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime int64, perfettoFile string, openInPerfetto bool) error {
+func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime int64, perfettoFile string, openInPerfetto bool, spans []trace.ReadOnlySpan) error {
 	traceTitle := fmt.Sprintf("GitHub Actions: Multi-URL Analysis (%d URLs)", len(urlResults))
 	traceMetadata := []analyzer.TraceEvent{
 		{
@@ -26,22 +27,77 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 		},
 	}
 
-	renormalized := make([]analyzer.TraceEvent, 0, len(traceEvents))
-	for _, event := range traceEvents {
-		if event.Ts != 0 {
+	// Convert OTel spans to TraceEvents
+	otelEvents := []analyzer.TraceEvent{}
+	for _, s := range spans {
+		// Only include relevant spans
+		isGHA := false
+		attrs := make(map[string]interface{})
+		for _, attr := range s.Attributes() {
+			attrs[string(attr.Key)] = attr.Value.AsInterface()
+			if attr.Key == "type" && (attr.Value.AsString() == "workflow" || attr.Value.AsString() == "job" || attr.Value.AsString() == "step" || attr.Value.AsString() == "marker") {
+				isGHA = true
+			}
+		}
+		if !isGHA {
+			continue
+		}
+
+		ts := (s.StartTime().UnixMilli() - globalEarliestTime) * 1000
+		dur := s.EndTime().Sub(s.StartTime()).Microseconds()
+		if dur == 0 {
+			dur = 1000 // Ensure at least 1ms for visibility if it's a point-in-time span that isn't a marker ph:i
+		}
+
+		ph := "X"
+		if attrs["type"] == "marker" {
+			ph = "i"
+		}
+
+		// Map OTel hierarchy to Perfetto PID/TID if possible
+		// For now, let's use a simple mapping or just 0
+		pid := 1
+		tid := 1
+
+		// Try to find process info from attributes
+		if runID, ok := attrs["github.run_id"].(int64); ok {
+			tid = int(runID % 10000)
+		}
+
+		otelEvents = append(otelEvents, analyzer.TraceEvent{
+			Name: s.Name(),
+			Ph:   ph,
+			Ts:   ts,
+			Dur:  dur,
+			Pid:  pid,
+			Tid:  tid,
+			Cat:  fmt.Sprintf("%v", attrs["type"]),
+			Args: attrs,
+		})
+	}
+
+	allEvents := append(traceEvents, otelEvents...)
+
+	renormalized := make([]analyzer.TraceEvent, 0, len(allEvents))
+	for _, event := range allEvents {
+		// Only renormalize legacy events that have url_index
+		isLegacy := false
+		if event.Args != nil {
+			if _, ok := event.Args["url_index"]; ok {
+				isLegacy = true
+			}
+		}
+
+		if isLegacy && event.Ts != 0 {
 			eventURLIndex := 1
-			if event.Args != nil {
-				if val, ok := event.Args["url_index"].(int); ok {
-					eventURLIndex = val
-				} else if valFloat, ok := event.Args["url_index"].(float64); ok {
-					eventURLIndex = int(valFloat)
-				}
+			if val, ok := event.Args["url_index"].(int); ok {
+				eventURLIndex = val
+			} else if valFloat, ok := event.Args["url_index"].(float64); ok {
+				eventURLIndex = int(valFloat)
 			}
 			eventSource := ""
-			if event.Args != nil {
-				if val, ok := event.Args["source_url"].(string); ok {
-					eventSource = val
-				}
+			if val, ok := event.Args["source_url"].(string); ok {
+				eventSource = val
 			}
 
 			var urlResult *analyzer.URLResult
@@ -70,7 +126,7 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 			"total_runs":   combined.TotalRuns,
 			"total_jobs":   combined.TotalJobs,
 			"success_rate": fmt.Sprintf("%s%%", combined.SuccessRate),
-			"total_events": len(traceEvents),
+			"total_events": len(renormalized),
 			"urls":         buildTraceURLData(urlResults),
 			"performance_analysis": map[string]interface{}{
 				"slowest_jobs": buildSlowJobsForTrace(combined.JobTimeline),

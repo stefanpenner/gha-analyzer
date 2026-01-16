@@ -210,7 +210,7 @@ func OutputCombinedResults(w io.Writer, urlResults []analyzer.URLResult, combine
 	RenderOTelTimeline(w, spans)
 
 	if perfettoFile != "" {
-		return perfetto.WriteTrace(w, urlResults, combined, traceEvents, globalEarliestTime, perfettoFile, openInPerfetto)
+		return perfetto.WriteTrace(w, urlResults, combined, traceEvents, globalEarliestTime, perfettoFile, openInPerfetto, spans)
 	}
 	return nil
 }

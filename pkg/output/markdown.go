@@ -9,9 +9,10 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/gha-analyzer/pkg/perfetto"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"go.opentelemetry.io/otel/sdk/trace"
 )
 
-func OutputCombinedResultsMarkdown(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime, globalLatestTime int64, perfettoFile string, openInPerfetto bool) error {
+func OutputCombinedResultsMarkdown(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime, globalLatestTime int64, perfettoFile string, openInPerfetto bool, spans []trace.ReadOnlySpan) error {
 	fmt.Fprintln(w, "# GitHub Actions Performance Report")
 	fmt.Fprintln(w, "")
 	fmt.Fprintf(w, "- Perfetto UI: %s\n", markdownLink("https://ui.perfetto.dev", "https://ui.perfetto.dev"))
@@ -121,7 +122,7 @@ func OutputCombinedResultsMarkdown(w io.Writer, urlResults []analyzer.URLResult,
 	}
 
 	if perfettoFile != "" {
-		if err := perfetto.WriteTrace(w, urlResults, combined, traceEvents, globalEarliestTime, perfettoFile, openInPerfetto); err != nil {
+		if err := perfetto.WriteTrace(w, urlResults, combined, traceEvents, globalEarliestTime, perfettoFile, openInPerfetto, spans); err != nil {
 			return err
 		}
 	}

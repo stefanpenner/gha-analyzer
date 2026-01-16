@@ -875,8 +875,7 @@ func addReviewMarkersToTrace(results []URLResult, events *[]TraceEvent) {
 
 		for _, event := range result.ReviewEvents {
 			originalEventTime := event.TimeMillis()
-			clampedEventTime := maxInt64(timelineStart, minInt64(originalEventTime, timelineEnd))
-			ts := (clampedEventTime - result.EarliestTime) * 1000
+			ts := (originalEventTime - result.EarliestTime) * 1000
 			name := "Approved"
 			user := event.Reviewer
 			label := utils.YellowText("▲ approved")
@@ -913,7 +912,7 @@ func addReviewMarkersToTrace(results []URLResult, events *[]TraceEvent) {
 					"user_url":               userURL,
 					"label":                  label,
 					"original_event_time_ms": originalEventTime,
-					"clamped":                originalEventTime != clampedEventTime,
+					"clamped":                false,
 				},
 			}
 			*events = append(*events, marker)
