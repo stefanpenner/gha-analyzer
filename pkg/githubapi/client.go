@@ -60,39 +60,29 @@ func WithMaxConcurrency(max int) Option {
 	}
 }
 
-func WithMinRemaining(minRemaining int) Option {
-	return func(c *Client) {
-		if minRemaining < 0 {
-			minRemaining = 0
-		}
-		c.limiter.minRemaining = minRemaining
-	}
-}
-
-func WithRequestInterval(interval time.Duration) Option {
-	return func(c *Client) {
-		if interval < 0 {
-			interval = 0
-		}
-		c.limiter.minInterval = interval
-	}
-}
-
 func NewClient(context Context, opts ...Option) *Client {
 	client := &Client{
 		context: context,
-		limiter: &rateLimiter{
-			minRemaining: 10,
-			minInterval:  200 * time.Millisecond,
-		},
+		limiter: &rateLimiter{},
 	}
 	for _, opt := range opts {
 		opt(client)
 	}
 
+	if client.semaphore == nil {
+		client.semaphore = make(chan struct{}, 10)
+	}
+
 	if client.httpClient == nil {
 		// Base transport
 		var base http.RoundTripper = http.DefaultTransport
+
+		// Add rate limiting (MUST be behind cache)
+		base = &RateLimitedTransport{
+			Base:      base,
+			Limiter:   client.limiter,
+			Semaphore: client.semaphore,
+		}
 
 		// Add caching
 		if client.context.CacheDir != "" {
@@ -106,10 +96,6 @@ func NewClient(context Context, opts ...Option) *Client {
 			Transport: base,
 			Timeout:   60 * time.Second,
 		}
-	}
-
-	if client.semaphore == nil {
-		client.semaphore = make(chan struct{}, 4)
 	}
 
 	return client
@@ -219,28 +205,16 @@ type GitHubError struct {
 }
 
 type rateLimiter struct {
-	minRemaining int
-	minInterval  time.Duration
-	mu           sync.Mutex
-	remaining    int
-	resetTime    time.Time
-	lastRequest  time.Time
+	mu        sync.Mutex
+	remaining int
+	resetTime time.Time
 }
 
 func (r *rateLimiter) waitIfNeeded() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	now := time.Now()
-	if r.minInterval > 0 && !r.lastRequest.IsZero() {
-		next := r.lastRequest.Add(r.minInterval)
-		if now.Before(next) {
-			time.Sleep(next.Sub(now))
-		}
-	}
-	r.lastRequest = time.Now()
-
-	if r.remaining > 0 && r.remaining <= r.minRemaining && !r.resetTime.IsZero() {
+	if r.remaining == 0 && !r.resetTime.IsZero() {
 		if time.Until(r.resetTime) > 0 {
 			time.Sleep(time.Until(r.resetTime) + time.Second)
 		}
@@ -262,30 +236,40 @@ func (r *rateLimiter) updateFromHeaders(headers http.Header) {
 	}
 }
 
-func doRequest(ctx context.Context, client *Client, req *http.Request) (*http.Response, error) {
-	client.semaphore <- struct{}{}
-	defer func() { <-client.semaphore }()
+type RateLimitedTransport struct {
+	Base      http.RoundTripper
+	Limiter   *rateLimiter
+	Semaphore chan struct{}
+}
 
-	client.limiter.waitIfNeeded()
-	resp, err := client.httpClient.Do(req.WithContext(ctx))
+func (t *RateLimitedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	t.Semaphore <- struct{}{}
+	defer func() { <-t.Semaphore }()
+
+	t.Limiter.waitIfNeeded()
+	resp, err := t.Base.RoundTrip(req)
 	if err != nil {
 		return nil, err
 	}
 
-	client.limiter.updateFromHeaders(resp.Header)
+	t.Limiter.updateFromHeaders(resp.Header)
 
 	if shouldRetryRateLimit(resp) {
 		waitForRateLimit(resp)
 		_ = resp.Body.Close()
-		client.limiter.waitIfNeeded()
-		resp, err = client.httpClient.Do(req.WithContext(ctx))
+		t.Limiter.waitIfNeeded()
+		resp, err = t.Base.RoundTrip(req)
 		if err != nil {
 			return nil, err
 		}
-		client.limiter.updateFromHeaders(resp.Header)
+		t.Limiter.updateFromHeaders(resp.Header)
 	}
 
 	return resp, nil
+}
+
+func doRequest(ctx context.Context, client *Client, req *http.Request) (*http.Response, error) {
+	return client.httpClient.Do(req.WithContext(ctx))
 }
 
 func shouldRetryRateLimit(resp *http.Response) bool {

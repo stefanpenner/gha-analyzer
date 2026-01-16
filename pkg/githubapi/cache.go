@@ -85,13 +85,23 @@ func (t *CachedTransport) saveToCache(path string, resp *http.Response) {
 		return
 	}
 
-	// We need to buffer the body to save it and still return it
+	// We need to dump the response to save it. 
+	// DumpResponse reads and CLOSES the body if it's not already buffered.
+	// But it actually returns the full bytes including the body.
 	dump, err := httputil.DumpResponse(resp, true)
 	if err != nil {
 		return
 	}
 
 	_ = os.WriteFile(path, dump, 0644)
+
+	// Since DumpResponse consumed the body, we MUST restore it so the 
+	// caller of RoundTrip can still read it.
+	// We parse it back to a temporary response to get the body out.
+	restored, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(dump)), resp.Request)
+	if err == nil {
+		resp.Body = restored.Body
+	}
 }
 
 // ClearCache removes all cached files.

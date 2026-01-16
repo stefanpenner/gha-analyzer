@@ -65,12 +65,12 @@ func RenderOTelTimeline(w io.Writer, spans []trace.ReadOnlySpan) {
 	}
 
 	// Filter out internal instrumentation spans by default
-	// We only want to show spans that are part of the GHA hierarchy (workflow, job, step)
+	// We only want to show spans that are part of the GHA hierarchy (workflow, job, step) or markers
 	var filtered []trace.ReadOnlySpan
 	for _, s := range spans {
 		isGHA := false
 		for _, attr := range s.Attributes() {
-			if attr.Key == "type" && (attr.Value.AsString() == "workflow" || attr.Value.AsString() == "job" || attr.Value.AsString() == "step") {
+			if attr.Key == "type" && (attr.Value.AsString() == "workflow" || attr.Value.AsString() == "job" || attr.Value.AsString() == "step" || attr.Value.AsString() == "marker") {
 				isGHA = true
 				break
 			}
@@ -147,6 +147,15 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 		icon = "⚙️ "
 	case "step":
 		icon = "  ↳"
+	case "marker":
+		switch attrs["github.event_type"] {
+		case "merged":
+			icon = "◆"
+		case "commit":
+			icon = "📍"
+		default:
+			icon = "▲"
+		}
 	}
 
 	statusIcon := ""
@@ -163,7 +172,16 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 	}
 
 	coloredBar := strings.Repeat(barChar, maxInt(1, clampedLength))
-	if attrs["github.conclusion"] == "failure" {
+	if attrs["type"] == "marker" {
+		switch attrs["github.event_type"] {
+		case "merged":
+			coloredBar = utils.GreenText("◆")
+		case "commit":
+			coloredBar = utils.BlueText("📍")
+		default:
+			coloredBar = utils.YellowText("▲")
+		}
+	} else if attrs["github.conclusion"] == "failure" {
 		coloredBar = utils.RedText(coloredBar)
 	} else if attrs["github.conclusion"] == "success" {
 		coloredBar = utils.GreenText(coloredBar)
@@ -173,17 +191,31 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 
 	indent := strings.Repeat("  ", depth)
 	remaining := strings.Repeat(" ", maxInt(0, scale-startPos-maxInt(1, clampedLength)))
+	if attrs["type"] == "marker" {
+		remaining = strings.Repeat(" ", maxInt(0, scale-startPos-1))
+	}
 
 	label := s.Name()
+	if user, ok := attrs["github.user"]; ok && user != "" {
+		label = fmt.Sprintf("%s by %s", label, user)
+	}
 	if url, ok := attrs["github.url"]; ok && url != "" {
 		label = utils.MakeClickableLink(url, label)
 	}
+	
 	displayName := fmt.Sprintf("%s%s %s", icon, statusIcon, label)
+	if attrs["type"] == "marker" {
+		displayName = label
+	}
 
-	fmt.Fprintf(w, "│%s%s%s  │ %s%s (%s)\n",
+	durationDisplay := fmt.Sprintf("(%s)", utils.HumanizeTime(duration.Seconds()))
+	if attrs["type"] == "marker" {
+		durationDisplay = "" // Points in time don't need duration
+	}
+
+	fmt.Fprintf(w, "│%s%s%s  │ %s%s %s\n",
 		padding, coloredBar, remaining,
-		indent, displayName,
-		utils.HumanizeTime(duration.Seconds()))
+		indent, displayName, durationDisplay)
 
 	for _, child := range node.Children {
 		renderNode(w, child, depth+1, globalStart, totalDuration, scale)

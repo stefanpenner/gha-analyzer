@@ -223,23 +223,45 @@ func processURL(ctx context.Context, githubURL string, urlIndex int, client *git
 			reporter.SetPhase("Computing commit job durations")
 			reporter.SetDetail(fmt.Sprintf("%d runs", len(allRunsForHead)))
 		}
+
+		// Parallelize fetching jobs for all runs to calculate total compute time
+		var computeMu sync.Mutex
+		var computeWg sync.WaitGroup
+		computeSemaphore := make(chan struct{}, 10) // Higher concurrency for this part
+		baseRepoURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", parsed.Owner, parsed.Repo)
+
 		for _, run := range allRunsForHead {
-			baseRepoURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", parsed.Owner, parsed.Repo)
-			jobsURL := fmt.Sprintf("%s/actions/runs/%d/jobs?per_page=100", baseRepoURL, run.ID)
-			jobs, err := githubapi.FetchJobsPaginated(ctx, client, jobsURL)
-			if err != nil {
+			if run.Status != "completed" {
 				continue
 			}
-			for _, job := range jobs {
-				if start, ok := utils.ParseTime(job.StartedAt); ok {
-					if end, ok := utils.ParseTime(job.CompletedAt); ok {
-						if end.After(start) {
-							allCommitRunsComputeMs += end.Sub(start).Milliseconds()
+			computeWg.Add(1)
+			go func(r githubapi.WorkflowRun) {
+				defer computeWg.Done()
+				computeSemaphore <- struct{}{}
+				defer func() { <-computeSemaphore }()
+
+				jobsURL := fmt.Sprintf("%s/actions/runs/%d/jobs?per_page=100", baseRepoURL, r.ID)
+				jobs, err := githubapi.FetchJobsPaginated(ctx, client, jobsURL)
+				if err != nil {
+					return
+				}
+
+				var runCompute int64
+				for _, job := range jobs {
+					if start, ok := utils.ParseTime(job.StartedAt); ok {
+						if end, ok := utils.ParseTime(job.CompletedAt); ok {
+							if end.After(start) {
+								runCompute += end.Sub(start).Milliseconds()
+							}
 						}
 					}
 				}
-			}
+				computeMu.Lock()
+				allCommitRunsComputeMs += runCompute
+				computeMu.Unlock()
+			}(run)
 		}
+		computeWg.Wait()
 
 		if len(runs) == 0 {
 			return nil, nil
@@ -333,6 +355,38 @@ func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex 
 		if reporter != nil {
 			reporter.ProcessRun()
 		}
+	}
+
+	// Emit OTel spans for review and merge events
+	for _, event := range reviewEvents {
+		eventTime, _ := utils.ParseTime(event.Time)
+		name := "Approved"
+		if event.Type == "merged" {
+			name = "Merged"
+		}
+
+		_, span := analyzerTracer.Start(ctx, name,
+			trace.WithTimestamp(eventTime),
+			trace.WithAttributes(
+				attribute.String("type", "marker"),
+				attribute.String("github.event_type", event.Type),
+				attribute.String("github.user", firstNonEmpty(event.Reviewer, event.MergedBy)),
+				attribute.String("github.url", event.URL),
+			),
+		)
+		span.End(trace.WithTimestamp(eventTime.Add(time.Millisecond)))
+	}
+
+	if commitTimeMs != nil {
+		t := time.UnixMilli(*commitTimeMs)
+		_, span := analyzerTracer.Start(ctx, "Commit Created",
+			trace.WithTimestamp(t),
+			trace.WithAttributes(
+				attribute.String("type", "marker"),
+				attribute.String("github.event_type", "commit"),
+			),
+		)
+		span.End(trace.WithTimestamp(t.Add(time.Millisecond)))
 	}
 
 	finalMetrics := CalculateFinalMetrics(metrics, len(runs), jobStartTimes, jobEndTimes)
