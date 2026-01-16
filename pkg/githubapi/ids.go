@@ -33,6 +33,14 @@ func NewSpanID(id int64) trace.SpanID {
 	return sid
 }
 
+// NewSpanIDFromString returns a deterministic SpanID based on a string (e.g., Step Name).
+func NewSpanIDFromString(s string) trace.SpanID {
+	sum := md5.Sum([]byte(s))
+	var sid trace.SpanID
+	copy(sid[:], sum[:8])
+	return sid
+}
+
 // ContextWithIDs returns a new context with the given TraceID and SpanID hints for the GHIDGenerator.
 func ContextWithIDs(ctx context.Context, tid trace.TraceID, sid trace.SpanID) context.Context {
 	if tid.IsValid() {

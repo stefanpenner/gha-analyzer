@@ -521,6 +521,10 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 
 	workflowURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID)
 
+	tid := githubapi.NewTraceID(run.ID, run.RunAttempt)
+	sid := githubapi.NewSpanID(run.ID)
+	ctx = githubapi.ContextWithIDs(ctx, tid, sid)
+
 	ctx, span := analyzerTracer.Start(ctx, defaultRunName(run),
 		trace.WithTimestamp(runStart),
 		trace.WithAttributes(
@@ -632,6 +636,9 @@ func processJob(ctx context.Context, job githubapi.Job, jobIndex int, run github
 	if jobURL == "" {
 		jobURL = fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/job/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID, job.ID)
 	}
+
+	sid := githubapi.NewSpanID(job.ID)
+	ctx = githubapi.ContextWithIDs(ctx, trace.TraceID{}, sid)
 
 	ctx, span := analyzerTracer.Start(ctx, job.Name,
 		trace.WithTimestamp(jobStart),
@@ -771,6 +778,9 @@ func processStep(ctx context.Context, step githubapi.Step, job githubapi.Job, ru
 	}
 
 	stepURL := fmt.Sprintf("%s#step:%d:1", jobURL, step.Number)
+
+	sid := githubapi.NewSpanIDFromString(fmt.Sprintf("%d-%s", job.ID, step.Name))
+	ctx = githubapi.ContextWithIDs(ctx, trace.TraceID{}, sid)
 
 	_, span := analyzerTracer.Start(ctx, step.Name,
 		trace.WithTimestamp(start),
