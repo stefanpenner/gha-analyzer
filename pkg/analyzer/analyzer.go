@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"strings"
@@ -9,7 +10,12 @@ import (
 
 	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
+
+var analyzerTracer = otel.Tracer("analyzer")
 
 type ProgressReporter interface {
 	StartURL(urlIndex int, url string)
@@ -29,7 +35,7 @@ func (e URLError) Error() string {
 	return fmt.Sprintf("Error processing URL %s: %s", e.URL, e.Err.Error())
 }
 
-func AnalyzeURLs(urls []string, client *githubapi.Client, reporter ProgressReporter) ([]URLResult, []TraceEvent, int64, int64, []URLError) {
+func AnalyzeURLs(ctx context.Context, urls []string, client *githubapi.Client, reporter ProgressReporter) ([]URLResult, []TraceEvent, int64, int64, []URLError) {
 	allTraceEvents := []TraceEvent{}
 	allJobStartTimes := []JobEvent{}
 	allJobEndTimes := []JobEvent{}
@@ -42,7 +48,7 @@ func AnalyzeURLs(urls []string, client *githubapi.Client, reporter ProgressRepor
 		if reporter != nil {
 			reporter.StartURL(urlIndex, githubURL)
 		}
-		result, err := processURL(githubURL, urlIndex, client, reporter)
+		result, err := processURL(ctx, githubURL, urlIndex, client, reporter)
 		if err != nil {
 			urlErrors = append(urlErrors, URLError{URL: githubURL, Err: err})
 			continue
@@ -80,7 +86,7 @@ func AnalyzeURLs(urls []string, client *githubapi.Client, reporter ProgressRepor
 	return urlResults, allTraceEvents, globalEarliestTime, globalLatestTime, urlErrors
 }
 
-func processURL(githubURL string, urlIndex int, client *githubapi.Client, reporter ProgressReporter) (*URLResult, error) {
+func processURL(ctx context.Context, githubURL string, urlIndex int, client *githubapi.Client, reporter ProgressReporter) (*URLResult, error) {
 	parsed, err := utils.ParseGitHubURL(githubURL)
 	if err != nil {
 		return nil, err
@@ -104,7 +110,7 @@ func processURL(githubURL string, urlIndex int, client *githubapi.Client, report
 			reporter.SetDetail(parsed.Identifier)
 		}
 		analyzingPRURL := fmt.Sprintf("https://github.com/%s/%s/pull/%s", parsed.Owner, parsed.Repo, parsed.Identifier)
-		prData, err := githubapi.FetchPullRequest(client, baseURL, parsed.Identifier)
+		prData, err := githubapi.FetchPullRequest(ctx, client, baseURL, parsed.Identifier)
 		if err != nil {
 			return nil, err
 		}
@@ -120,7 +126,7 @@ func processURL(githubURL string, urlIndex int, client *githubapi.Client, report
 			reporter.SetPhase("Fetching PR reviews")
 			reporter.SetDetail(parsed.Identifier)
 		}
-		reviews, err := githubapi.FetchPRReviews(client, parsed.Owner, parsed.Repo, parsed.Identifier)
+		reviews, err := githubapi.FetchPRReviews(ctx, client, parsed.Owner, parsed.Repo, parsed.Identifier)
 		if err != nil {
 			return nil, err
 		}
@@ -157,12 +163,12 @@ func processURL(githubURL string, urlIndex int, client *githubapi.Client, report
 			reporter.SetPhase("Resolving commit branch")
 			reporter.SetDetail(headSHA)
 		}
-		prs, err := githubapi.FetchCommitAssociatedPRs(client, parsed.Owner, parsed.Repo, headSHA)
+		prs, err := githubapi.FetchCommitAssociatedPRs(ctx, client, parsed.Owner, parsed.Repo, headSHA)
 		if err == nil && len(prs) > 0 {
 			targetBranch = prs[0].Base.Ref
 		}
 		if targetBranch == "" {
-			if repoMeta, err := githubapi.FetchRepository(client, baseURL); err == nil && repoMeta.DefaultBranch != "" {
+			if repoMeta, err := githubapi.FetchRepository(ctx, client, baseURL); err == nil && repoMeta.DefaultBranch != "" {
 				targetBranch = repoMeta.DefaultBranch
 			}
 		}
@@ -175,13 +181,13 @@ func processURL(githubURL string, urlIndex int, client *githubapi.Client, report
 			reporter.SetPhase("Fetching commit runs")
 			reporter.SetDetail(headSHA)
 		}
-		allRunsForHead, err := githubapi.FetchWorkflowRuns(client, baseURL, headSHA, "", "")
+		allRunsForHead, err := githubapi.FetchWorkflowRuns(ctx, client, baseURL, headSHA, "", "")
 		if err != nil {
 			return nil, err
 		}
 		allCommitRunsCount = len(allRunsForHead)
 
-		runs, err := githubapi.FetchWorkflowRuns(client, baseURL, headSHA, branchName, "push")
+		runs, err := githubapi.FetchWorkflowRuns(ctx, client, baseURL, headSHA, branchName, "push")
 		if err != nil {
 			return nil, err
 		}
@@ -189,7 +195,7 @@ func processURL(githubURL string, urlIndex int, client *githubapi.Client, report
 			reporter.SetPhase("Fetching commit metadata")
 			reporter.SetDetail(headSHA)
 		}
-		commitMeta, err := githubapi.FetchCommit(client, baseURL, headSHA)
+		commitMeta, err := githubapi.FetchCommit(ctx, client, baseURL, headSHA)
 		if err == nil {
 			dateStr := commitMeta.Commit.Committer.Date
 			if dateStr == "" {
@@ -220,7 +226,7 @@ func processURL(githubURL string, urlIndex int, client *githubapi.Client, report
 		for _, run := range allRunsForHead {
 			baseRepoURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", parsed.Owner, parsed.Repo)
 			jobsURL := fmt.Sprintf("%s/actions/runs/%d/jobs?per_page=100", baseRepoURL, run.ID)
-			jobs, err := githubapi.FetchJobsPaginated(client, jobsURL)
+			jobs, err := githubapi.FetchJobsPaginated(ctx, client, jobsURL)
 			if err != nil {
 				continue
 			}
@@ -239,24 +245,24 @@ func processURL(githubURL string, urlIndex int, client *githubapi.Client, report
 			return nil, nil
 		}
 
-		return buildURLResult(parsed, urlIndex, headSHA, branchName, displayName, displayURL, reviewEvents, mergedAtMs, commitTimeMs, allCommitRunsCount, allCommitRunsComputeMs, runs, client, reporter)
+		return buildURLResult(ctx, parsed, urlIndex, headSHA, branchName, displayName, displayURL, reviewEvents, mergedAtMs, commitTimeMs, allCommitRunsCount, allCommitRunsComputeMs, runs, client, reporter)
 	}
 
 	if reporter != nil {
 		reporter.SetPhase("Fetching workflow runs")
 		reporter.SetDetail(headSHA)
 	}
-	runs, err := githubapi.FetchWorkflowRuns(client, baseURL, headSHA, "", "")
+	runs, err := githubapi.FetchWorkflowRuns(ctx, client, baseURL, headSHA, "", "")
 	if err != nil {
 		return nil, err
 	}
 	if len(runs) == 0 {
 		return nil, nil
 	}
-	return buildURLResult(parsed, urlIndex, headSHA, branchName, displayName, displayURL, reviewEvents, mergedAtMs, commitTimeMs, allCommitRunsCount, allCommitRunsComputeMs, runs, client, reporter)
+	return buildURLResult(ctx, parsed, urlIndex, headSHA, branchName, displayName, displayURL, reviewEvents, mergedAtMs, commitTimeMs, allCommitRunsCount, allCommitRunsComputeMs, runs, client, reporter)
 }
 
-func buildURLResult(parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchName, displayName, displayURL string, reviewEvents []ReviewEvent, mergedAtMs, commitTimeMs *int64, allCommitRunsCount int, allCommitRunsComputeMs int64, runs []githubapi.WorkflowRun, client *githubapi.Client, reporter ProgressReporter) (*URLResult, error) {
+func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchName, displayName, displayURL string, reviewEvents []ReviewEvent, mergedAtMs, commitTimeMs *int64, allCommitRunsCount int, allCommitRunsComputeMs int64, runs []githubapi.WorkflowRun, client *githubapi.Client, reporter ProgressReporter) (*URLResult, error) {
 	if reporter != nil {
 		reporter.SetURLRuns(len(runs))
 		reporter.SetPhase("Processing workflow runs")
@@ -294,7 +300,7 @@ func buildURLResult(parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchN
 			defer wg.Done()
 			for job := range jobsCh {
 				processID := (urlIndex+1)*1000 + job.index + 1
-				runMetrics, runTrace, runStarts, runEnds, err := processWorkflowRun(job.run, job.index, processID, urlEarliestTime, parsed.Owner, parsed.Repo, parsed.Identifier, urlIndex, displayURL, parsed.Type, client, reporter)
+				runMetrics, runTrace, runStarts, runEnds, err := processWorkflowRun(ctx, job.run, job.index, processID, urlEarliestTime, parsed.Owner, parsed.Repo, parsed.Identifier, urlIndex, displayURL, parsed.Type, client, reporter)
 				resultsCh <- runResult{
 					metrics:     runMetrics,
 					traceEvents: runTrace,
@@ -354,7 +360,7 @@ func buildURLResult(parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchN
 	return &result, nil
 }
 
-func processWorkflowRun(run githubapi.WorkflowRun, runIndex, processID int, earliestTime int64, owner, repo, identifier string, urlIndex int, displayURL, sourceType string, client *githubapi.Client, reporter ProgressReporter) (Metrics, []TraceEvent, []JobEvent, []JobEvent, error) {
+func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex, processID int, earliestTime int64, owner, repo, identifier string, urlIndex int, displayURL, sourceType string, client *githubapi.Client, reporter ProgressReporter) (Metrics, []TraceEvent, []JobEvent, []JobEvent, error) {
 	metrics := InitializeMetrics()
 	traceEvents := []TraceEvent{}
 	jobStartTimes := []JobEvent{}
@@ -373,7 +379,7 @@ func processWorkflowRun(run githubapi.WorkflowRun, runIndex, processID int, earl
 		reporter.SetPhase("Fetching jobs")
 		reporter.SetDetail(defaultRunName(run))
 	}
-	jobs, err := githubapi.FetchJobsPaginated(client, jobsURL)
+	jobs, err := githubapi.FetchJobsPaginated(ctx, client, jobsURL)
 	if err != nil {
 		return metrics, traceEvents, jobStartTimes, jobEndTimes, err
 	}
@@ -386,6 +392,21 @@ func processWorkflowRun(run githubapi.WorkflowRun, runIndex, processID int, earl
 	if !ok {
 		runEnd = runStart.Add(time.Millisecond)
 	}
+
+	workflowURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID)
+
+	ctx, span := analyzerTracer.Start(ctx, defaultRunName(run),
+		trace.WithTimestamp(runStart),
+		trace.WithAttributes(
+			attribute.String("type", "workflow"),
+			attribute.Int64("github.run_id", run.ID),
+			attribute.String("github.status", run.Status),
+			attribute.String("github.conclusion", run.Conclusion),
+			attribute.String("github.repo", fmt.Sprintf("%s/%s", owner, repo)),
+			attribute.String("github.url", workflowURL),
+		),
+	)
+	defer span.End(trace.WithTimestamp(runEnd))
 
 	runEndTs := runEnd.UnixMilli()
 	runStartTs := runStart.UnixMilli()
@@ -435,7 +456,7 @@ func processWorkflowRun(run githubapi.WorkflowRun, runIndex, processID int, earl
 	workflowThreadID := 1
 	AddThreadMetadata(&traceEvents, processID, workflowThreadID, "📋 Workflow Overview", intPtr(0))
 
-	workflowURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID)
+	workflowURL = fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID)
 	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%s", owner, repo, identifier)
 
 	normalizedRunStart := (runStartTs - earliestTime) * 1000
@@ -468,21 +489,38 @@ func processWorkflowRun(run githubapi.WorkflowRun, runIndex, processID int, earl
 
 	for jobIndex, job := range jobs {
 		jobThreadID := jobIndex + 10
-		processJob(job, jobIndex, run, jobThreadID, processID, earliestTime, &metrics, &traceEvents, &jobStartTimes, &jobEndTimes, prURL, urlIndex, displayURL, sourceType, identifier)
+		processJob(ctx, job, jobIndex, run, jobThreadID, processID, earliestTime, &metrics, &traceEvents, &jobStartTimes, &jobEndTimes, prURL, urlIndex, displayURL, sourceType, identifier)
 	}
 	return metrics, traceEvents, jobStartTimes, jobEndTimes, nil
 }
 
-func processJob(job githubapi.Job, jobIndex int, run githubapi.WorkflowRun, jobThreadID, processID int, earliestTime int64, metrics *Metrics, traceEvents *[]TraceEvent, jobStartTimes, jobEndTimes *[]JobEvent, prURL string, urlIndex int, displayURL, sourceType, identifier string) {
+func processJob(ctx context.Context, job githubapi.Job, jobIndex int, run githubapi.WorkflowRun, jobThreadID, processID int, earliestTime int64, metrics *Metrics, traceEvents *[]TraceEvent, jobStartTimes, jobEndTimes *[]JobEvent, prURL string, urlIndex int, displayURL, sourceType, identifier string) {
 	if job.StartedAt == "" {
 		return
 	}
+
+	jobStart, _ := utils.ParseTime(job.StartedAt)
+	jobEnd, _ := utils.ParseTime(job.CompletedAt)
+
+	jobURL := job.HTMLURL
+	if jobURL == "" {
+		jobURL = fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/job/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID, job.ID)
+	}
+
+	ctx, span := analyzerTracer.Start(ctx, job.Name,
+		trace.WithTimestamp(jobStart),
+		trace.WithAttributes(
+			attribute.String("type", "job"),
+			attribute.Int64("github.job_id", job.ID),
+			attribute.String("github.status", job.Status),
+			attribute.String("github.conclusion", job.Conclusion),
+			attribute.String("github.runner_name", job.RunnerName),
+			attribute.String("github.url", jobURL),
+		),
+	)
+	defer span.End(trace.WithTimestamp(jobEnd))
 	isPending := job.Status != "completed" || job.CompletedAt == ""
 	if isPending {
-		jobURL := job.HTMLURL
-		if jobURL == "" {
-			jobURL = fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/job/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID, job.ID)
-		}
 		metrics.PendingJobs = append(metrics.PendingJobs, PendingJob{
 			Name:      job.Name,
 			Status:    job.Status,
@@ -516,10 +554,6 @@ func processJob(job githubapi.Job, jobIndex int, run githubapi.WorkflowRun, jobT
 
 	metrics.JobDurations = append(metrics.JobDurations, float64(jobDuration))
 	metrics.JobNames = append(metrics.JobNames, job.Name)
-	jobURL := job.HTMLURL
-	if jobURL == "" {
-		jobURL = fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/job/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID, job.ID)
-	}
 	metrics.JobURLs = append(metrics.JobURLs, jobURL)
 	if jobDuration > int64(metrics.LongestJob.Duration) {
 		metrics.LongestJob = JobDuration{Name: job.Name, Duration: float64(jobDuration)}
@@ -587,18 +621,20 @@ func processJob(job githubapi.Job, jobIndex int, run githubapi.WorkflowRun, jobT
 	})
 
 	for _, step := range job.Steps {
-		processStep(step, job, run, jobThreadID, processID, earliestTime, jobEndTs, metrics, traceEvents, prURL, urlIndex, displayURL, sourceType, identifier)
+		processStep(ctx, step, job, run, jobThreadID, processID, earliestTime, jobEndTs, metrics, traceEvents, prURL, urlIndex, displayURL, sourceType, identifier)
 	}
 }
 
-func processStep(step githubapi.Step, job githubapi.Job, run githubapi.WorkflowRun, jobThreadID, processID int, earliestTime, jobEndTs int64, metrics *Metrics, traceEvents *[]TraceEvent, prURL string, urlIndex int, displayURL, sourceType, identifier string) {
+func processStep(ctx context.Context, step githubapi.Step, job githubapi.Job, run githubapi.WorkflowRun, jobThreadID, processID int, earliestTime, jobEndTs int64, metrics *Metrics, traceEvents *[]TraceEvent, prURL string, urlIndex int, displayURL, sourceType, identifier string) {
 	if step.StartedAt == "" || step.CompletedAt == "" {
 		return
 	}
-	metrics.TotalSteps++
-	if step.Conclusion == "failure" {
-		metrics.FailedSteps++
+
+	jobURL := job.HTMLURL
+	if jobURL == "" {
+		jobURL = fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/job/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID, job.ID)
 	}
+
 	start, ok := utils.ParseTime(step.StartedAt)
 	if !ok {
 		return
@@ -607,6 +643,26 @@ func processStep(step githubapi.Step, job githubapi.Job, run githubapi.WorkflowR
 	if !ok {
 		return
 	}
+
+	stepURL := fmt.Sprintf("%s#step:%d:1", jobURL, step.Number)
+
+	_, span := analyzerTracer.Start(ctx, step.Name,
+		trace.WithTimestamp(start),
+		trace.WithAttributes(
+			attribute.String("type", "step"),
+			attribute.Int("github.step_number", step.Number),
+			attribute.String("github.status", step.Status),
+			attribute.String("github.conclusion", step.Conclusion),
+			attribute.String("github.url", stepURL),
+		),
+	)
+	defer span.End(trace.WithTimestamp(end))
+
+	metrics.TotalSteps++
+	if step.Conclusion == "failure" {
+		metrics.FailedSteps++
+	}
+
 	stepStart := start.UnixMilli()
 	stepEnd := maxInt64(stepStart+1, end.UnixMilli())
 	if stepEnd > jobEndTs {
@@ -619,10 +675,6 @@ func processStep(step githubapi.Step, job githubapi.Job, run githubapi.WorkflowR
 
 	stepIcon := utils.GetStepIcon(step.Name, step.Conclusion)
 	stepCategory := utils.CategorizeStep(step.Name)
-	stepURL := job.HTMLURL
-	if stepURL == "" {
-		stepURL = fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/job/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID, job.ID)
-	}
 
 	metrics.StepDurations = append(metrics.StepDurations, StepDuration{
 		Name:     fmt.Sprintf("%s %s", stepIcon, step.Name),
@@ -665,7 +717,8 @@ func addReviewMarkersToTrace(results []URLResult, events *[]TraceEvent) {
 	markersThreadID := 2
 	AddThreadMetadata(events, metricsProcessID, markersThreadID, "🔖 Review & Merge Markers", intPtr(1))
 
-	for _, result := range results {
+	for i := range results {
+		result := &results[i]
 		if len(result.ReviewEvents) == 0 {
 			continue
 		}
@@ -708,7 +761,7 @@ func addReviewMarkersToTrace(results []URLResult, events *[]TraceEvent) {
 			if user != "" {
 				userURL = fmt.Sprintf("https://github.com/%s", user)
 			}
-			*events = append(*events, TraceEvent{
+			marker := TraceEvent{
 				Name: name,
 				Ph:   "i",
 				S:    "p",
@@ -726,7 +779,10 @@ func addReviewMarkersToTrace(results []URLResult, events *[]TraceEvent) {
 					"original_event_time_ms": originalEventTime,
 					"clamped":                originalEventTime != clampedEventTime,
 				},
-			})
+			}
+			*events = append(*events, marker)
+			// Also add to the individual result so ingestors see it
+			result.TraceEvents = append(result.TraceEvents, marker)
 		}
 	}
 }

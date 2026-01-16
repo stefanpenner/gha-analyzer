@@ -1,6 +1,7 @@
 package githubapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,14 +12,22 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
+
+var tracer = otel.Tracer("githubapi")
 
 type Context struct {
 	GitHubToken string
+	CacheDir    string
 }
 
 func NewContext(token string) Context {
-	return Context{GitHubToken: token}
+	return Context{GitHubToken: token, CacheDir: ".gha-cache"}
 }
 
 type Client struct {
@@ -33,6 +42,12 @@ type Option func(*Client)
 func WithHTTPClient(client *http.Client) Option {
 	return func(c *Client) {
 		c.httpClient = client
+	}
+}
+
+func WithCacheDir(dir string) Option {
+	return func(c *Client) {
+		c.context.CacheDir = dir
 	}
 }
 
@@ -65,9 +80,7 @@ func WithRequestInterval(interval time.Duration) Option {
 
 func NewClient(context Context, opts ...Option) *Client {
 	client := &Client{
-		context:    context,
-		httpClient: &http.Client{Timeout: 60 * time.Second},
-		semaphore:  make(chan struct{}, 4),
+		context: context,
 		limiter: &rateLimiter{
 			minRemaining: 10,
 			minInterval:  200 * time.Millisecond,
@@ -76,6 +89,29 @@ func NewClient(context Context, opts ...Option) *Client {
 	for _, opt := range opts {
 		opt(client)
 	}
+
+	if client.httpClient == nil {
+		// Base transport
+		var base http.RoundTripper = http.DefaultTransport
+
+		// Add caching
+		if client.context.CacheDir != "" {
+			base = NewCachedTransport(base, client.context.CacheDir)
+		}
+
+		// Add OTel instrumentation
+		base = otelhttp.NewTransport(base)
+
+		client.httpClient = &http.Client{
+			Transport: base,
+			Timeout:   60 * time.Second,
+		}
+	}
+
+	if client.semaphore == nil {
+		client.semaphore = make(chan struct{}, 4)
+	}
+
 	return client
 }
 
@@ -226,12 +262,12 @@ func (r *rateLimiter) updateFromHeaders(headers http.Header) {
 	}
 }
 
-func doRequest(client *Client, req *http.Request) (*http.Response, error) {
+func doRequest(ctx context.Context, client *Client, req *http.Request) (*http.Response, error) {
 	client.semaphore <- struct{}{}
 	defer func() { <-client.semaphore }()
 
 	client.limiter.waitIfNeeded()
-	resp, err := client.httpClient.Do(req)
+	resp, err := client.httpClient.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +278,7 @@ func doRequest(client *Client, req *http.Request) (*http.Response, error) {
 		waitForRateLimit(resp)
 		_ = resp.Body.Close()
 		client.limiter.waitIfNeeded()
-		resp, err = client.httpClient.Do(req)
+		resp, err = client.httpClient.Do(req.WithContext(ctx))
 		if err != nil {
 			return nil, err
 		}
@@ -282,8 +318,8 @@ func waitForRateLimit(resp *http.Response) {
 	}
 }
 
-func fetchWithAuth(client *Client, urlValue string, accept string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", urlValue, nil)
+func fetchWithAuth(ctx context.Context, client *Client, urlValue string, accept string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", urlValue, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +330,7 @@ func fetchWithAuth(client *Client, urlValue string, accept string) (*http.Respon
 	req.Header.Set("Accept", accept)
 	req.Header.Set("User-Agent", "Node")
 
-	resp, err := doRequest(client, req)
+	resp, err := doRequest(ctx, client, req)
 	if err != nil {
 		return nil, err
 	}
@@ -430,7 +466,15 @@ func extractSSOURL(header string) string {
 	return segment
 }
 
-func FetchWorkflowRuns(client *Client, baseURL, headSHA string, branch, event string) ([]WorkflowRun, error) {
+func FetchWorkflowRuns(ctx context.Context, client *Client, baseURL, headSHA string, branch, event string) ([]WorkflowRun, error) {
+	ctx, span := tracer.Start(ctx, "FetchWorkflowRuns", trace.WithAttributes(
+		attribute.String("github.baseURL", baseURL),
+		attribute.String("github.headSHA", headSHA),
+		attribute.String("github.branch", branch),
+		attribute.String("github.event", event),
+	))
+	defer span.End()
+
 	params := url.Values{}
 	params.Set("head_sha", headSHA)
 	params.Set("per_page", "100")
@@ -441,11 +485,16 @@ func FetchWorkflowRuns(client *Client, baseURL, headSHA string, branch, event st
 		params.Set("event", event)
 	}
 	runsURL := fmt.Sprintf("%s/actions/runs?%s", baseURL, params.Encode())
-	return fetchWorkflowRunsPaginated(client, runsURL)
+	return fetchWorkflowRunsPaginated(ctx, client, runsURL)
 }
 
-func FetchRepository(client *Client, baseURL string) (*RepoMeta, error) {
-	resp, err := fetchWithAuth(client, baseURL, "")
+func FetchRepository(ctx context.Context, client *Client, baseURL string) (*RepoMeta, error) {
+	ctx, span := tracer.Start(ctx, "FetchRepository", trace.WithAttributes(
+		attribute.String("github.baseURL", baseURL),
+	))
+	defer span.End()
+
+	resp, err := fetchWithAuth(ctx, client, baseURL, "")
 	if err != nil {
 		return nil, err
 	}
@@ -456,9 +505,16 @@ func FetchRepository(client *Client, baseURL string) (*RepoMeta, error) {
 	return &repo, nil
 }
 
-func FetchCommitAssociatedPRs(client *Client, owner, repo, sha string) ([]PullAssociated, error) {
+func FetchCommitAssociatedPRs(ctx context.Context, client *Client, owner, repo, sha string) ([]PullAssociated, error) {
+	ctx, span := tracer.Start(ctx, "FetchCommitAssociatedPRs", trace.WithAttributes(
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+		attribute.String("github.sha", sha),
+	))
+	defer span.End()
+
 	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s/pulls?per_page=100", owner, repo, sha)
-	resp, err := fetchWithAuth(client, endpoint, "application/vnd.github+json")
+	resp, err := fetchWithAuth(ctx, client, endpoint, "application/vnd.github+json")
 	if err != nil {
 		return nil, err
 	}
@@ -469,9 +525,15 @@ func FetchCommitAssociatedPRs(client *Client, owner, repo, sha string) ([]PullAs
 	return prs, nil
 }
 
-func FetchCommit(client *Client, baseURL, sha string) (*CommitResponse, error) {
+func FetchCommit(ctx context.Context, client *Client, baseURL, sha string) (*CommitResponse, error) {
+	ctx, span := tracer.Start(ctx, "FetchCommit", trace.WithAttributes(
+		attribute.String("github.baseURL", baseURL),
+		attribute.String("github.sha", sha),
+	))
+	defer span.End()
+
 	commitURL := fmt.Sprintf("%s/commits/%s", baseURL, sha)
-	resp, err := fetchWithAuth(client, commitURL, "")
+	resp, err := fetchWithAuth(ctx, client, commitURL, "")
 	if err != nil {
 		return nil, err
 	}
@@ -482,9 +544,15 @@ func FetchCommit(client *Client, baseURL, sha string) (*CommitResponse, error) {
 	return &commit, nil
 }
 
-func FetchPullRequest(client *Client, baseURL, identifier string) (*PullRequest, error) {
+func FetchPullRequest(ctx context.Context, client *Client, baseURL, identifier string) (*PullRequest, error) {
+	ctx, span := tracer.Start(ctx, "FetchPullRequest", trace.WithAttributes(
+		attribute.String("github.baseURL", baseURL),
+		attribute.String("github.identifier", identifier),
+	))
+	defer span.End()
+
 	prURL := fmt.Sprintf("%s/pulls/%s", baseURL, identifier)
-	resp, err := fetchWithAuth(client, prURL, "")
+	resp, err := fetchWithAuth(ctx, client, prURL, "")
 	if err != nil {
 		return nil, err
 	}
@@ -495,16 +563,28 @@ func FetchPullRequest(client *Client, baseURL, identifier string) (*PullRequest,
 	return &pr, nil
 }
 
-func FetchPRReviews(client *Client, owner, repo, prNumber string) ([]Review, error) {
+func FetchPRReviews(ctx context.Context, client *Client, owner, repo, prNumber string) ([]Review, error) {
+	ctx, span := tracer.Start(ctx, "FetchPRReviews", trace.WithAttributes(
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+		attribute.String("github.prNumber", prNumber),
+	))
+	defer span.End()
+
 	reviewsURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%s/reviews?per_page=100", owner, repo, prNumber)
-	return fetchReviewsPaginated(client, reviewsURL)
+	return fetchReviewsPaginated(ctx, client, reviewsURL)
 }
 
-func FetchJobsPaginated(client *Client, urlValue string) ([]Job, error) {
+func FetchJobsPaginated(ctx context.Context, client *Client, urlValue string) ([]Job, error) {
+	ctx, span := tracer.Start(ctx, "FetchJobsPaginated", trace.WithAttributes(
+		attribute.String("github.url", urlValue),
+	))
+	defer span.End()
+
 	var all []Job
 	nextURL := urlValue
 	for nextURL != "" {
-		resp, err := fetchWithAuth(client, nextURL, "")
+		resp, err := fetchWithAuth(ctx, client, nextURL, "")
 		if err != nil {
 			return nil, err
 		}
@@ -518,11 +598,16 @@ func FetchJobsPaginated(client *Client, urlValue string) ([]Job, error) {
 	return all, nil
 }
 
-func fetchWorkflowRunsPaginated(client *Client, urlValue string) ([]WorkflowRun, error) {
+func fetchWorkflowRunsPaginated(ctx context.Context, client *Client, urlValue string) ([]WorkflowRun, error) {
+	ctx, span := tracer.Start(ctx, "fetchWorkflowRunsPaginated", trace.WithAttributes(
+		attribute.String("github.url", urlValue),
+	))
+	defer span.End()
+
 	var all []WorkflowRun
 	nextURL := urlValue
 	for nextURL != "" {
-		resp, err := fetchWithAuth(client, nextURL, "")
+		resp, err := fetchWithAuth(ctx, client, nextURL, "")
 		if err != nil {
 			return nil, err
 		}
@@ -536,11 +621,16 @@ func fetchWorkflowRunsPaginated(client *Client, urlValue string) ([]WorkflowRun,
 	return all, nil
 }
 
-func fetchReviewsPaginated(client *Client, urlValue string) ([]Review, error) {
+func fetchReviewsPaginated(ctx context.Context, client *Client, urlValue string) ([]Review, error) {
+	ctx, span := tracer.Start(ctx, "fetchReviewsPaginated", trace.WithAttributes(
+		attribute.String("github.url", urlValue),
+	))
+	defer span.End()
+
 	var all []Review
 	nextURL := urlValue
 	for nextURL != "" {
-		resp, err := fetchWithAuth(client, nextURL, "")
+		resp, err := fetchWithAuth(ctx, client, nextURL, "")
 		if err != nil {
 			return nil, err
 		}

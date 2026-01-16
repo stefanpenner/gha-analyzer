@@ -3,10 +3,24 @@ package tui
 import (
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+)
+
+var (
+	headerStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#7D56F4"))
+	infoStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#626262"))
+	urlStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#25A065")).
+			Underline(true)
+	phaseStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#4285F4"))
 )
 
 type Progress struct {
@@ -46,10 +60,17 @@ type progressModel struct {
 	phase          string
 	detail         string
 	done           bool
+	spinner        spinner.Model
 }
 
 func NewProgress(totalURLs int, output io.Writer) *Progress {
-	model := progressModel{totalURLs: totalURLs}
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	model := progressModel{
+		totalURLs: totalURLs,
+		spinner:   s,
+	}
 	program := tea.NewProgram(model, tea.WithOutput(output))
 	return &Progress{
 		program: program,
@@ -96,7 +117,7 @@ func (p *Progress) Finish() {
 }
 
 func (m progressModel) Init() tea.Cmd {
-	return nil
+	return m.spinner.Tick
 }
 
 func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -121,6 +142,10 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case finishMsg:
 		m.done = true
 		return m, tea.Quit
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(typed)
+		return m, cmd
 	}
 	return m, nil
 }
@@ -129,20 +154,27 @@ func (m progressModel) View() string {
 	if m.done {
 		return ""
 	}
-	urlProgress := fmt.Sprintf("%d/%d", m.currentURL, m.totalURLs)
+
+	header := headerStyle.Render(fmt.Sprintf("🚀 GitHub Actions Analyzer (%d/%d URLs)", m.currentURL, m.totalURLs))
+	
 	runProgress := ""
 	if m.currentURLRuns > 0 {
-		runProgress = fmt.Sprintf(" (%d/%d runs)", m.currentRun, m.currentURLRuns)
+		runProgress = infoStyle.Render(fmt.Sprintf(" [%d/%d runs]", m.currentRun, m.currentURLRuns))
 	}
-	parts := []string{fmt.Sprintf("Processing URL %s%s", urlProgress, runProgress)}
+
+	urlLine := ""
 	if m.currentURLText != "" {
-		parts = append(parts, m.currentURLText)
+		urlLine = fmt.Sprintf("\n%s %s%s", m.spinner.View(), urlStyle.Render(m.currentURLText), runProgress)
 	}
+
+	statusLine := ""
 	if m.phase != "" {
-		parts = append(parts, fmt.Sprintf("Phase: %s", m.phase))
+		detail := ""
+		if m.detail != "" {
+			detail = infoStyle.Render(fmt.Sprintf(" (%s)", m.detail))
+		}
+		statusLine = fmt.Sprintf("\n%s %s%s", infoStyle.Render("  ↳"), phaseStyle.Render(m.phase), detail)
 	}
-	if m.detail != "" {
-		parts = append(parts, fmt.Sprintf("Detail: %s", m.detail))
-	}
-	return strings.Join(parts, " • ")
+
+	return "\n" + header + urlLine + statusLine + "\n"
 }

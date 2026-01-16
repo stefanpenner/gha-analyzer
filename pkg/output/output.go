@@ -8,6 +8,7 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/gha-analyzer/pkg/perfetto"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"go.opentelemetry.io/otel/sdk/trace"
 )
 
 type PendingJobWithSource struct {
@@ -23,7 +24,7 @@ type CommitAggregate struct {
 	TotalComputeMsForCommit int64
 }
 
-func OutputCombinedResults(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime, globalLatestTime int64, perfettoFile string, openInPerfetto bool) error {
+func OutputCombinedResults(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime, globalLatestTime int64, perfettoFile string, openInPerfetto bool, spans []trace.ReadOnlySpan) error {
 	if perfettoFile != "" {
 		fmt.Fprintf(w, "\n✅ Generated %d trace events • Open in Perfetto.dev for analysis\n", len(traceEvents))
 	} else {
@@ -204,39 +205,9 @@ func OutputCombinedResults(w io.Writer, urlResults []analyzer.URLResult, combine
 		}
 	}
 
-	section(w, "Pipeline Timelines")
-	fmt.Fprintf(w, "%s:\n", utils.MakeClickableLink("https://ui.perfetto.dev", "Pipeline Timelines"))
-	for _, result := range urlResults {
-		timeline := result.Metrics.JobTimeline
-		if len(timeline) > 0 {
-			earliest := timeline[0].StartTime
-			latest := timeline[0].EndTime
-			for _, job := range timeline {
-				if job.StartTime < earliest {
-					earliest = job.StartTime
-				}
-				if job.EndTime > latest {
-					latest = job.EndTime
-				}
-			}
-			wallTimeSec := float64(latest-earliest) / 1000
-			headerText := fmt.Sprintf("[%d] %s (%s, %d jobs)", result.URLIndex+1, result.DisplayName, utils.HumanizeTime(wallTimeSec), result.Metrics.TotalJobs)
-			fmt.Fprintf(w, "\n%s:\n", utils.MakeClickableLink(result.DisplayURL, headerText))
-			computeMs := int64(0)
-			for _, job := range timeline {
-				if job.EndTime > job.StartTime {
-					computeMs += job.EndTime - job.StartTime
-				}
-			}
-			approvals := countReviewEvents(result.ReviewEvents, "shippit") + countReviewEvents(result.ReviewEvents, "merged")
-			merged := countReviewEvents(result.ReviewEvents, "merged") > 0
-			fmt.Fprintf(w, "  Summary — runs: %d • wall: %s • compute: %s • approvals: %d • merged: %s\n", result.Metrics.TotalRuns, utils.HumanizeTime(wallTimeSec), utils.HumanizeTime(float64(computeMs)/1000), approvals, boolYesNo(merged))
-		} else {
-			headerText := fmt.Sprintf("[%d] %s (%d jobs)", result.URLIndex+1, result.DisplayName, result.Metrics.TotalJobs)
-			fmt.Fprintf(w, "\n%s:\n", utils.MakeClickableLink(result.DisplayURL, headerText))
-		}
-		GenerateTimelineVisualization(w, result.Metrics, result.DisplayURL, result.URLIndex, result.ReviewEvents)
-	}
+	section(w, "Pipeline Timelines (OTel-native)")
+	fmt.Fprintf(w, "%s:\n", utils.MakeClickableLink("https://ui.perfetto.dev", "Generic OTel Trace Waterfall"))
+	RenderOTelTimeline(w, spans)
 
 	if perfettoFile != "" {
 		return perfetto.WriteTrace(w, urlResults, combined, traceEvents, globalEarliestTime, perfettoFile, openInPerfetto)

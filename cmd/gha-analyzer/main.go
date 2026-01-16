@@ -1,34 +1,33 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/stefanpenner/gha-analyzer/pkg/core"
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	otelexport "github.com/stefanpenner/gha-analyzer/pkg/export/otel"
+	"github.com/stefanpenner/gha-analyzer/pkg/export/perfetto"
+	"github.com/stefanpenner/gha-analyzer/pkg/export/terminal"
 	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
+	"github.com/stefanpenner/gha-analyzer/pkg/ingest/polling"
 	"github.com/stefanpenner/gha-analyzer/pkg/output"
 	"github.com/stefanpenner/gha-analyzer/pkg/tui"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func main() {
 	args := os.Args[1:]
 	perfettoFile := ""
 	openInPerfetto := false
-	format := "text"
-
+	
 	filtered := []string{}
 	for _, arg := range args {
 		if strings.HasPrefix(arg, "--perfetto=") {
 			perfettoFile = strings.TrimPrefix(arg, "--perfetto=")
-			continue
-		}
-		if strings.HasPrefix(arg, "--format=") {
-			format = strings.TrimPrefix(arg, "--format=")
-			continue
-		}
-		if arg == "--markdown" {
-			format = "markdown"
 			continue
 		}
 		if arg == "--open-in-perfetto" {
@@ -37,96 +36,91 @@ func main() {
 		}
 		filtered = append(filtered, arg)
 	}
+	args = filtered
 
-	var providedToken string
-	if len(filtered) > 0 {
-		last := filtered[len(filtered)-1]
-		if !strings.HasPrefix(last, "http") {
-			providedToken = last
-			filtered = filtered[:len(filtered)-1]
+	// 1. Setup GitHub Token
+	token := os.Getenv("GITHUB_TOKEN")
+	if token == "" {
+		for i, arg := range args {
+			if !strings.HasPrefix(arg, "http") && !strings.HasPrefix(arg, "-") {
+				token = arg
+				args = append(args[:i], args[i+1:]...)
+				break
+			}
 		}
 	}
 
-	urls := filtered
-	if len(urls) == 0 || (providedToken == "" && os.Getenv("GITHUB_TOKEN") == "") {
-		if len(urls) == 0 {
-			fmt.Fprintln(os.Stderr, "Error: No GitHub URLs provided.")
-		}
-		if providedToken == "" && os.Getenv("GITHUB_TOKEN") == "" {
-			fmt.Fprintln(os.Stderr, "Error: GitHub token is required.")
-		}
+	if token == "" {
+		fmt.Fprintln(os.Stderr, "Error: GITHUB_TOKEN environment variable or token argument is required")
 		printUsage()
 		os.Exit(1)
 	}
 
-	token := providedToken
-	if token == "" {
-		token = os.Getenv("GITHUB_TOKEN")
-	}
-	context := githubapi.NewContext(token)
-	client := githubapi.NewClient(context)
+	ctx := context.Background()
 
-	progress := tui.NewProgress(len(urls), os.Stderr)
+	// 2. Setup OTel
+	collector := core.NewSpanCollector()
+	res, _ := otelexport.GetResource(ctx)
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(collector),
+		sdktrace.WithResource(res),
+	)
+	otel.SetTracerProvider(tp)
+	defer tp.Shutdown(ctx)
+
+	client := githubapi.NewClient(githubapi.NewContext(token))
+
+	// 3. Setup Exporters
+	exporters := []core.Exporter{
+		terminal.NewExporter(os.Stderr),
+	}
+
+	if perfettoFile != "" {
+		exporters = append(exporters, perfetto.NewExporter(os.Stderr, perfettoFile, openInPerfetto))
+	}
+
+	otelExporter, err := otelexport.NewExporter(ctx, "localhost:4318") // Using 4318 for HTTP
+	if err == nil {
+		exporters = append(exporters, otelExporter)
+	}
+
+	pipeline := core.NewPipeline(exporters...)
+
+	// 4. Setup Progress TUI
+	progress := tui.NewProgress(len(args), os.Stderr)
 	progress.Start()
 
-	results, traceEvents, globalEarliest, globalLatest, errs := analyzer.AnalyzeURLs(urls, client, progress)
+	// 5. Run Ingestor
+	ingestor := polling.NewPollingIngestor(client, args, progress)
+	results, globalEarliest, globalLatest, err := ingestor.Ingest(ctx)
+	
 	progress.Finish()
 	progress.Wait()
 
-	for _, err := range errs {
-		fmt.Fprintln(os.Stderr, err.Error())
-	}
-
-	if len(results) == 0 {
-		fmt.Fprintln(os.Stderr, "No workflow runs found for any of the provided URLs")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Ingestion failed: %v\n", err)
 		os.Exit(1)
 	}
 
+	// 6. Finalize & Process Spans
+	tp.ForceFlush(ctx)
+	spans := collector.Spans()
+
+	if err := pipeline.Process(ctx, spans); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Processing spans failed: %v\n", err)
+	}
+
+	// Restore rich CLI report
 	combined := analyzer.CalculateCombinedMetrics(results, sumRuns(results), collectStarts(results), collectEnds(results))
-	outputWriter := os.Stderr
-	if format == "markdown" || format == "md" {
-		outputWriter = os.Stdout
+	var allTraceEvents []analyzer.TraceEvent
+	for _, res := range results {
+		allTraceEvents = append(allTraceEvents, res.TraceEvents...)
 	}
-	if format == "markdown" || format == "md" {
-		if err := output.OutputCombinedResultsMarkdown(outputWriter, results, combined, traceEvents, globalEarliest, globalLatest, perfettoFile, openInPerfetto); err != nil {
-			fmt.Fprintln(os.Stderr, err.Error())
-			os.Exit(1)
-		}
-		return
-	}
-	if err := output.OutputCombinedResults(outputWriter, results, combined, traceEvents, globalEarliest, globalLatest, perfettoFile, openInPerfetto); err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
-		os.Exit(1)
-	}
-}
+	output.OutputCombinedResults(os.Stderr, results, combined, allTraceEvents, globalEarliest, globalLatest, perfettoFile, openInPerfetto, spans)
 
-func printUsage() {
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Usage: gha-analyzer <github_url1> [github_url2] ... [token] [--perfetto=<file_name_for_trace.json>] [--open-in-perfetto]")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Supported URL formats:")
-	fmt.Fprintln(os.Stderr, "  PR: https://github.com/owner/repo/pull/123")
-	fmt.Fprintln(os.Stderr, "  Commit: https://github.com/owner/repo/commit/abc123...")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Examples:")
-	fmt.Fprintln(os.Stderr, "  Single URL: gha-analyzer https://github.com/owner/repo/pull/123")
-	fmt.Fprintln(os.Stderr, "  Multiple URLs: gha-analyzer https://github.com/owner/repo/pull/123 https://github.com/owner/repo/commit/abc123")
-	fmt.Fprintln(os.Stderr, "  With token: gha-analyzer https://github.com/owner/repo/pull/123 your_token")
-	fmt.Fprintln(os.Stderr, "  With perfetto output: gha-analyzer https://github.com/owner/repo/pull/123 --perfetto=trace.json")
-	fmt.Fprintln(os.Stderr, "  With token and perfetto: gha-analyzer https://github.com/owner/repo/pull/123 your_token --perfetto=trace.json")
-	fmt.Fprintln(os.Stderr, "  Auto-open in perfetto: gha-analyzer https://github.com/owner/repo/pull/123 --perfetto=trace.json --open-in-perfetto")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "GitHub token can be provided as:")
-	fmt.Fprintln(os.Stderr, "  1. Command line argument: gha-analyzer <github_urls> <token>")
-	fmt.Fprintln(os.Stderr, "  2. Environment variable: export GITHUB_TOKEN=<token>")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Perfetto tracing:")
-	fmt.Fprintln(os.Stderr, "  Use --perfetto=<filename> to save Chrome Tracing format output to a file")
-	fmt.Fprintln(os.Stderr, "  Use --open-in-perfetto to automatically open the trace in Perfetto UI")
-	fmt.Fprintln(os.Stderr, "  If not specified, no trace file will be generated")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "Output format:")
-	fmt.Fprintln(os.Stderr, "  Use --format=markdown (or --markdown) for Markdown output")
+	if err := pipeline.Finish(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: Finalizing pipeline failed: %v\n", err)
+	}
 }
 
 func sumRuns(results []analyzer.URLResult) int {
@@ -151,4 +145,8 @@ func collectEnds(results []analyzer.URLResult) []analyzer.JobEvent {
 		events = append(events, result.JobEndTimes...)
 	}
 	return events
+}
+
+func printUsage() {
+	fmt.Println("Usage: ./run.sh cli <github_url1> [token] [--perfetto=<file.json>] [--open-in-perfetto]")
 }

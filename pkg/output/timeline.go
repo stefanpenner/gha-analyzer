@@ -3,12 +3,192 @@ package output
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"go.opentelemetry.io/otel/sdk/trace"
 )
+
+// SpanNode represents a node in the OTel span hierarchy tree.
+type SpanNode struct {
+	Span     trace.ReadOnlySpan
+	Children []*SpanNode
+}
+
+// BuildSpanTree constructs a hierarchy of spans based on ParentSpanID.
+func BuildSpanTree(spans []trace.ReadOnlySpan) []*SpanNode {
+	nodes := make(map[string]*SpanNode)
+	var roots []*SpanNode
+
+	// Create nodes for all spans
+	for _, s := range spans {
+		nodes[s.SpanContext().SpanID().String()] = &SpanNode{Span: s}
+	}
+
+	// Link children to parents
+	for _, s := range spans {
+		node := nodes[s.SpanContext().SpanID().String()]
+		parentID := s.Parent().SpanID().String()
+		
+		if parentID == "0000000000000000" {
+			roots = append(roots, node)
+		} else if parent, ok := nodes[parentID]; ok {
+			parent.Children = append(parent.Children, node)
+		} else {
+			// Parent not in this batch, treat as root
+			roots = append(roots, node)
+		}
+	}
+
+	// Sort roots and children by start time
+	sortNodes(roots)
+	for _, n := range nodes {
+		sortNodes(n.Children)
+	}
+
+	return roots
+}
+
+func sortNodes(nodes []*SpanNode) {
+	sort.Slice(nodes, func(i, j int) bool {
+		return nodes[i].Span.StartTime().Before(nodes[j].Span.StartTime())
+	})
+}
+
+// RenderOTelTimeline renders a generic OTel span tree as a terminal waterfall.
+func RenderOTelTimeline(w io.Writer, spans []trace.ReadOnlySpan) {
+	if len(spans) == 0 {
+		return
+	}
+
+	// Filter out internal instrumentation spans by default
+	// We only want to show spans that are part of the GHA hierarchy (workflow, job, step)
+	var filtered []trace.ReadOnlySpan
+	for _, s := range spans {
+		isGHA := false
+		for _, attr := range s.Attributes() {
+			if attr.Key == "type" && (attr.Value.AsString() == "workflow" || attr.Value.AsString() == "job" || attr.Value.AsString() == "step") {
+				isGHA = true
+				break
+			}
+		}
+		if isGHA {
+			filtered = append(filtered, s)
+		}
+	}
+
+	if len(filtered) == 0 {
+		return
+	}
+
+	roots := BuildSpanTree(filtered)
+	
+	// Find overall time bounds
+	earliest := filtered[0].StartTime()
+	latest := filtered[0].EndTime()
+	for _, s := range filtered {
+		if s.StartTime().Before(earliest) {
+			earliest = s.StartTime()
+		}
+		if s.EndTime().After(latest) {
+			latest = s.EndTime()
+		}
+	}
+
+	totalDuration := latest.Sub(earliest)
+	scale := 60
+
+	startTime := earliest.Format("15:04:05")
+	endTime := latest.Format("15:04:05")
+	durationStr := utils.HumanizeTime(totalDuration.Seconds())
+	
+	header := fmt.Sprintf("│ Start: %s   End: %s   Duration: %s", startTime, endTime, durationStr)
+	padding := scale + 2 - len(header) - 1 // -1 for the trailing │
+	if padding < 0 {
+		padding = 0
+	}
+
+	fmt.Fprintf(w, "┌%s┐\n", strings.Repeat("─", scale+2))
+	fmt.Fprintf(w, "%s%s │\n", header, strings.Repeat(" ", padding))
+	fmt.Fprintf(w, "├%s┤\n", strings.Repeat("─", scale+2))
+
+	for _, root := range roots {
+		renderNode(w, root, 0, earliest, totalDuration, scale)
+	}
+	
+	fmt.Fprintf(w, "└%s┘\n", strings.Repeat("─", scale+2))
+}
+
+func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, totalDuration time.Duration, scale int) {
+	s := node.Span
+	start := s.StartTime().Sub(globalStart)
+	duration := s.EndTime().Sub(s.StartTime())
+	
+	startPos := int(float64(start) / float64(totalDuration) * float64(scale))
+	barLength := maxInt(1, int(float64(duration)/float64(totalDuration)*float64(scale)))
+	clampedLength := minInt(barLength, scale-startPos)
+	
+	padding := strings.Repeat(" ", maxInt(0, startPos))
+	
+	// Determine color/icon from attributes
+	attrs := make(map[string]string)
+	for _, a := range s.Attributes() {
+		attrs[string(a.Key)] = a.Value.AsString()
+	}
+	
+	icon := "•"
+	switch attrs["type"] {
+	case "workflow":
+		icon = "📋"
+	case "job":
+		icon = "⚙️ "
+	case "step":
+		icon = "  ↳"
+	}
+
+	statusIcon := ""
+	switch attrs["github.conclusion"] {
+	case "success":
+		statusIcon = "✅"
+	case "failure":
+		statusIcon = "❌"
+	}
+
+	barChar := "█"
+	if attrs["type"] == "step" {
+		barChar = "▒"
+	}
+
+	coloredBar := strings.Repeat(barChar, maxInt(1, clampedLength))
+	if attrs["github.conclusion"] == "failure" {
+		coloredBar = utils.RedText(coloredBar)
+	} else if attrs["github.conclusion"] == "success" {
+		coloredBar = utils.GreenText(coloredBar)
+	} else {
+		coloredBar = utils.BlueText(coloredBar)
+	}
+
+	indent := strings.Repeat("  ", depth)
+	remaining := strings.Repeat(" ", maxInt(0, scale-startPos-maxInt(1, clampedLength)))
+
+	label := s.Name()
+	if url, ok := attrs["github.url"]; ok && url != "" {
+		label = utils.MakeClickableLink(url, label)
+	}
+	displayName := fmt.Sprintf("%s%s %s", icon, statusIcon, label)
+
+	fmt.Fprintf(w, "│%s%s%s  │ %s%s (%s)\n",
+		padding, coloredBar, remaining,
+		indent, displayName,
+		utils.HumanizeTime(duration.Seconds()))
+
+	for _, child := range node.Children {
+		renderNode(w, child, depth+1, globalStart, totalDuration, scale)
+	}
+}
 
 func GenerateHighLevelTimeline(w io.Writer, results []analyzer.URLResult, globalEarliestTime, globalLatestTime int64) {
 	scale := 80
