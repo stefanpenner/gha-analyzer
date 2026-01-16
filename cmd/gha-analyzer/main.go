@@ -26,6 +26,10 @@ func main() {
 	
 	filtered := []string{}
 	for _, arg := range args {
+		if arg == "help" || arg == "--help" || arg == "-h" {
+			printUsage()
+			os.Exit(0)
+		}
 		if strings.HasPrefix(arg, "--perfetto=") {
 			perfettoFile = strings.TrimPrefix(arg, "--perfetto=")
 			continue
@@ -148,5 +152,16 @@ func collectEnds(results []analyzer.URLResult) []analyzer.JobEvent {
 }
 
 func printUsage() {
-	fmt.Println("Usage: ./run.sh cli <github_url1> [token] [--perfetto=<file.json>] [--open-in-perfetto]")
+	fmt.Println("GitHub Actions Analyzer")
+	fmt.Println("\nUsage:")
+	fmt.Println("  gha-analyzer <github_url1> [github_url2...] [token] [flags]")
+	fmt.Println("\nFlags:")
+	fmt.Println("  --perfetto=<file.json>    Save trace for Perfetto.dev analysis")
+	fmt.Println("  --open-in-perfetto        Automatically open the generated trace in Perfetto UI")
+	fmt.Println("  help, --help, -h          Show this help message")
+	fmt.Println("\nEnvironment Variables:")
+	fmt.Println("  GITHUB_TOKEN              GitHub PAT (alternatively pass as argument)")
+	fmt.Println("\nExamples:")
+	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123")
+	fmt.Println("  gha-analyzer https://github.com/owner/repo/commit/sha --perfetto=trace.json")
 }
