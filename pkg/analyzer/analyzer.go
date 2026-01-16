@@ -851,7 +851,7 @@ func processStep(ctx context.Context, step githubapi.Step, job githubapi.Job, ru
 func addReviewMarkersToTrace(results []URLResult, events *[]TraceEvent) {
 	metricsProcessID := 999
 	markersThreadID := 2
-	AddThreadMetadata(events, metricsProcessID, markersThreadID, "🔖 Review & Merge Markers", intPtr(1))
+	AddThreadMetadata(events, metricsProcessID, markersThreadID, "GitHub PR Events", intPtr(1))
 
 	for i := range results {
 		result := &results[i]
@@ -905,7 +905,9 @@ func addReviewMarkersToTrace(results []URLResult, events *[]TraceEvent) {
 				Tid:  markersThreadID,
 				Args: map[string]interface{}{
 					"url_index":              result.URLIndex + 1,
-					"source_url":             result.DisplayURL,
+					"source_url":             firstNonEmpty(event.URL, result.DisplayURL),
+					"github_url":             firstNonEmpty(event.URL, result.DisplayURL),
+					"url":                    firstNonEmpty(event.URL, result.DisplayURL),
 					"source_type":            result.Type,
 					"source_identifier":      result.Identifier,
 					"user":                   user,

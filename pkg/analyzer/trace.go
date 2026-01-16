@@ -38,9 +38,9 @@ func GenerateConcurrencyCounters(jobStartTimes, jobEndTimes []JobEvent, events *
 		Name: "process_name",
 		Ph:   "M",
 		Pid:  metricsProcessID,
-		Args: map[string]interface{}{"name": "📊 Global Metrics"},
+		Args: map[string]interface{}{"name": "GitHub Events"},
 	})
-	AddThreadMetadata(events, metricsProcessID, counterThreadID, "📈 Job Concurrency", intPtr(0))
+	AddThreadMetadata(events, metricsProcessID, counterThreadID, "Job Concurrency", intPtr(0))
 
 	for _, event := range all {
 		if event.Type == "start" {

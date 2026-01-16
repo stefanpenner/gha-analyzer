@@ -27,14 +27,41 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 		},
 	}
 
+	// Find the true earliest timestamp across all events
+	trueEarliest := globalEarliestTime
+	for _, s := range spans {
+		ms := s.StartTime().UnixMilli()
+		if ms < trueEarliest {
+			trueEarliest = ms
+		}
+	}
+	for _, res := range urlResults {
+		if res.EarliestTime != 0 && res.EarliestTime < trueEarliest {
+			trueEarliest = res.EarliestTime
+		}
+	}
+
 	// Convert OTel spans to TraceEvents
 	otelEvents := []analyzer.TraceEvent{}
+	pidsSeen := make(map[int]bool)
+	tidsSeen := make(map[int]bool)
+
 	for _, s := range spans {
 		// Only include relevant spans
 		isGHA := false
 		attrs := make(map[string]interface{})
 		for _, attr := range s.Attributes() {
-			attrs[string(attr.Key)] = attr.Value.AsInterface()
+			val := attr.Value.AsInterface()
+			// Basic sanitization for Perfetto JSON
+			if s, ok := val.(string); ok {
+				if len(s) > 1000 {
+					val = s[:1000] + "..."
+				}
+			}
+			attrs[string(attr.Key)] = val
+			if attr.Key == "github.url" {
+				attrs["url"] = val
+			}
 			if attr.Key == "type" && (attr.Value.AsString() == "workflow" || attr.Value.AsString() == "job" || attr.Value.AsString() == "step" || attr.Value.AsString() == "marker") {
 				isGHA = true
 			}
@@ -43,10 +70,10 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 			continue
 		}
 
-		ts := (s.StartTime().UnixMilli() - globalEarliestTime) * 1000
+		ts := (s.StartTime().UnixMilli() - trueEarliest) * 1000
 		dur := s.EndTime().Sub(s.StartTime()).Microseconds()
-		if dur == 0 {
-			dur = 1000 // Ensure at least 1ms for visibility if it's a point-in-time span that isn't a marker ph:i
+		if dur <= 0 && attrs["type"] != "marker" {
+			dur = 1000 // Ensure at least 1ms for visibility
 		}
 
 		ph := "X"
@@ -54,14 +81,63 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 			ph = "i"
 		}
 
-		// Map OTel hierarchy to Perfetto PID/TID if possible
-		// For now, let's use a simple mapping or just 0
 		pid := 1
 		tid := 1
+		trackName := ""
 
-		// Try to find process info from attributes
-		if runID, ok := attrs["github.run_id"].(int64); ok {
-			tid = int(runID % 10000)
+		if attrs["type"] == "workflow" {
+			if runID, ok := attrs["github.run_id"].(int64); ok {
+				pid = int(runID % 2147483647)
+				tid = 0
+				trackName = s.Name()
+			}
+		} else if attrs["type"] == "job" {
+			if runID, ok := attrs["github.run_id"].(int64); ok {
+				pid = int(runID % 2147483647)
+			}
+			if jobID, ok := attrs["github.job_id"].(int64); ok {
+				tid = int(jobID % 2147483647)
+				trackName = "Job: " + s.Name()
+			}
+		} else if attrs["type"] == "step" {
+			if runID, ok := attrs["github.run_id"].(int64); ok {
+				pid = int(runID % 2147483647)
+			}
+			// Steps on the same track as their job
+			// Since we don't have the job ID easily, use the parent SpanID
+			parentID := s.Parent().SpanID()
+			var tidVal int
+			for i := 0; i < 8; i++ {
+				tidVal = (tidVal << 8) | int(parentID[i])
+			}
+			tid = int(uint32(tidVal) % 2147483647)
+		} else if attrs["type"] == "marker" {
+			pid = 999
+			tid = 0
+			if !pidsSeen[pid] {
+				otelEvents = append(otelEvents, analyzer.TraceEvent{
+					Name: "process_name", Ph: "M", Pid: pid,
+					Args: map[string]interface{}{"name": "GitHub Events"},
+				})
+				pidsSeen[pid] = true
+			}
+		}
+
+		// Add metadata events for names if we haven't seen them
+		if trackName != "" {
+			if tid != 0 && !tidsSeen[tid] {
+				otelEvents = append(otelEvents, analyzer.TraceEvent{
+					Name: "thread_name", Ph: "M", Pid: pid, Tid: tid,
+					Args: map[string]interface{}{"name": trackName},
+				})
+				tidsSeen[tid] = true
+			} else if tid == 0 && !pidsSeen[pid] {
+				otelEvents = append(otelEvents, analyzer.TraceEvent{
+					Name: "process_name", Ph: "M", Pid: pid,
+					Args: map[string]interface{}{"name": trackName},
+				})
+				pidsSeen[pid] = true
+			}
 		}
 
 		otelEvents = append(otelEvents, analyzer.TraceEvent{
@@ -110,9 +186,15 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 
 			if urlResult != nil {
 				absoluteTime := event.Ts/1000 + urlResult.EarliestTime
-				event.Ts = (absoluteTime - globalEarliestTime) * 1000
+				event.Ts = (absoluteTime - trueEarliest) * 1000
 			}
 		}
+		
+		// Final check to prevent negative timestamps which Perfetto hates
+		if event.Ts < 0 {
+			event.Ts = 0
+		}
+		
 		renormalized = append(renormalized, event)
 	}
 	analyzer.SortTraceEvents(renormalized)
