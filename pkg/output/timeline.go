@@ -153,6 +153,14 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 			icon = "◆"
 		case "commit":
 			icon = "📍"
+		case "comment":
+			icon = "💬"
+		case "approved":
+			icon = "✅"
+		case "changes_requested":
+			icon = "❌"
+		case "commented":
+			icon = "💬"
 		default:
 			icon = "▲"
 		}
@@ -178,6 +186,14 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 			coloredBar = utils.GreenText("◆")
 		case "commit":
 			coloredBar = utils.BlueText("📍")
+		case "comment":
+			coloredBar = utils.BlueText("💬")
+		case "approved":
+			coloredBar = utils.GreenText("✅")
+		case "changes_requested":
+			coloredBar = utils.RedText("❌")
+		case "commented":
+			coloredBar = utils.BlueText("💬")
 		default:
 			coloredBar = utils.YellowText("▲")
 		}
@@ -205,7 +221,7 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 	
 	displayName := fmt.Sprintf("%s%s %s", icon, statusIcon, label)
 	if attrs["type"] == "marker" {
-		displayName = label
+		displayName = fmt.Sprintf("%s %s", icon, label)
 	}
 
 	durationDisplay := fmt.Sprintf("(%s)", utils.HumanizeTime(duration.Seconds()))

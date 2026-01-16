@@ -123,7 +123,7 @@ func processURL(ctx context.Context, githubURL string, urlIndex int, client *git
 		displayURL = analyzingPRURL
 
 		if reporter != nil {
-			reporter.SetPhase("Fetching PR reviews")
+			reporter.SetPhase("Fetching PR reviews and comments")
 			reporter.SetDetail(parsed.Identifier)
 		}
 		reviews, err := githubapi.FetchPRReviews(ctx, client, parsed.Owner, parsed.Repo, parsed.Identifier)
@@ -131,21 +131,35 @@ func processURL(ctx context.Context, githubURL string, urlIndex int, client *git
 			return nil, err
 		}
 		for _, review := range reviews {
-			if review.State == "APPROVED" || shipItMatch(review.Body) {
+			reviewEvents = append(reviewEvents, ReviewEvent{
+				Type:     "review",
+				State:    review.State,
+				Time:     review.SubmittedAt,
+				Reviewer: review.User.Login,
+				URL:      firstNonEmpty(review.HTMLURL, analyzingPRURL),
+			})
+		}
+
+		comments, err := githubapi.FetchPRComments(ctx, client, parsed.Owner, parsed.Repo, parsed.Identifier)
+		if err == nil {
+			for _, comment := range comments {
 				reviewEvents = append(reviewEvents, ReviewEvent{
-					Type:     "shippit",
-					Time:     review.SubmittedAt,
-					Reviewer: review.User.Login,
-					URL:      firstNonEmpty(review.HTMLURL, analyzingPRURL),
+					Type:     "comment",
+					Time:     comment.SubmittedAt,
+					Reviewer: comment.User.Login,
+					URL:      firstNonEmpty(comment.HTMLURL, analyzingPRURL),
 				})
 			}
 		}
+
 		if prData.MergedAt != nil && *prData.MergedAt != "" {
 			reviewEvents = append(reviewEvents, ReviewEvent{
 				Type:     "merged",
 				Time:     *prData.MergedAt,
 				MergedBy: resolvedUser(prData.MergedBy),
 				URL:      analyzingPRURL,
+				PRNumber: prData.Number,
+				PRTitle:  prData.Title,
 			})
 			if t, ok := utils.ParseTime(*prData.MergedAt); ok {
 				ms := t.UnixMilli()
@@ -166,6 +180,53 @@ func processURL(ctx context.Context, githubURL string, urlIndex int, client *git
 		prs, err := githubapi.FetchCommitAssociatedPRs(ctx, client, parsed.Owner, parsed.Repo, headSHA)
 		if err == nil && len(prs) > 0 {
 			targetBranch = prs[0].Base.Ref
+			
+			// Fetch reviews and comments for the first associated PR
+			prNumber := fmt.Sprintf("%d", prs[0].Number)
+			if reporter != nil {
+				reporter.SetPhase("Fetching associated PR metadata")
+				reporter.SetDetail(prNumber)
+			}
+			
+			reviews, err := githubapi.FetchPRReviews(ctx, client, parsed.Owner, parsed.Repo, prNumber)
+			if err == nil {
+				for _, review := range reviews {
+					reviewEvents = append(reviewEvents, ReviewEvent{
+						Type:     "review",
+						State:    review.State,
+						Time:     review.SubmittedAt,
+						Reviewer: review.User.Login,
+						URL:      firstNonEmpty(review.HTMLURL, prs[0].HTMLURL),
+					})
+				}
+			}
+			
+			comments, err := githubapi.FetchPRComments(ctx, client, parsed.Owner, parsed.Repo, prNumber)
+			if err == nil {
+				for _, comment := range comments {
+					reviewEvents = append(reviewEvents, ReviewEvent{
+						Type:     "comment",
+						Time:     comment.SubmittedAt,
+						Reviewer: comment.User.Login,
+						URL:      firstNonEmpty(comment.HTMLURL, prs[0].HTMLURL),
+					})
+				}
+			}
+			
+			if prs[0].MergedAt != nil && *prs[0].MergedAt != "" {
+				reviewEvents = append(reviewEvents, ReviewEvent{
+					Type:     "merged",
+					Time:     *prs[0].MergedAt,
+					MergedBy: resolvedUser(prs[0].MergedBy),
+					URL:      prs[0].HTMLURL,
+					PRNumber: prs[0].Number,
+					PRTitle:  prs[0].Title,
+				})
+				if t, ok := utils.ParseTime(*prs[0].MergedAt); ok {
+					ms := t.UnixMilli()
+					mergedAtMs = &ms
+				}
+			}
 		}
 		if targetBranch == "" {
 			if repoMeta, err := githubapi.FetchRepository(ctx, client, baseURL); err == nil && repoMeta.DefaultBranch != "" {
@@ -360,16 +421,27 @@ func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex 
 	// Emit OTel spans for review and merge events
 	for _, event := range reviewEvents {
 		eventTime, _ := utils.ParseTime(event.Time)
-		name := "Approved"
-		if event.Type == "merged" {
+		name := "Marker"
+		eventType := event.Type
+		
+		switch event.Type {
+		case "review":
+			name = fmt.Sprintf("Review: %s", event.State)
+			eventType = strings.ToLower(event.State)
+		case "comment":
+			name = "Comment"
+		case "merged":
 			name = "Merged"
+			if event.PRNumber != 0 {
+				name = fmt.Sprintf("Merged PR #%d: %s", event.PRNumber, event.PRTitle)
+			}
 		}
 
 		_, span := analyzerTracer.Start(ctx, name,
 			trace.WithTimestamp(eventTime),
 			trace.WithAttributes(
 				attribute.String("type", "marker"),
-				attribute.String("github.event_type", event.Type),
+				attribute.String("github.event_type", eventType),
 				attribute.String("github.user", firstNonEmpty(event.Reviewer, event.MergedBy)),
 				attribute.String("github.url", event.URL),
 			),

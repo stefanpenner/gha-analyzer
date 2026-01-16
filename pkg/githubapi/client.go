@@ -151,6 +151,7 @@ type Step struct {
 
 type PullRequest struct {
 	Number   int       `json:"number"`
+	Title    string    `json:"title"`
 	Head     PRRef     `json:"head"`
 	Base     PRRef     `json:"base"`
 	MergedAt *string   `json:"merged_at"`
@@ -194,9 +195,14 @@ type RepoMeta struct {
 }
 
 type PullAssociated struct {
-	Base struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	Base   struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
+	MergedAt *string   `json:"merged_at"`
+	MergedBy *UserInfo `json:"merged_by"`
+	HTMLURL  string    `json:"html_url"`
 }
 
 type GitHubError struct {
@@ -559,6 +565,19 @@ func FetchPRReviews(ctx context.Context, client *Client, owner, repo, prNumber s
 	return fetchReviewsPaginated(ctx, client, reviewsURL)
 }
 
+func FetchPRComments(ctx context.Context, client *Client, owner, repo, prNumber string) ([]Review, error) {
+	ctx, span := tracer.Start(ctx, "FetchPRComments", trace.WithAttributes(
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+		attribute.String("github.prNumber", prNumber),
+	))
+	defer span.End()
+
+	// Use Review struct for simplicity as they share similar fields (ID, User, Body, SubmittedAt/CreatedAt)
+	commentsURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%s/comments?per_page=100", owner, repo, prNumber)
+	return fetchCommentsPaginated(ctx, client, commentsURL)
+}
+
 func FetchJobsPaginated(ctx context.Context, client *Client, urlValue string) ([]Job, error) {
 	ctx, span := tracer.Start(ctx, "FetchJobsPaginated", trace.WithAttributes(
 		attribute.String("github.url", urlValue),
@@ -623,6 +642,45 @@ func fetchReviewsPaginated(ctx context.Context, client *Client, urlValue string)
 			return nil, err
 		}
 		all = append(all, data...)
+		nextURL = parseNextLink(resp.Header.Get("Link"))
+	}
+	return all, nil
+}
+
+func fetchCommentsPaginated(ctx context.Context, client *Client, urlValue string) ([]Review, error) {
+	ctx, span := tracer.Start(ctx, "fetchCommentsPaginated", trace.WithAttributes(
+		attribute.String("github.url", urlValue),
+	))
+	defer span.End()
+
+	var all []Review
+	nextURL := urlValue
+	for nextURL != "" {
+		resp, err := fetchWithAuth(ctx, client, nextURL, "")
+		if err != nil {
+			return nil, err
+		}
+		
+		type Comment struct {
+			ID        int64    `json:"id"`
+			User      UserInfo `json:"user"`
+			Body      string   `json:"body"`
+			CreatedAt string   `json:"created_at"`
+			HTMLURL   string   `json:"html_url"`
+		}
+		var data []Comment
+		if err := decodeJSON(resp, &data); err != nil {
+			return nil, err
+		}
+		for _, c := range data {
+			all = append(all, Review{
+				ID:          c.ID,
+				User:        c.User,
+				Body:        c.Body,
+				SubmittedAt: c.CreatedAt,
+				HTMLURL:     c.HTMLURL,
+			})
+		}
 		nextURL = parseNextLink(resp.Header.Get("Link"))
 	}
 	return all, nil

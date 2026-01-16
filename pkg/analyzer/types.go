@@ -77,10 +77,13 @@ type JobWithURL struct {
 
 type ReviewEvent struct {
 	Type     string
+	State    string
 	Time     string
 	Reviewer string
 	MergedBy string
 	URL      string
+	PRNumber int
+	PRTitle  string
 }
 
 func (r ReviewEvent) TimeMillis() int64 {

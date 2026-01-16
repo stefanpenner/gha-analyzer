@@ -15,6 +15,7 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/ingest/polling"
 	"github.com/stefanpenner/gha-analyzer/pkg/output"
 	"github.com/stefanpenner/gha-analyzer/pkg/tui"
+	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
@@ -23,6 +24,7 @@ func main() {
 	args := os.Args[1:]
 	perfettoFile := ""
 	openInPerfetto := false
+	openInOTel := false
 	
 	filtered := []string{}
 	for _, arg := range args {
@@ -36,6 +38,10 @@ func main() {
 		}
 		if arg == "--open-in-perfetto" {
 			openInPerfetto = true
+			continue
+		}
+		if arg == "--open-in-otel" {
+			openInOTel = true
 			continue
 		}
 		filtered = append(filtered, arg)
@@ -125,6 +131,11 @@ func main() {
 	if err := pipeline.Finish(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: Finalizing pipeline failed: %v\n", err)
 	}
+
+	if openInOTel {
+		fmt.Println("Opening OTel Desktop Viewer...")
+		_ = utils.OpenBrowser("http://localhost:8000")
+	}
 }
 
 func sumRuns(results []analyzer.URLResult) int {
@@ -158,6 +169,7 @@ func printUsage() {
 	fmt.Println("\nFlags:")
 	fmt.Println("  --perfetto=<file.json>    Save trace for Perfetto.dev analysis")
 	fmt.Println("  --open-in-perfetto        Automatically open the generated trace in Perfetto UI")
+	fmt.Println("  --open-in-otel            Automatically open the OTel Desktop Viewer")
 	fmt.Println("  help, --help, -h          Show this help message")
 	fmt.Println("\nEnvironment Variables:")
 	fmt.Println("  GITHUB_TOKEN              GitHub PAT (alternatively pass as argument)")
