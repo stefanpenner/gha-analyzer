@@ -105,14 +105,16 @@ func RenderOTelTimeline(w io.Writer, spans []trace.ReadOnlySpan) {
 	endTime := latest.Format("15:04:05")
 	durationStr := utils.HumanizeTime(totalDuration.Seconds())
 	
-	header := fmt.Sprintf("│ Start: %s   End: %s   Duration: %s", startTime, endTime, durationStr)
-	padding := scale + 2 - len(header) - 1 // -1 for the trailing │
+	headerText := fmt.Sprintf(" Start: %s   End: %s   Duration: %s", startTime, endTime, durationStr)
+	headerCells := len(headerText) // This is all ASCII
+	padding := (scale + 2) - headerCells
+
 	if padding < 0 {
 		padding = 0
 	}
 
 	fmt.Fprintf(w, "┌%s┐\n", strings.Repeat("─", scale+2))
-	fmt.Fprintf(w, "%s%s │\n", header, strings.Repeat(" ", padding))
+	fmt.Fprintf(w, "│%s%s│\n", headerText, strings.Repeat(" ", padding))
 	fmt.Fprintf(w, "├%s┤\n", strings.Repeat("─", scale+2))
 
 	for _, root := range roots {
@@ -120,6 +122,23 @@ func RenderOTelTimeline(w io.Writer, spans []trace.ReadOnlySpan) {
 	}
 	
 	fmt.Fprintf(w, "└%s┘\n", strings.Repeat("─", scale+2))
+}
+
+func getMarkerWidth(eventType string) int {
+	switch eventType {
+	case "merged", "default":
+		return 1 // ◆, ▲ are 1 cell
+	case "commit":
+		return 2 // 📍 is 2 cells
+	case "comment", "commented":
+		return 2 // 💬 is 2 cells
+	case "approved":
+		return 2 // ✅ is 2 cells
+	case "changes_requested":
+		return 2 // ❌ is 2 cells
+	default:
+		return 2
+	}
 }
 
 func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, totalDuration time.Duration, scale int) {
@@ -139,10 +158,10 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 		attrs[string(a.Key)] = a.Value.AsString()
 	}
 	
-	icon := "•"
+	icon := "• "
 	switch attrs["type"] {
 	case "workflow":
-		icon = "📋"
+		icon = "📋 "
 	case "job":
 		icon = "⚙️ "
 	case "step":
@@ -166,7 +185,7 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 		}
 	}
 
-	statusIcon := ""
+	statusIcon := "  " // Default to 2 spaces for empty status
 	switch attrs["github.conclusion"] {
 	case "success":
 		statusIcon = "✅"
@@ -180,7 +199,9 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 	}
 
 	coloredBar := strings.Repeat(barChar, maxInt(1, clampedLength))
+	markerWidth := 1
 	if attrs["type"] == "marker" {
+		markerWidth = getMarkerWidth(attrs["github.event_type"])
 		switch attrs["github.event_type"] {
 		case "merged":
 			coloredBar = utils.GreenText("◆")
@@ -206,10 +227,11 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 	}
 
 	indent := strings.Repeat("  ", depth)
-	remaining := strings.Repeat(" ", maxInt(0, scale-startPos-maxInt(1, clampedLength)))
+	remainingCount := scale - startPos - maxInt(1, clampedLength)
 	if attrs["type"] == "marker" {
-		remaining = strings.Repeat(" ", maxInt(0, scale-startPos-1))
+		remainingCount = scale - startPos - markerWidth
 	}
+	remaining := strings.Repeat(" ", maxInt(0, remainingCount))
 
 	label := s.Name()
 	if user, ok := attrs["github.user"]; ok && user != "" {
@@ -219,9 +241,18 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 		label = utils.MakeClickableLink(url, label)
 	}
 	
-	displayName := fmt.Sprintf("%s%s %s", icon, statusIcon, label)
+	// Pad icons to ensure consistent labeling alignment
+	var displayName string
 	if attrs["type"] == "marker" {
-		displayName = fmt.Sprintf("%s %s", icon, label)
+		if markerWidth == 1 {
+			displayName = fmt.Sprintf("%s     %s", icon, label)
+		} else {
+			displayName = fmt.Sprintf("%s    %s", icon, label)
+		}
+	} else {
+		// icon is typically 3 cells (📋 , ⚙️ ,   ↳)
+		// statusIcon is typically 2 cells (✅, ❌) or 2 spaces
+		displayName = fmt.Sprintf("%s%s %s", icon, statusIcon, label)
 	}
 
 	durationDisplay := fmt.Sprintf("(%s)", utils.HumanizeTime(duration.Seconds()))

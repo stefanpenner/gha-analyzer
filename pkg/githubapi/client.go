@@ -107,6 +107,7 @@ type WorkflowRunsResponse struct {
 
 type WorkflowRun struct {
 	ID         int64   `json:"id"`
+	RunAttempt int64   `json:"run_attempt"`
 	Name       string  `json:"name"`
 	Status     string  `json:"status"`
 	Conclusion string  `json:"conclusion"`

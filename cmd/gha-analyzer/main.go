@@ -74,6 +74,7 @@ func main() {
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithBatcher(collector),
 		sdktrace.WithResource(res),
+		sdktrace.WithIDGenerator(githubapi.GHIDGenerator{}),
 	)
 	otel.SetTracerProvider(tp)
 	defer tp.Shutdown(ctx)
