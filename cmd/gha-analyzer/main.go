@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/stefanpenner/gha-analyzer/pkg/core"
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
@@ -25,6 +26,7 @@ func main() {
 	perfettoFile := ""
 	openInPerfetto := false
 	openInOTel := false
+	var window time.Duration
 	
 	filtered := []string{}
 	for _, arg := range args {
@@ -34,6 +36,15 @@ func main() {
 		}
 		if strings.HasPrefix(arg, "--perfetto=") {
 			perfettoFile = strings.TrimPrefix(arg, "--perfetto=")
+			continue
+		}
+		if strings.HasPrefix(arg, "--window=") {
+			d, err := time.ParseDuration(strings.TrimPrefix(arg, "--window="))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: Invalid window duration %s: %v\n", arg, err)
+				os.Exit(1)
+			}
+			window = d
 			continue
 		}
 		if arg == "--open-in-perfetto" {
@@ -102,7 +113,9 @@ func main() {
 	progress.Start()
 
 	// 5. Run Ingestor
-	ingestor := polling.NewPollingIngestor(client, args, progress, analyzer.AnalyzeOptions{})
+	ingestor := polling.NewPollingIngestor(client, args, progress, analyzer.AnalyzeOptions{
+		Window: window,
+	})
 	results, globalEarliest, globalLatest, err := ingestor.Ingest(ctx)
 	
 	progress.Finish()
@@ -171,6 +184,7 @@ func printUsage() {
 	fmt.Println("  --perfetto=<file.json>    Save trace for Perfetto.dev analysis")
 	fmt.Println("  --open-in-perfetto        Automatically open the generated trace in Perfetto UI")
 	fmt.Println("  --open-in-otel            Automatically open the OTel Desktop Viewer")
+	fmt.Println("  --window=<duration>       Only show events within <duration> of merge/latest activity (e.g. 24h, 2h)")
 	fmt.Println("  help, --help, -h          Show this help message")
 	fmt.Println("\nEnvironment Variables:")
 	fmt.Println("  GITHUB_TOKEN              GitHub PAT (alternatively pass as argument)")

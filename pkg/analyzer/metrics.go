@@ -37,6 +37,22 @@ func FindEarliestTimestamp(runs []githubapi.WorkflowRun) int64 {
 	return earliest
 }
 
+func FindLatestTimestamp(runs []githubapi.WorkflowRun) int64 {
+	latest := int64(0)
+	for _, run := range runs {
+		runTime := int64(0)
+		if t, ok := utils.ParseTime(run.UpdatedAt); ok {
+			runTime = t.UnixMilli()
+		} else if t, ok := utils.ParseTime(run.CreatedAt); ok {
+			runTime = t.UnixMilli()
+		}
+		if runTime > latest {
+			latest = runTime
+		}
+	}
+	return latest
+}
+
 func CalculateMaxConcurrency(jobStartTimes, jobEndTimes []JobEvent) int {
 	if len(jobStartTimes) == 0 {
 		return 0

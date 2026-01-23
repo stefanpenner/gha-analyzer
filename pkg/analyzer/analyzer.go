@@ -36,6 +36,7 @@ func (e URLError) Error() string {
 }
 
 type AnalyzeOptions struct {
+	Window time.Duration
 }
 
 func AnalyzeURLs(ctx context.Context, urls []string, client *githubapi.Client, reporter ProgressReporter, opts AnalyzeOptions) ([]URLResult, []TraceEvent, int64, int64, []URLError) {
@@ -352,6 +353,58 @@ func processURL(ctx context.Context, githubURL string, urlIndex int, client *git
 	}
 
 	if len(runs) == 0 {
+		return nil, nil
+	}
+
+	// Apply window filtering if requested
+	if opts.Window > 0 {
+		var anchorTimeMs int64
+		if mergedAtMs != nil {
+			anchorTimeMs = *mergedAtMs
+		} else {
+			// Fallback to latest activity
+			anchorTimeMs = FindLatestTimestamp(runs)
+			for _, event := range reviewEvents {
+				ms := event.TimeMillis()
+				if ms > anchorTimeMs {
+					anchorTimeMs = ms
+				}
+			}
+		}
+
+		startTimeMs := anchorTimeMs - opts.Window.Milliseconds()
+
+		// Filter runs
+		var filteredRuns []githubapi.WorkflowRun
+		for _, run := range runs {
+			runTime := int64(0)
+			if t, ok := utils.ParseTime(run.UpdatedAt); ok {
+				runTime = t.UnixMilli()
+			} else if t, ok := utils.ParseTime(run.CreatedAt); ok {
+				runTime = t.UnixMilli()
+			}
+			if runTime >= startTimeMs {
+				filteredRuns = append(filteredRuns, run)
+			}
+		}
+		runs = filteredRuns
+
+		// Filter review events
+		var filteredReviews []ReviewEvent
+		for _, event := range reviewEvents {
+			if event.TimeMillis() >= startTimeMs {
+				filteredReviews = append(filteredReviews, event)
+			}
+		}
+		reviewEvents = filteredReviews
+
+		// Filter commit time
+		if commitTimeMs != nil && *commitTimeMs < startTimeMs {
+			commitTimeMs = nil
+		}
+	}
+
+	if len(runs) == 0 && len(reviewEvents) == 0 {
 		return nil, nil
 	}
 
