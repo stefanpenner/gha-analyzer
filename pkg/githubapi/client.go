@@ -113,6 +113,7 @@ type WorkflowRun struct {
 	Conclusion string  `json:"conclusion"`
 	CreatedAt  string  `json:"created_at"`
 	UpdatedAt  string  `json:"updated_at"`
+	HeadSHA    string  `json:"head_sha"`
 	Repository RepoRef `json:"repository"`
 }
 

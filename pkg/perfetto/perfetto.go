@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -53,9 +54,10 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 		for _, attr := range s.Attributes() {
 			val := attr.Value.AsInterface()
 			// Basic sanitization for Perfetto JSON
-			if s, ok := val.(string); ok {
-				if len(s) > 1000 {
-					val = s[:1000] + "..."
+			if str, ok := val.(string); ok {
+				val = utils.StripANSI(str)
+				if len(str) > 1000 {
+					val = str[:1000] + "..."
 				}
 			}
 			attrs[string(attr.Key)] = val
@@ -77,8 +79,10 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 		}
 
 		ph := "X"
+		sScope := ""
 		if attrs["type"] == "marker" {
 			ph = "i"
+			sScope = "p"
 		}
 
 		pid := 1
@@ -89,7 +93,7 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 			if runID, ok := attrs["github.run_id"].(int64); ok {
 				pid = int(runID % 2147483647)
 				tid = 0
-				trackName = s.Name()
+				trackName = utils.StripANSI(s.Name())
 			}
 		} else if attrs["type"] == "job" {
 			if runID, ok := attrs["github.run_id"].(int64); ok {
@@ -97,7 +101,7 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 			}
 			if jobID, ok := attrs["github.job_id"].(int64); ok {
 				tid = int(jobID % 2147483647)
-				trackName = "Job: " + s.Name()
+				trackName = "Job: " + utils.StripANSI(s.Name())
 			}
 		} else if attrs["type"] == "step" {
 			if runID, ok := attrs["github.run_id"].(int64); ok {
@@ -106,20 +110,27 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 			// Steps on the same track as their job
 			// Since we don't have the job ID easily, use the parent SpanID
 			parentID := s.Parent().SpanID()
-			var tidVal int
+			var tidVal uint32
 			for i := 0; i < 8; i++ {
-				tidVal = (tidVal << 8) | int(parentID[i])
+				tidVal = (tidVal << 8) | uint32(parentID[i])
 			}
-			tid = int(uint32(tidVal) % 2147483647)
+			tid = int(tidVal % 2147483647)
 		} else if attrs["type"] == "marker" {
 			pid = 999
-			tid = 0
+			tid = 2 // Unified "GitHub PR Events" track
 			if !pidsSeen[pid] {
 				otelEvents = append(otelEvents, analyzer.TraceEvent{
 					Name: "process_name", Ph: "M", Pid: pid,
 					Args: map[string]interface{}{"name": "GitHub Events"},
 				})
 				pidsSeen[pid] = true
+			}
+			if !tidsSeen[tid] {
+				otelEvents = append(otelEvents, analyzer.TraceEvent{
+					Name: "thread_name", Ph: "M", Pid: pid, Tid: tid,
+					Args: map[string]interface{}{"name": "GitHub PR Events"},
+				})
+				tidsSeen[tid] = true
 			}
 		}
 
@@ -141,7 +152,7 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 		}
 
 		otelEvents = append(otelEvents, analyzer.TraceEvent{
-			Name: s.Name(),
+			Name: utils.StripANSI(s.Name()),
 			Ph:   ph,
 			Ts:   ts,
 			Dur:  dur,
@@ -149,6 +160,7 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 			Tid:  tid,
 			Cat:  fmt.Sprintf("%v", attrs["type"]),
 			Args: attrs,
+			S:    sScope,
 		})
 	}
 
@@ -156,6 +168,19 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 
 	renormalized := make([]analyzer.TraceEvent, 0, len(allEvents))
 	for _, event := range allEvents {
+		// Clean up legacy events too
+		event.Name = utils.StripANSI(event.Name)
+		if event.Ph == "i" && event.S == "" {
+			event.S = "p"
+		}
+		if event.Args != nil {
+			for k, v := range event.Args {
+				if str, ok := v.(string); ok {
+					event.Args[k] = utils.StripANSI(str)
+				}
+			}
+		}
+
 		// Only renormalize legacy events that have url_index
 		isLegacy := false
 		if event.Args != nil {
@@ -189,12 +214,12 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 				event.Ts = (absoluteTime - trueEarliest) * 1000
 			}
 		}
-		
+
 		// Final check to prevent negative timestamps which Perfetto hates
 		if event.Ts < 0 {
 			event.Ts = 0
 		}
-		
+
 		renormalized = append(renormalized, event)
 	}
 	analyzer.SortTraceEvents(renormalized)

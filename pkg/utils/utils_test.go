@@ -18,7 +18,11 @@ func TestParseGitHubURL(t *testing.T) {
 	}{
 		{name: "pr url", url: "https://github.com/owner/repo/pull/123", expectType: "pr", expectID: "123"},
 		{name: "commit url", url: "https://github.com/owner/repo/commit/abc123def", expectType: "commit", expectID: "abc123def"},
+		{name: "short pr url", url: "owner/repo/pull/123", expectType: "pr", expectID: "123"},
+		{name: "short commit url", url: "owner/repo/commit/abc123def", expectType: "commit", expectID: "abc123def"},
+		{name: "github.com pr url", url: "github.com/owner/repo/pull/123", expectType: "pr", expectID: "123"},
 		{name: "invalid url", url: "https://github.com/owner/repo/issues/123", wantError: true},
+		{name: "completely invalid", url: "not-a-url", wantError: true},
 	}
 
 	for _, tc := range cases {

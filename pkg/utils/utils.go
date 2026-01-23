@@ -42,8 +42,20 @@ func HumanizeTime(seconds float64) string {
 }
 
 func ParseGitHubURL(raw string) (ParsedGitHubURL, error) {
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" {
+	// If it doesn't have a protocol, but looks like a github URL or org/repo,
+	// we'll try to parse it by prepending https://
+	input := raw
+	if !strings.HasPrefix(input, "http://") && !strings.HasPrefix(input, "https://") {
+		if strings.HasPrefix(input, "github.com/") {
+			input = "https://" + input
+		} else {
+			// Assume it's an org/repo/type/id format
+			input = "https://github.com/" + input
+		}
+	}
+
+	parsed, err := url.Parse(input)
+	if err != nil || (parsed.Host != "github.com" && parsed.Host != "www.github.com") {
 		return ParsedGitHubURL{}, fmt.Errorf("Invalid GitHub URL: %s. Expected format: PR: https://github.com/owner/repo/pull/123 or Commit: https://github.com/owner/repo/commit/abc123...", raw)
 	}
 
@@ -195,4 +207,49 @@ func OpenBrowser(url string) error {
 		args = []string{url}
 	}
 	return exec.Command(cmd, args...).Start()
+}
+
+func StripANSI(str string) string {
+	var b strings.Builder
+	b.Grow(len(str))
+	inEscape := false
+	inOSC := false
+	for i := 0; i < len(str); i++ {
+		c := str[i]
+		if inEscape {
+			if c == '[' {
+				continue
+			}
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '@' {
+				inEscape = false
+			}
+			continue
+		}
+		if inOSC {
+			if c == '\a' || (c == '\\' && i > 0 && str[i-1] == '\u001b') {
+				inOSC = false
+			}
+			continue
+		}
+		if c == '\u001b' {
+			if i+1 < len(str) {
+				if str[i+1] == '[' {
+					inEscape = true
+					i++
+					continue
+				}
+				if str[i+1] == ']' {
+					inOSC = true
+					i++
+					continue
+				}
+			}
+		}
+		// Also filter out other control characters that break JSON
+		if c < 32 && c != '\t' && c != '\n' && c != '\r' {
+			continue
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }

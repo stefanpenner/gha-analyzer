@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/gha-analyzer/pkg/perfetto"
@@ -207,7 +208,7 @@ func OutputCombinedResults(w io.Writer, urlResults []analyzer.URLResult, combine
 
 	section(w, "Pipeline Timelines (OTel-native)")
 	fmt.Fprintf(w, "%s:\n", utils.MakeClickableLink("https://ui.perfetto.dev", "Generic OTel Trace Waterfall"))
-	RenderOTelTimeline(w, spans)
+	RenderOTelTimeline(w, spans, time.UnixMilli(globalEarliestTime), time.UnixMilli(globalLatestTime))
 
 	if perfettoFile != "" {
 		return perfetto.WriteTrace(w, urlResults, combined, traceEvents, globalEarliestTime, perfettoFile, openInPerfetto, spans)

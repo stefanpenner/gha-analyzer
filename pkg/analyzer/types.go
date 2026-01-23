@@ -118,7 +118,7 @@ type URLResult struct {
 type TraceEvent struct {
 	Name string                 `json:"name"`
 	Ph   string                 `json:"ph"`
-	Ts   int64                  `json:"ts,omitempty"`
+	Ts   int64                  `json:"ts"`
 	Dur  int64                  `json:"dur,omitempty"`
 	Pid  int                    `json:"pid"`
 	Tid  int                    `json:"tid,omitempty"`

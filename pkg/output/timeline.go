@@ -31,6 +31,9 @@ func BuildSpanTree(spans []trace.ReadOnlySpan) []*SpanNode {
 	// Link children to parents
 	for _, s := range spans {
 		node := nodes[s.SpanContext().SpanID().String()]
+		if node == nil {
+			continue
+		}
 		parentID := s.Parent().SpanID().String()
 		
 		if parentID == "0000000000000000" {
@@ -59,7 +62,7 @@ func sortNodes(nodes []*SpanNode) {
 }
 
 // RenderOTelTimeline renders a generic OTel span tree as a terminal waterfall.
-func RenderOTelTimeline(w io.Writer, spans []trace.ReadOnlySpan) {
+func RenderOTelTimeline(w io.Writer, spans []trace.ReadOnlySpan, globalEarliest, globalLatest time.Time) {
 	if len(spans) == 0 {
 		return
 	}
@@ -67,15 +70,40 @@ func RenderOTelTimeline(w io.Writer, spans []trace.ReadOnlySpan) {
 	// Filter out internal instrumentation spans by default
 	// We only want to show spans that are part of the GHA hierarchy (workflow, job, step) or markers
 	var filtered []trace.ReadOnlySpan
+	seenMarkers := make(map[string]struct{})
 	for _, s := range spans {
 		isGHA := false
+		var eventID string
+		var eventTime string
 		for _, attr := range s.Attributes() {
 			if attr.Key == "type" && (attr.Value.AsString() == "workflow" || attr.Value.AsString() == "job" || attr.Value.AsString() == "step" || attr.Value.AsString() == "marker") {
 				isGHA = true
-				break
+			}
+			if attr.Key == "github.event_id" {
+				eventID = attr.Value.AsString()
+			}
+			if attr.Key == "github.event_time" {
+				eventTime = attr.Value.AsString()
 			}
 		}
 		if isGHA {
+			// If we have global bounds, only include spans that overlap with them
+			if !globalEarliest.IsZero() && s.EndTime().Before(globalEarliest) {
+				continue
+			}
+			if !globalLatest.IsZero() && s.StartTime().After(globalLatest) {
+				continue
+			}
+
+			// For markers, we only want to keep the first one for each eventID to avoid duplicates
+			if eventID != "" {
+				key := fmt.Sprintf("%s-%s", eventID, eventTime)
+				if _, seen := seenMarkers[key]; seen {
+					continue
+				}
+				seenMarkers[key] = struct{}{}
+			}
+
 			filtered = append(filtered, s)
 		}
 	}
@@ -87,15 +115,27 @@ func RenderOTelTimeline(w io.Writer, spans []trace.ReadOnlySpan) {
 	roots := BuildSpanTree(filtered)
 	
 	// Find overall time bounds
-	earliest := filtered[0].StartTime()
-	latest := filtered[0].EndTime()
-	for _, s := range filtered {
-		if s.StartTime().Before(earliest) {
-			earliest = s.StartTime()
+	// We'll use the provided global bounds if available, otherwise calculate from spans
+	earliest := globalEarliest
+	latest := globalLatest
+
+	if earliest.IsZero() || latest.IsZero() {
+		if len(filtered) > 0 {
+			earliest = filtered[0].StartTime()
+			latest = filtered[0].EndTime()
+			for _, s := range filtered {
+				if s.StartTime().Before(earliest) {
+					earliest = s.StartTime()
+				}
+				if s.EndTime().After(latest) {
+					latest = s.EndTime()
+				}
+			}
 		}
-		if s.EndTime().After(latest) {
-			latest = s.EndTime()
-		}
+	}
+
+	if earliest.IsZero() || latest.IsZero() {
+		return
 	}
 
 	totalDuration := latest.Sub(earliest)
@@ -143,8 +183,23 @@ func getMarkerWidth(eventType string) int {
 
 func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, totalDuration time.Duration, scale int) {
 	s := node.Span
-	start := s.StartTime().Sub(globalStart)
-	duration := s.EndTime().Sub(s.StartTime())
+	
+	// Clamp start and end times to the global window for visualization
+	startT := s.StartTime()
+	if startT.Before(globalStart) {
+		startT = globalStart
+	}
+	endT := s.EndTime()
+	if endT.After(globalStart.Add(totalDuration)) {
+		endT = globalStart.Add(totalDuration)
+	}
+	
+	if endT.Before(startT) {
+		return // Span is entirely outside the window
+	}
+
+	start := startT.Sub(globalStart)
+	duration := endT.Sub(startT)
 	
 	startPos := int(float64(start) / float64(totalDuration) * float64(scale))
 	barLength := maxInt(1, int(float64(duration)/float64(totalDuration)*float64(scale)))

@@ -35,7 +35,10 @@ func (e URLError) Error() string {
 	return fmt.Sprintf("Error processing URL %s: %s", e.URL, e.Err.Error())
 }
 
-func AnalyzeURLs(ctx context.Context, urls []string, client *githubapi.Client, reporter ProgressReporter) ([]URLResult, []TraceEvent, int64, int64, []URLError) {
+type AnalyzeOptions struct {
+}
+
+func AnalyzeURLs(ctx context.Context, urls []string, client *githubapi.Client, reporter ProgressReporter, opts AnalyzeOptions) ([]URLResult, []TraceEvent, int64, int64, []URLError) {
 	allTraceEvents := []TraceEvent{}
 	allJobStartTimes := []JobEvent{}
 	allJobEndTimes := []JobEvent{}
@@ -48,7 +51,7 @@ func AnalyzeURLs(ctx context.Context, urls []string, client *githubapi.Client, r
 		if reporter != nil {
 			reporter.StartURL(urlIndex, githubURL)
 		}
-		result, err := processURL(ctx, githubURL, urlIndex, client, reporter)
+		result, err := processURL(ctx, githubURL, urlIndex, client, reporter, opts)
 		if err != nil {
 			urlErrors = append(urlErrors, URLError{URL: githubURL, Err: err})
 			continue
@@ -64,7 +67,19 @@ func AnalyzeURLs(ctx context.Context, urls []string, client *githubapi.Client, r
 		if result.EarliestTime < globalEarliestTime {
 			globalEarliestTime = result.EarliestTime
 		}
-		urlLatest := maxJobEnd(result.JobEndTimes)
+		// Calculate the actual latest time from all events in this result
+		urlLatest := result.EarliestTime
+		for _, job := range result.Metrics.JobTimeline {
+			if job.EndTime > urlLatest {
+				urlLatest = job.EndTime
+			}
+		}
+		for _, event := range result.ReviewEvents {
+			ms := event.TimeMillis()
+			if ms > urlLatest {
+				urlLatest = ms
+			}
+		}
 		if urlLatest > globalLatestTime {
 			globalLatestTime = urlLatest
 		}
@@ -86,7 +101,7 @@ func AnalyzeURLs(ctx context.Context, urls []string, client *githubapi.Client, r
 	return urlResults, allTraceEvents, globalEarliestTime, globalLatestTime, urlErrors
 }
 
-func processURL(ctx context.Context, githubURL string, urlIndex int, client *githubapi.Client, reporter ProgressReporter) (*URLResult, error) {
+func processURL(ctx context.Context, githubURL string, urlIndex int, client *githubapi.Client, reporter ProgressReporter, opts AnalyzeOptions) (*URLResult, error) {
 	parsed, err := utils.ParseGitHubURL(githubURL)
 	if err != nil {
 		return nil, err
@@ -101,6 +116,7 @@ func processURL(ctx context.Context, githubURL string, urlIndex int, client *git
 	var reviewEvents []ReviewEvent
 	var mergedAtMs *int64
 	var commitTimeMs *int64
+	var runs []githubapi.WorkflowRun
 	allCommitRunsCount := 0
 	var allCommitRunsComputeMs int64
 
@@ -126,6 +142,7 @@ func processURL(ctx context.Context, githubURL string, urlIndex int, client *git
 			reporter.SetPhase("Fetching PR reviews and comments")
 			reporter.SetDetail(parsed.Identifier)
 		}
+
 		reviews, err := githubapi.FetchPRReviews(ctx, client, parsed.Owner, parsed.Repo, parsed.Identifier)
 		if err != nil {
 			return nil, err
@@ -166,6 +183,15 @@ func processURL(ctx context.Context, githubURL string, urlIndex int, client *git
 				mergedAtMs = &ms
 			}
 		}
+
+		if reporter != nil {
+			reporter.SetPhase("Fetching workflow runs")
+			reporter.SetDetail(headSHA)
+		}
+		runs, err = githubapi.FetchWorkflowRuns(ctx, client, baseURL, headSHA, "", "")
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		analyzingCommitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", parsed.Owner, parsed.Repo, parsed.Identifier)
 		headSHA = parsed.Identifier
@@ -200,7 +226,7 @@ func processURL(ctx context.Context, githubURL string, urlIndex int, client *git
 					})
 				}
 			}
-			
+
 			comments, err := githubapi.FetchPRComments(ctx, client, parsed.Owner, parsed.Repo, prNumber)
 			if err == nil {
 				for _, comment := range comments {
@@ -248,7 +274,7 @@ func processURL(ctx context.Context, githubURL string, urlIndex int, client *git
 		}
 		allCommitRunsCount = len(allRunsForHead)
 
-		runs, err := githubapi.FetchWorkflowRuns(ctx, client, baseURL, headSHA, branchName, "push")
+		runs, err = githubapi.FetchWorkflowRuns(ctx, client, baseURL, headSHA, branchName, "push")
 		if err != nil {
 			return nil, err
 		}
@@ -323,29 +349,28 @@ func processURL(ctx context.Context, githubURL string, urlIndex int, client *git
 			}(run)
 		}
 		computeWg.Wait()
-
-		if len(runs) == 0 {
-			return nil, nil
-		}
-
-		return buildURLResult(ctx, parsed, urlIndex, headSHA, branchName, displayName, displayURL, reviewEvents, mergedAtMs, commitTimeMs, allCommitRunsCount, allCommitRunsComputeMs, runs, client, reporter)
 	}
 
-	if reporter != nil {
-		reporter.SetPhase("Fetching workflow runs")
-		reporter.SetDetail(headSHA)
-	}
-	runs, err := githubapi.FetchWorkflowRuns(ctx, client, baseURL, headSHA, "", "")
-	if err != nil {
-		return nil, err
-	}
 	if len(runs) == 0 {
 		return nil, nil
 	}
-	return buildURLResult(ctx, parsed, urlIndex, headSHA, branchName, displayName, displayURL, reviewEvents, mergedAtMs, commitTimeMs, allCommitRunsCount, allCommitRunsComputeMs, runs, client, reporter)
+
+	// Calculate urlEarliestTime here to ensure it's consistent
+	urlEarliestTime := FindEarliestTimestamp(runs)
+	if commitTimeMs != nil && *commitTimeMs < urlEarliestTime {
+		urlEarliestTime = *commitTimeMs
+	}
+	for _, event := range reviewEvents {
+		ms := event.TimeMillis()
+		if ms < urlEarliestTime {
+			urlEarliestTime = ms
+		}
+	}
+
+	return buildURLResult(ctx, parsed, urlIndex, headSHA, branchName, displayName, displayURL, reviewEvents, mergedAtMs, commitTimeMs, allCommitRunsCount, allCommitRunsComputeMs, runs, client, reporter, urlEarliestTime)
 }
 
-func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchName, displayName, displayURL string, reviewEvents []ReviewEvent, mergedAtMs, commitTimeMs *int64, allCommitRunsCount int, allCommitRunsComputeMs int64, runs []githubapi.WorkflowRun, client *githubapi.Client, reporter ProgressReporter) (*URLResult, error) {
+func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchName, displayName, displayURL string, reviewEvents []ReviewEvent, mergedAtMs, commitTimeMs *int64, allCommitRunsCount int, allCommitRunsComputeMs int64, runs []githubapi.WorkflowRun, client *githubapi.Client, reporter ProgressReporter, urlEarliestTime int64) (*URLResult, error) {
 	if reporter != nil {
 		reporter.SetURLRuns(len(runs))
 		reporter.SetPhase("Processing workflow runs")
@@ -355,8 +380,7 @@ func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex 
 	traceEvents := []TraceEvent{}
 	jobStartTimes := []JobEvent{}
 	jobEndTimes := []JobEvent{}
-	urlEarliestTime := FindEarliestTimestamp(runs)
-
+	
 	type runResult struct {
 		metrics     Metrics
 		traceEvents []TraceEvent
@@ -444,6 +468,8 @@ func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex 
 				attribute.String("github.event_type", eventType),
 				attribute.String("github.user", firstNonEmpty(event.Reviewer, event.MergedBy)),
 				attribute.String("github.url", event.URL),
+				attribute.String("github.event_id", fmt.Sprintf("%s-%s-%s-%s", event.Type, event.Time, firstNonEmpty(event.Reviewer, event.MergedBy), event.URL)),
+				attribute.String("github.event_time", event.Time),
 			),
 		)
 		span.End(trace.WithTimestamp(eventTime.Add(time.Millisecond)))
@@ -541,10 +567,29 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 	runEndTs := runEnd.UnixMilli()
 	runStartTs := runStart.UnixMilli()
 	for _, job := range jobs {
+		if job.Status != "completed" {
+			continue
+		}
 		if t, ok := utils.ParseTime(job.CompletedAt); ok {
 			if t.UnixMilli() > runEndTs {
 				runEndTs = t.UnixMilli()
 			}
+		}
+	}
+	// Clamp runEndTs to not be too far in the future if the run is completed
+	if run.Status == "completed" && runEndTs > runStartTs + 24*3600*1000 {
+		// If a run claims to take more than 24h but jobs are short, something is wrong.
+		// We'll use the max job end time instead.
+		maxJobEnd := runStartTs
+		for _, job := range jobs {
+			if t, ok := utils.ParseTime(job.CompletedAt); ok {
+				if t.UnixMilli() > maxJobEnd {
+					maxJobEnd = t.UnixMilli()
+				}
+			}
+		}
+		if maxJobEnd > runStartTs {
+			runEndTs = maxJobEnd
 		}
 	}
 	runDurationMs := runEndTs - runStartTs

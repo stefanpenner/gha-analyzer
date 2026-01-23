@@ -102,7 +102,7 @@ func main() {
 	progress.Start()
 
 	// 5. Run Ingestor
-	ingestor := polling.NewPollingIngestor(client, args, progress)
+	ingestor := polling.NewPollingIngestor(client, args, progress, analyzer.AnalyzeOptions{})
 	results, globalEarliest, globalLatest, err := ingestor.Ingest(ctx)
 	
 	progress.Finish()
