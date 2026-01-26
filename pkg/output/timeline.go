@@ -57,8 +57,31 @@ func BuildSpanTree(spans []trace.ReadOnlySpan) []*SpanNode {
 
 func sortNodes(nodes []*SpanNode) {
 	sort.Slice(nodes, func(i, j int) bool {
-		return nodes[i].Span.StartTime().Before(nodes[j].Span.StartTime())
+		sI, sJ := nodes[i].Span, nodes[j].Span
+		if sI.StartTime().Equal(sJ.StartTime()) {
+			// Tie-breaker: markers always come first
+			typeI := getSpanType(sI)
+			typeJ := getSpanType(sJ)
+			if typeI != typeJ {
+				if typeI == "marker" {
+					return true
+				}
+				if typeJ == "marker" {
+					return false
+				}
+			}
+		}
+		return sI.StartTime().Before(sJ.StartTime())
 	})
+}
+
+func getSpanType(s trace.ReadOnlySpan) string {
+	for _, attr := range s.Attributes() {
+		if attr.Key == "type" {
+			return attr.Value.AsString()
+		}
+	}
+	return ""
 }
 
 // RenderOTelTimeline renders a generic OTel span tree as a terminal waterfall.

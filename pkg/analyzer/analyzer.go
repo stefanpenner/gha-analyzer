@@ -39,7 +39,7 @@ type AnalyzeOptions struct {
 	Window time.Duration
 }
 
-func AnalyzeURLs(ctx context.Context, urls []string, client *githubapi.Client, reporter ProgressReporter, opts AnalyzeOptions) ([]URLResult, []TraceEvent, int64, int64, []URLError) {
+func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProvider, reporter ProgressReporter, opts AnalyzeOptions) ([]URLResult, []TraceEvent, int64, int64, []URLError) {
 	allTraceEvents := []TraceEvent{}
 	allJobStartTimes := []JobEvent{}
 	allJobEndTimes := []JobEvent{}
@@ -48,11 +48,42 @@ func AnalyzeURLs(ctx context.Context, urls []string, client *githubapi.Client, r
 	globalLatestTime := int64(0)
 	urlErrors := []URLError{}
 
+	provider := NewDataProvider(client)
+	emitter := NewTraceEmitter(analyzerTracer)
+
 	for urlIndex, githubURL := range urls {
 		if reporter != nil {
 			reporter.StartURL(urlIndex, githubURL)
 		}
-		result, err := processURL(ctx, githubURL, urlIndex, client, reporter, opts)
+		
+		rawData, err := provider.Fetch(ctx, githubURL, urlIndex, reporter, opts)
+		if err != nil {
+			urlErrors = append(urlErrors, URLError{URL: githubURL, Err: err})
+			continue
+		}
+		if rawData == nil {
+			continue
+		}
+
+		// Emit markers before processing runs to ensure chronological order in collector
+		emitter.EmitMarkers(ctx, rawData)
+
+		// Calculate urlEarliestTime here to ensure it's consistent
+		urlEarliestTime := FindEarliestTimestamp(rawData.Runs)
+		if rawData.CommitTimeMs != nil && *rawData.CommitTimeMs < urlEarliestTime {
+			urlEarliestTime = *rawData.CommitTimeMs
+		}
+		if rawData.CommitPushedAtMs != nil && *rawData.CommitPushedAtMs < urlEarliestTime {
+			urlEarliestTime = *rawData.CommitPushedAtMs
+		}
+		for _, event := range rawData.ReviewEvents {
+			ms := event.TimeMillis()
+			if ms < urlEarliestTime {
+				urlEarliestTime = ms
+			}
+		}
+
+		result, err := buildURLResult(ctx, rawData.Parsed, urlIndex, rawData.HeadSHA, rawData.BranchName, rawData.DisplayName, rawData.DisplayURL, rawData.ReviewEvents, rawData.MergedAtMs, rawData.CommitTimeMs, rawData.CommitPushedAtMs, rawData.AllCommitRunsCount, rawData.AllCommitRunsComputeMs, rawData.Runs, client, reporter, urlEarliestTime)
 		if err != nil {
 			urlErrors = append(urlErrors, URLError{URL: githubURL, Err: err})
 			continue
@@ -102,356 +133,7 @@ func AnalyzeURLs(ctx context.Context, urls []string, client *githubapi.Client, r
 	return urlResults, allTraceEvents, globalEarliestTime, globalLatestTime, urlErrors
 }
 
-func processURL(ctx context.Context, githubURL string, urlIndex int, client *githubapi.Client, reporter ProgressReporter, opts AnalyzeOptions) (*URLResult, error) {
-	parsed, err := utils.ParseGitHubURL(githubURL)
-	if err != nil {
-		return nil, err
-	}
-	if reporter != nil {
-		reporter.SetPhase("Parsing URL")
-		reporter.SetDetail(fmt.Sprintf("%s/%s", parsed.Owner, parsed.Repo))
-	}
-	baseURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", parsed.Owner, parsed.Repo)
-
-	var headSHA, branchName, displayName, displayURL string
-	var reviewEvents []ReviewEvent
-	var mergedAtMs *int64
-	var commitTimeMs *int64
-	var commitPushedAtMs *int64
-	var runs []githubapi.WorkflowRun
-	allCommitRunsCount := 0
-	var allCommitRunsComputeMs int64
-
-	if parsed.Type == "pr" {
-		if reporter != nil {
-			reporter.SetPhase("Fetching PR metadata")
-			reporter.SetDetail(parsed.Identifier)
-		}
-		analyzingPRURL := fmt.Sprintf("https://github.com/%s/%s/pull/%s", parsed.Owner, parsed.Repo, parsed.Identifier)
-		prData, err := githubapi.FetchPullRequest(ctx, client, baseURL, parsed.Identifier)
-		if err != nil {
-			return nil, err
-		}
-		if prData.Head.Ref == "" || prData.Head.SHA == "" {
-			return nil, fmt.Errorf("Invalid PR response - missing head or base information")
-		}
-		headSHA = prData.Head.SHA
-		branchName = prData.Head.Ref
-		displayName = fmt.Sprintf("PR #%s", parsed.Identifier)
-		displayURL = analyzingPRURL
-
-		if reporter != nil {
-			reporter.SetPhase("Fetching PR reviews and comments")
-			reporter.SetDetail(parsed.Identifier)
-		}
-
-		reviews, err := githubapi.FetchPRReviews(ctx, client, parsed.Owner, parsed.Repo, parsed.Identifier)
-		if err != nil {
-			return nil, err
-		}
-		for _, review := range reviews {
-			reviewEvents = append(reviewEvents, ReviewEvent{
-				Type:     "review",
-				State:    review.State,
-				Time:     review.SubmittedAt,
-				Reviewer: review.User.Login,
-				URL:      firstNonEmpty(review.HTMLURL, analyzingPRURL),
-			})
-		}
-
-		comments, err := githubapi.FetchPRComments(ctx, client, parsed.Owner, parsed.Repo, parsed.Identifier)
-		if err == nil {
-			for _, comment := range comments {
-				reviewEvents = append(reviewEvents, ReviewEvent{
-					Type:     "comment",
-					Time:     comment.SubmittedAt,
-					Reviewer: comment.User.Login,
-					URL:      firstNonEmpty(comment.HTMLURL, analyzingPRURL),
-				})
-			}
-		}
-
-		if prData.MergedAt != nil && *prData.MergedAt != "" {
-			reviewEvents = append(reviewEvents, ReviewEvent{
-				Type:     "merged",
-				Time:     *prData.MergedAt,
-				MergedBy: resolvedUser(prData.MergedBy),
-				URL:      analyzingPRURL,
-				PRNumber: prData.Number,
-				PRTitle:  prData.Title,
-			})
-			if t, ok := utils.ParseTime(*prData.MergedAt); ok {
-				ms := t.UnixMilli()
-				mergedAtMs = &ms
-			}
-		}
-
-		if reporter != nil {
-			reporter.SetPhase("Fetching workflow runs")
-			reporter.SetDetail(headSHA)
-		}
-		runs, err = githubapi.FetchWorkflowRuns(ctx, client, baseURL, headSHA, "", "")
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		analyzingCommitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", parsed.Owner, parsed.Repo, parsed.Identifier)
-		headSHA = parsed.Identifier
-		displayName = fmt.Sprintf("commit %s", headSHA[:minInt(8, len(headSHA))])
-		displayURL = analyzingCommitURL
-
-		targetBranch := ""
-		if reporter != nil {
-			reporter.SetPhase("Resolving commit branch")
-			reporter.SetDetail(headSHA)
-		}
-		prs, err := githubapi.FetchCommitAssociatedPRs(ctx, client, parsed.Owner, parsed.Repo, headSHA)
-		if err == nil && len(prs) > 0 {
-			targetBranch = prs[0].Base.Ref
-
-			// Fetch reviews and comments for the first associated PR
-			prNumber := fmt.Sprintf("%d", prs[0].Number)
-			if reporter != nil {
-				reporter.SetPhase("Fetching associated PR metadata")
-				reporter.SetDetail(prNumber)
-			}
-
-			reviews, err := githubapi.FetchPRReviews(ctx, client, parsed.Owner, parsed.Repo, prNumber)
-			if err == nil {
-				for _, review := range reviews {
-					reviewEvents = append(reviewEvents, ReviewEvent{
-						Type:     "review",
-						State:    review.State,
-						Time:     review.SubmittedAt,
-						Reviewer: review.User.Login,
-						URL:      firstNonEmpty(review.HTMLURL, prs[0].HTMLURL),
-					})
-				}
-			}
-
-			comments, err := githubapi.FetchPRComments(ctx, client, parsed.Owner, parsed.Repo, prNumber)
-			if err == nil {
-				for _, comment := range comments {
-					reviewEvents = append(reviewEvents, ReviewEvent{
-						Type:     "comment",
-						Time:     comment.SubmittedAt,
-						Reviewer: comment.User.Login,
-						URL:      firstNonEmpty(comment.HTMLURL, prs[0].HTMLURL),
-					})
-				}
-			}
-
-			if prs[0].MergedAt != nil && *prs[0].MergedAt != "" {
-				reviewEvents = append(reviewEvents, ReviewEvent{
-					Type:     "merged",
-					Time:     *prs[0].MergedAt,
-					MergedBy: resolvedUser(prs[0].MergedBy),
-					URL:      prs[0].HTMLURL,
-					PRNumber: prs[0].Number,
-					PRTitle:  prs[0].Title,
-				})
-				if t, ok := utils.ParseTime(*prs[0].MergedAt); ok {
-					ms := t.UnixMilli()
-					mergedAtMs = &ms
-				}
-			}
-		}
-		if targetBranch == "" {
-			if repoMeta, err := githubapi.FetchRepository(ctx, client, baseURL); err == nil && repoMeta.DefaultBranch != "" {
-				targetBranch = repoMeta.DefaultBranch
-			}
-		}
-		branchName = targetBranch
-		if branchName == "" {
-			branchName = "unknown"
-		}
-
-		if reporter != nil {
-			reporter.SetPhase("Fetching commit runs")
-			reporter.SetDetail(headSHA)
-		}
-		allRunsForHead, err := githubapi.FetchWorkflowRuns(ctx, client, baseURL, headSHA, "", "")
-		if err != nil {
-			return nil, err
-		}
-		allCommitRunsCount = len(allRunsForHead)
-
-		runs, err = githubapi.FetchWorkflowRuns(ctx, client, baseURL, headSHA, branchName, "push")
-		if err != nil {
-			return nil, err
-		}
-		if reporter != nil {
-			reporter.SetPhase("Fetching commit metadata")
-			reporter.SetDetail(headSHA)
-		}
-		commitMeta, err := githubapi.FetchCommit(ctx, client, baseURL, headSHA)
-		if err == nil {
-			dateStr := commitMeta.Commit.Committer.Date
-			if dateStr == "" {
-				dateStr = commitMeta.Commit.Author.Date
-			}
-			if t, ok := utils.ParseTime(dateStr); ok {
-				ms := t.UnixMilli()
-				commitTimeMs = &ms
-			}
-
-			// For commit pushed time, we'll use the earliest workflow run's created_at
-			// as a proxy if we don't have a more direct way to get the push event time.
-			if len(allRunsForHead) > 0 {
-				earliestRun := allRunsForHead[0]
-				for _, run := range allRunsForHead {
-					if t1, ok1 := utils.ParseTime(run.CreatedAt); ok1 {
-						if t2, ok2 := utils.ParseTime(earliestRun.CreatedAt); ok2 {
-							if t1.Before(t2) {
-								earliestRun = run
-							}
-						}
-					}
-				}
-				if t, ok := utils.ParseTime(earliestRun.CreatedAt); ok {
-					ms := t.UnixMilli()
-					// Set push time to 1ms before the earliest run to show it as the initiator
-					pushedAt := ms - 1
-					commitPushedAtMs = &pushedAt
-				}
-			}
-		}
-
-		if commitTimeMs != nil {
-			filtered := []githubapi.WorkflowRun{}
-			for _, run := range runs {
-				if t, ok := utils.ParseTime(run.CreatedAt); ok {
-					if t.UnixMilli() >= *commitTimeMs {
-						filtered = append(filtered, run)
-					}
-				}
-			}
-			runs = filtered
-		}
-
-		if reporter != nil {
-			reporter.SetPhase("Computing commit job durations")
-			reporter.SetDetail(fmt.Sprintf("%d runs", len(allRunsForHead)))
-		}
-
-		// Parallelize fetching jobs for all runs to calculate total compute time
-		var computeMu sync.Mutex
-		var computeWg sync.WaitGroup
-		computeSemaphore := make(chan struct{}, 10) // Higher concurrency for this part
-		baseRepoURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", parsed.Owner, parsed.Repo)
-
-		for _, run := range allRunsForHead {
-			if run.Status != "completed" {
-				continue
-			}
-			computeWg.Add(1)
-			go func(r githubapi.WorkflowRun) {
-				defer computeWg.Done()
-				computeSemaphore <- struct{}{}
-				defer func() { <-computeSemaphore }()
-
-				jobsURL := fmt.Sprintf("%s/actions/runs/%d/jobs?per_page=100", baseRepoURL, r.ID)
-				jobs, err := githubapi.FetchJobsPaginated(ctx, client, jobsURL)
-				if err != nil {
-					return
-				}
-
-				var runCompute int64
-				for _, job := range jobs {
-					if start, ok := utils.ParseTime(job.StartedAt); ok {
-						if end, ok := utils.ParseTime(job.CompletedAt); ok {
-							if end.After(start) {
-								runCompute += end.Sub(start).Milliseconds()
-							}
-						}
-					}
-				}
-				computeMu.Lock()
-				allCommitRunsComputeMs += runCompute
-				computeMu.Unlock()
-			}(run)
-		}
-		computeWg.Wait()
-	}
-
-	if len(runs) == 0 {
-		return nil, nil
-	}
-
-	// Apply window filtering if requested
-	if opts.Window > 0 {
-		var anchorTimeMs int64
-		if mergedAtMs != nil {
-			anchorTimeMs = *mergedAtMs
-		} else {
-			// Fallback to latest activity
-			anchorTimeMs = FindLatestTimestamp(runs)
-			for _, event := range reviewEvents {
-				ms := event.TimeMillis()
-				if ms > anchorTimeMs {
-					anchorTimeMs = ms
-				}
-			}
-		}
-
-		startTimeMs := anchorTimeMs - opts.Window.Milliseconds()
-
-		// Filter runs
-		var filteredRuns []githubapi.WorkflowRun
-		for _, run := range runs {
-			runTime := int64(0)
-			if t, ok := utils.ParseTime(run.UpdatedAt); ok {
-				runTime = t.UnixMilli()
-			} else if t, ok := utils.ParseTime(run.CreatedAt); ok {
-				runTime = t.UnixMilli()
-			}
-			if runTime >= startTimeMs {
-				filteredRuns = append(filteredRuns, run)
-			}
-		}
-		runs = filteredRuns
-
-		// Filter review events
-		var filteredReviews []ReviewEvent
-		for _, event := range reviewEvents {
-			if event.TimeMillis() >= startTimeMs {
-				filteredReviews = append(filteredReviews, event)
-			}
-		}
-		reviewEvents = filteredReviews
-
-		if commitTimeMs != nil && *commitTimeMs < startTimeMs {
-			commitTimeMs = nil
-		}
-		// Filter push time
-		if commitPushedAtMs != nil && *commitPushedAtMs < startTimeMs {
-			commitPushedAtMs = nil
-		}
-	}
-
-	if len(runs) == 0 && len(reviewEvents) == 0 && commitTimeMs == nil && commitPushedAtMs == nil {
-		return nil, nil
-	}
-
-	// Calculate urlEarliestTime here to ensure it's consistent
-	urlEarliestTime := FindEarliestTimestamp(runs)
-	if commitTimeMs != nil && *commitTimeMs < urlEarliestTime {
-		urlEarliestTime = *commitTimeMs
-	}
-	if commitPushedAtMs != nil && *commitPushedAtMs < urlEarliestTime {
-		urlEarliestTime = *commitPushedAtMs
-	}
-	for _, event := range reviewEvents {
-		ms := event.TimeMillis()
-		if ms < urlEarliestTime {
-			urlEarliestTime = ms
-		}
-	}
-
-	return buildURLResult(ctx, parsed, urlIndex, headSHA, branchName, displayName, displayURL, reviewEvents, mergedAtMs, commitTimeMs, commitPushedAtMs, allCommitRunsCount, allCommitRunsComputeMs, runs, client, reporter, urlEarliestTime)
-}
-
-func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchName, displayName, displayURL string, reviewEvents []ReviewEvent, mergedAtMs, commitTimeMs, commitPushedAtMs *int64, allCommitRunsCount int, allCommitRunsComputeMs int64, runs []githubapi.WorkflowRun, client *githubapi.Client, reporter ProgressReporter, urlEarliestTime int64) (*URLResult, error) {
+func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchName, displayName, displayURL string, reviewEvents []ReviewEvent, mergedAtMs, commitTimeMs, commitPushedAtMs *int64, allCommitRunsCount int, allCommitRunsComputeMs int64, runs []githubapi.WorkflowRun, client githubapi.GitHubProvider, reporter ProgressReporter, urlEarliestTime int64) (*URLResult, error) {
 	if reporter != nil {
 		reporter.SetURLRuns(len(runs))
 		reporter.SetPhase("Processing workflow runs")
@@ -461,7 +143,7 @@ func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex 
 	traceEvents := []TraceEvent{}
 	jobStartTimes := []JobEvent{}
 	jobEndTimes := []JobEvent{}
-
+	
 	type runResult struct {
 		metrics     Metrics
 		traceEvents []TraceEvent
@@ -523,63 +205,6 @@ func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex 
 		}
 	}
 
-	// Emit OTel spans for review and merge events
-	for _, event := range reviewEvents {
-		eventTime, _ := utils.ParseTime(event.Time)
-		name := "Marker"
-		eventType := event.Type
-
-		switch event.Type {
-		case "review":
-			name = fmt.Sprintf("Review: %s", event.State)
-			eventType = strings.ToLower(event.State)
-		case "comment":
-			name = "Comment"
-		case "merged":
-			name = "Merged"
-			if event.PRNumber != 0 {
-				name = fmt.Sprintf("Merged PR #%d: %s", event.PRNumber, event.PRTitle)
-			}
-		}
-
-		_, span := analyzerTracer.Start(ctx, name,
-			trace.WithTimestamp(eventTime),
-			trace.WithAttributes(
-				attribute.String("type", "marker"),
-				attribute.String("github.event_type", eventType),
-				attribute.String("github.user", firstNonEmpty(event.Reviewer, event.MergedBy)),
-				attribute.String("github.url", event.URL),
-				attribute.String("github.event_id", fmt.Sprintf("%s-%s-%s-%s", event.Type, event.Time, firstNonEmpty(event.Reviewer, event.MergedBy), event.URL)),
-				attribute.String("github.event_time", event.Time),
-			),
-		)
-		span.End(trace.WithTimestamp(eventTime.Add(time.Millisecond)))
-	}
-
-	if commitTimeMs != nil {
-		t := time.UnixMilli(*commitTimeMs)
-		_, span := analyzerTracer.Start(ctx, "Commit Created",
-			trace.WithTimestamp(t),
-			trace.WithAttributes(
-				attribute.String("type", "marker"),
-				attribute.String("github.event_type", "commit"),
-			),
-		)
-		span.End(trace.WithTimestamp(t.Add(time.Millisecond)))
-	}
-
-	if commitPushedAtMs != nil {
-		t := time.UnixMilli(*commitPushedAtMs)
-		_, span := analyzerTracer.Start(ctx, "Commit Pushed",
-			trace.WithTimestamp(t),
-			trace.WithAttributes(
-				attribute.String("type", "marker"),
-				attribute.String("github.event_type", "push"),
-			),
-		)
-		span.End(trace.WithTimestamp(t.Add(time.Millisecond)))
-	}
-
 	finalMetrics := CalculateFinalMetrics(metrics, len(runs), jobStartTimes, jobEndTimes)
 	result := URLResult{
 		Owner:                  parsed.Owner,
@@ -606,7 +231,7 @@ func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex 
 	return &result, nil
 }
 
-func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex, processID int, earliestTime int64, owner, repo, identifier string, urlIndex int, displayURL, sourceType string, client *githubapi.Client, reporter ProgressReporter) (Metrics, []TraceEvent, []JobEvent, []JobEvent, error) {
+func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex, processID int, earliestTime int64, owner, repo, identifier string, urlIndex int, displayURL, sourceType string, client githubapi.GitHubProvider, reporter ProgressReporter) (Metrics, []TraceEvent, []JobEvent, []JobEvent, error) {
 	metrics := InitializeMetrics()
 	traceEvents := []TraceEvent{}
 	jobStartTimes := []JobEvent{}
@@ -625,7 +250,7 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 		reporter.SetPhase("Fetching jobs")
 		reporter.SetDetail(defaultRunName(run))
 	}
-	jobs, err := githubapi.FetchJobsPaginated(ctx, client, jobsURL)
+	jobs, err := client.FetchJobsPaginated(ctx, jobsURL)
 	if err != nil {
 		return metrics, traceEvents, jobStartTimes, jobEndTimes, err
 	}
@@ -987,31 +612,17 @@ func processStep(ctx context.Context, step githubapi.Step, job githubapi.Job, ru
 	})
 }
 
-func addReviewMarkersToTrace(results []URLResult, events *[]TraceEvent) {
+func addReviewMarkersToTrace(urlResults []URLResult, events *[]TraceEvent) {
 	metricsProcessID := 999
 	markersThreadID := 2
 	AddThreadMetadata(events, metricsProcessID, markersThreadID, "GitHub PR Events", intPtr(1))
 
-	for i := range results {
-		result := &results[i]
+	for i := range urlResults {
+		result := &urlResults[i]
 		if len(result.ReviewEvents) == 0 {
 			continue
 		}
-		timelineStart := result.EarliestTime
-		timelineEnd := result.EarliestTime
-		if len(result.Metrics.JobTimeline) > 0 {
-			timelineStart = result.Metrics.JobTimeline[0].StartTime
-			timelineEnd = result.Metrics.JobTimeline[0].EndTime
-			for _, job := range result.Metrics.JobTimeline {
-				if job.StartTime < timelineStart {
-					timelineStart = job.StartTime
-				}
-				if job.EndTime > timelineEnd {
-					timelineEnd = job.EndTime
-				}
-			}
-		}
-
+		
 		for _, event := range result.ReviewEvents {
 			originalEventTime := event.TimeMillis()
 			ts := (originalEventTime - result.EarliestTime) * 1000
@@ -1068,16 +679,6 @@ func shipItMatch(text string) bool {
 	return strings.Contains(lower, "ship it") || strings.Contains(lower, "shipit")
 }
 
-func resolvedUser(user *githubapi.UserInfo) string {
-	if user == nil {
-		return ""
-	}
-	if user.Login != "" {
-		return user.Login
-	}
-	return user.Name
-}
-
 func truncateString(value string, max int) string {
 	if len(value) <= max {
 		return value
@@ -1090,15 +691,6 @@ func defaultRunName(run githubapi.WorkflowRun) string {
 		return run.Name
 	}
 	return fmt.Sprintf("Run %d", run.ID)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func defaultString(value, fallback string) string {
@@ -1132,13 +724,6 @@ func maxJobEnd(events []JobEvent) int64 {
 		}
 	}
 	return max
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func minInt64(a, b int64) int64 {

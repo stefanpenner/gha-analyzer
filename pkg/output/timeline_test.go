@@ -2,6 +2,7 @@ package output
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 
@@ -62,6 +63,54 @@ func TestRenderOTelTimelineDeduplication(t *testing.T) {
 		// We check for the presence of the labels which are now clickable links
 		assert.Contains(t, output, "APPROVED")
 		assert.Contains(t, output, "Comment")
+	})
+
+	t.Run("Sorts markers before workflows when timestamps are identical", func(t *testing.T) {
+		eventTime := now.Truncate(time.Second)
+
+		workflowSpan := &mockReadOnlySpan{
+			name:      "Workflow: Test",
+			startTime: eventTime,
+			endTime:   eventTime.Add(time.Minute),
+			spanID:    trace.SpanID{1, 1, 1, 1, 1, 1, 1, 1},
+			attrs: []attribute.KeyValue{
+				attribute.String("type", "workflow"),
+			},
+		}
+
+		markerSpan := &mockReadOnlySpan{
+			name:      "Commit Pushed",
+			startTime: eventTime,
+			endTime:   eventTime.Add(time.Millisecond),
+			spanID:    trace.SpanID{2, 2, 2, 2, 2, 2, 2, 2},
+			attrs: []attribute.KeyValue{
+				attribute.String("type", "marker"),
+				attribute.String("github.event_type", "push"),
+			},
+		}
+
+		var buf bytes.Buffer
+		// Provide spans in "wrong" order to test sorting
+		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{workflowSpan, markerSpan}, time.Time{}, time.Time{})
+
+		output := buf.String()
+		lines := strings.Split(strings.TrimSpace(output), "\n")
+
+		// Find the lines containing the labels
+		markerLineIdx := -1
+		workflowLineIdx := -1
+		for i, line := range lines {
+			if strings.Contains(line, "Commit Pushed") {
+				markerLineIdx = i
+			}
+			if strings.Contains(line, "Workflow: Test") {
+				workflowLineIdx = i
+			}
+		}
+
+		assert.True(t, markerLineIdx != -1, "Marker not found in output")
+		assert.True(t, workflowLineIdx != -1, "Workflow not found in output")
+		assert.True(t, markerLineIdx < workflowLineIdx, "Marker should appear before workflow in waterfall")
 	})
 }
 

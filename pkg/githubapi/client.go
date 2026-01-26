@@ -471,7 +471,7 @@ func extractSSOURL(header string) string {
 	return segment
 }
 
-func FetchWorkflowRuns(ctx context.Context, client *Client, baseURL, headSHA string, branch, event string) ([]WorkflowRun, error) {
+func (c *Client) FetchWorkflowRuns(ctx context.Context, baseURL, headSHA string, branch, event string) ([]WorkflowRun, error) {
 	ctx, span := tracer.Start(ctx, "FetchWorkflowRuns", trace.WithAttributes(
 		attribute.String("github.baseURL", baseURL),
 		attribute.String("github.headSHA", headSHA),
@@ -490,16 +490,16 @@ func FetchWorkflowRuns(ctx context.Context, client *Client, baseURL, headSHA str
 		params.Set("event", event)
 	}
 	runsURL := fmt.Sprintf("%s/actions/runs?%s", baseURL, params.Encode())
-	return fetchWorkflowRunsPaginated(ctx, client, runsURL)
+	return fetchWorkflowRunsPaginated(ctx, c, runsURL)
 }
 
-func FetchRepository(ctx context.Context, client *Client, baseURL string) (*RepoMeta, error) {
+func (c *Client) FetchRepository(ctx context.Context, baseURL string) (*RepoMeta, error) {
 	ctx, span := tracer.Start(ctx, "FetchRepository", trace.WithAttributes(
 		attribute.String("github.baseURL", baseURL),
 	))
 	defer span.End()
 
-	resp, err := fetchWithAuth(ctx, client, baseURL, "")
+	resp, err := fetchWithAuth(ctx, c, baseURL, "")
 	if err != nil {
 		return nil, err
 	}
@@ -510,7 +510,7 @@ func FetchRepository(ctx context.Context, client *Client, baseURL string) (*Repo
 	return &repo, nil
 }
 
-func FetchCommitAssociatedPRs(ctx context.Context, client *Client, owner, repo, sha string) ([]PullAssociated, error) {
+func (c *Client) FetchCommitAssociatedPRs(ctx context.Context, owner, repo, sha string) ([]PullAssociated, error) {
 	ctx, span := tracer.Start(ctx, "FetchCommitAssociatedPRs", trace.WithAttributes(
 		attribute.String("github.owner", owner),
 		attribute.String("github.repo", repo),
@@ -519,7 +519,7 @@ func FetchCommitAssociatedPRs(ctx context.Context, client *Client, owner, repo, 
 	defer span.End()
 
 	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s/pulls?per_page=100", owner, repo, sha)
-	resp, err := fetchWithAuth(ctx, client, endpoint, "application/vnd.github+json")
+	resp, err := fetchWithAuth(ctx, c, endpoint, "application/vnd.github+json")
 	if err != nil {
 		return nil, err
 	}
@@ -530,7 +530,7 @@ func FetchCommitAssociatedPRs(ctx context.Context, client *Client, owner, repo, 
 	return prs, nil
 }
 
-func FetchCommit(ctx context.Context, client *Client, baseURL, sha string) (*CommitResponse, error) {
+func (c *Client) FetchCommit(ctx context.Context, baseURL, sha string) (*CommitResponse, error) {
 	ctx, span := tracer.Start(ctx, "FetchCommit", trace.WithAttributes(
 		attribute.String("github.baseURL", baseURL),
 		attribute.String("github.sha", sha),
@@ -538,7 +538,7 @@ func FetchCommit(ctx context.Context, client *Client, baseURL, sha string) (*Com
 	defer span.End()
 
 	commitURL := fmt.Sprintf("%s/commits/%s", baseURL, sha)
-	resp, err := fetchWithAuth(ctx, client, commitURL, "")
+	resp, err := fetchWithAuth(ctx, c, commitURL, "")
 	if err != nil {
 		return nil, err
 	}
@@ -549,7 +549,7 @@ func FetchCommit(ctx context.Context, client *Client, baseURL, sha string) (*Com
 	return &commit, nil
 }
 
-func FetchPullRequest(ctx context.Context, client *Client, baseURL, identifier string) (*PullRequest, error) {
+func (c *Client) FetchPullRequest(ctx context.Context, baseURL, identifier string) (*PullRequest, error) {
 	ctx, span := tracer.Start(ctx, "FetchPullRequest", trace.WithAttributes(
 		attribute.String("github.baseURL", baseURL),
 		attribute.String("github.identifier", identifier),
@@ -557,7 +557,7 @@ func FetchPullRequest(ctx context.Context, client *Client, baseURL, identifier s
 	defer span.End()
 
 	prURL := fmt.Sprintf("%s/pulls/%s", baseURL, identifier)
-	resp, err := fetchWithAuth(ctx, client, prURL, "")
+	resp, err := fetchWithAuth(ctx, c, prURL, "")
 	if err != nil {
 		return nil, err
 	}
@@ -568,7 +568,7 @@ func FetchPullRequest(ctx context.Context, client *Client, baseURL, identifier s
 	return &pr, nil
 }
 
-func FetchPRReviews(ctx context.Context, client *Client, owner, repo, prNumber string) ([]Review, error) {
+func (c *Client) FetchPRReviews(ctx context.Context, owner, repo, prNumber string) ([]Review, error) {
 	ctx, span := tracer.Start(ctx, "FetchPRReviews", trace.WithAttributes(
 		attribute.String("github.owner", owner),
 		attribute.String("github.repo", repo),
@@ -577,10 +577,10 @@ func FetchPRReviews(ctx context.Context, client *Client, owner, repo, prNumber s
 	defer span.End()
 
 	reviewsURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%s/reviews?per_page=100", owner, repo, prNumber)
-	return fetchReviewsPaginated(ctx, client, reviewsURL)
+	return fetchReviewsPaginated(ctx, c, reviewsURL)
 }
 
-func FetchPRComments(ctx context.Context, client *Client, owner, repo, prNumber string) ([]Review, error) {
+func (c *Client) FetchPRComments(ctx context.Context, owner, repo, prNumber string) ([]Review, error) {
 	ctx, span := tracer.Start(ctx, "FetchPRComments", trace.WithAttributes(
 		attribute.String("github.owner", owner),
 		attribute.String("github.repo", repo),
@@ -590,10 +590,10 @@ func FetchPRComments(ctx context.Context, client *Client, owner, repo, prNumber 
 
 	// Use Review struct for simplicity as they share similar fields (ID, User, Body, SubmittedAt/CreatedAt)
 	commentsURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%s/comments?per_page=100", owner, repo, prNumber)
-	return fetchCommentsPaginated(ctx, client, commentsURL)
+	return fetchCommentsPaginated(ctx, c, commentsURL)
 }
 
-func FetchJobsPaginated(ctx context.Context, client *Client, urlValue string) ([]Job, error) {
+func (c *Client) FetchJobsPaginated(ctx context.Context, urlValue string) ([]Job, error) {
 	ctx, span := tracer.Start(ctx, "FetchJobsPaginated", trace.WithAttributes(
 		attribute.String("github.url", urlValue),
 	))
@@ -602,7 +602,7 @@ func FetchJobsPaginated(ctx context.Context, client *Client, urlValue string) ([
 	var all []Job
 	nextURL := urlValue
 	for nextURL != "" {
-		resp, err := fetchWithAuth(ctx, client, nextURL, "")
+		resp, err := fetchWithAuth(ctx, c, nextURL, "")
 		if err != nil {
 			return nil, err
 		}
@@ -616,7 +616,7 @@ func FetchJobsPaginated(ctx context.Context, client *Client, urlValue string) ([
 	return all, nil
 }
 
-func fetchWorkflowRunsPaginated(ctx context.Context, client *Client, urlValue string) ([]WorkflowRun, error) {
+func fetchWorkflowRunsPaginated(ctx context.Context, c *Client, urlValue string) ([]WorkflowRun, error) {
 	ctx, span := tracer.Start(ctx, "fetchWorkflowRunsPaginated", trace.WithAttributes(
 		attribute.String("github.url", urlValue),
 	))
@@ -625,7 +625,7 @@ func fetchWorkflowRunsPaginated(ctx context.Context, client *Client, urlValue st
 	var all []WorkflowRun
 	nextURL := urlValue
 	for nextURL != "" {
-		resp, err := fetchWithAuth(ctx, client, nextURL, "")
+		resp, err := fetchWithAuth(ctx, c, nextURL, "")
 		if err != nil {
 			return nil, err
 		}
@@ -639,7 +639,7 @@ func fetchWorkflowRunsPaginated(ctx context.Context, client *Client, urlValue st
 	return all, nil
 }
 
-func fetchReviewsPaginated(ctx context.Context, client *Client, urlValue string) ([]Review, error) {
+func fetchReviewsPaginated(ctx context.Context, c *Client, urlValue string) ([]Review, error) {
 	ctx, span := tracer.Start(ctx, "fetchReviewsPaginated", trace.WithAttributes(
 		attribute.String("github.url", urlValue),
 	))
@@ -648,7 +648,7 @@ func fetchReviewsPaginated(ctx context.Context, client *Client, urlValue string)
 	var all []Review
 	nextURL := urlValue
 	for nextURL != "" {
-		resp, err := fetchWithAuth(ctx, client, nextURL, "")
+		resp, err := fetchWithAuth(ctx, c, nextURL, "")
 		if err != nil {
 			return nil, err
 		}
@@ -662,7 +662,7 @@ func fetchReviewsPaginated(ctx context.Context, client *Client, urlValue string)
 	return all, nil
 }
 
-func fetchCommentsPaginated(ctx context.Context, client *Client, urlValue string) ([]Review, error) {
+func fetchCommentsPaginated(ctx context.Context, c *Client, urlValue string) ([]Review, error) {
 	ctx, span := tracer.Start(ctx, "fetchCommentsPaginated", trace.WithAttributes(
 		attribute.String("github.url", urlValue),
 	))
@@ -671,7 +671,7 @@ func fetchCommentsPaginated(ctx context.Context, client *Client, urlValue string
 	var all []Review
 	nextURL := urlValue
 	for nextURL != "" {
-		resp, err := fetchWithAuth(ctx, client, nextURL, "")
+		resp, err := fetchWithAuth(ctx, c, nextURL, "")
 		if err != nil {
 			return nil, err
 		}

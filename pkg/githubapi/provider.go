@@ -1,0 +1,17 @@
+package githubapi
+
+import (
+	"context"
+)
+
+// GitHubProvider defines the interface for interacting with GitHub's API.
+type GitHubProvider interface {
+	FetchWorkflowRuns(ctx context.Context, baseURL, headSHA string, branch, event string) ([]WorkflowRun, error)
+	FetchRepository(ctx context.Context, baseURL string) (*RepoMeta, error)
+	FetchCommitAssociatedPRs(ctx context.Context, owner, repo, sha string) ([]PullAssociated, error)
+	FetchCommit(ctx context.Context, baseURL, sha string) (*CommitResponse, error)
+	FetchPullRequest(ctx context.Context, baseURL, identifier string) (*PullRequest, error)
+	FetchPRReviews(ctx context.Context, owner, repo, prNumber string) ([]Review, error)
+	FetchPRComments(ctx context.Context, owner, repo, prNumber string) ([]Review, error)
+	FetchJobsPaginated(ctx context.Context, urlValue string) ([]Job, error)
+}
