@@ -207,7 +207,6 @@ func OutputCombinedResults(w io.Writer, urlResults []analyzer.URLResult, combine
 	}
 
 	section(w, "Pipeline Timelines (OTel-native)")
-	fmt.Fprintf(w, "%s:\n", utils.MakeClickableLink("https://ui.perfetto.dev", "Generic OTel Trace Waterfall"))
 	RenderOTelTimeline(w, spans, time.UnixMilli(globalEarliestTime), time.UnixMilli(globalLatestTime))
 
 	if perfettoFile != "" {

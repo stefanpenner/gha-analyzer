@@ -111,6 +111,7 @@ type URLResult struct {
 	ReviewEvents           []ReviewEvent
 	MergedAtMs             *int64
 	CommitTimeMs           *int64
+	CommitPushedAtMs       *int64
 	AllCommitRunsCount     int
 	AllCommitRunsComputeMs int64
 }

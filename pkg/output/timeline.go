@@ -170,6 +170,8 @@ func getMarkerWidth(eventType string) int {
 		return 1 // ◆, ▲ are 1 cell
 	case "commit":
 		return 2 // 📍 is 2 cells
+	case "push":
+		return 2 // 🚀 is 2 cells
 	case "comment", "commented":
 		return 2 // 💬 is 2 cells
 	case "approved":
@@ -227,6 +229,8 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 			icon = "◆"
 		case "commit":
 			icon = "📍"
+		case "push":
+			icon = "🚀"
 		case "comment":
 			icon = "💬"
 		case "approved":
@@ -262,6 +266,8 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 			coloredBar = utils.GreenText("◆")
 		case "commit":
 			coloredBar = utils.BlueText("📍")
+		case "push":
+			coloredBar = utils.BlueText("🚀")
 		case "comment":
 			coloredBar = utils.BlueText("💬")
 		case "approved":

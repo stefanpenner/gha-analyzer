@@ -179,13 +179,26 @@ type UserInfo struct {
 	Name  string `json:"name"`
 }
 
-type CommitResponse struct {
-	Commit CommitDetails `json:"commit"`
-}
-
 type CommitDetails struct {
 	Committer CommitAuthor `json:"committer"`
 	Author    CommitAuthor `json:"author"`
+}
+
+type CommitResponse struct {
+	Commit CommitDetails `json:"commit"`
+	Stats  CommitStats   `json:"stats"`
+	Files  []CommitFile  `json:"files"`
+}
+
+type CommitStats struct {
+	Total     int `json:"total"`
+	Additions int `json:"additions"`
+	Deletions int `json:"deletions"`
+}
+
+type CommitFile struct {
+	Filename string `json:"filename"`
+	Status   string `json:"status"`
 }
 
 type CommitAuthor struct {

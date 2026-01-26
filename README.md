@@ -2,6 +2,14 @@
 
 Analyze GitHub Actions performance and visualize workflow timelines in your terminal, [Perfetto UI](https://ui.perfetto.dev), or a full OpenTelemetry stack with Grafana.
 
+![Terminal Waterfall](docs/terminal-waterfall.png)
+
+## Installation
+
+```bash
+go install github.com/stefanpenner/gha-analyzer/cmd/gha-analyzer@latest
+```
+
 ## Architecture
 
 ```mermaid
@@ -39,10 +47,10 @@ graph TD
 export GITHUB_TOKEN=your_token_here
 
 # Analyze a PR or Commit
-go run ./cmd/gha-analyzer nodejs/node/pull/60369
+gha-analyzer nodejs/node/pull/60369
 
 # Save trace for Perfetto visualization
-go run ./cmd/gha-analyzer <url> --perfetto=trace.json
+gha-analyzer <url> --perfetto=trace.json
 ```
 
 ### Observability Stack (Grafana + Tempo)
