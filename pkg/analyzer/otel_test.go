@@ -45,7 +45,7 @@ func TestOTelSpanGeneration(t *testing.T) {
 			Identifier: "1",
 		}
 
-		_, err := buildURLResult(ctx, parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, 0, 0, nil, nil, nil, 0)
+		_, err := buildURLResult(ctx, parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, nil, nil, 0)
 		assert.NoError(t, err)
 
 		spans := collector.Spans()
@@ -79,7 +79,7 @@ func TestOTelSpanGeneration(t *testing.T) {
 			Identifier: "sha123",
 		}
 
-		_, err := buildURLResult(ctx, parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, 0, 0, nil, nil, nil, 0)
+		_, err := buildURLResult(ctx, parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, nil, nil, 0)
 		assert.NoError(t, err)
 
 		spans := collector.Spans()

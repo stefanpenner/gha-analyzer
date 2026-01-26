@@ -11,6 +11,7 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -42,7 +43,7 @@ func main() {
 	tracer := otel.Tracer("simulation")
 	
 	fmt.Println("📡 Simulating workflow: 'E2E Test Workflow'...")
-	ctx, workflowSpan := tracer.Start(ctx, "Workflow: E2E Test Workflow", sdktrace.WithAttributes(
+	ctx, workflowSpan := tracer.Start(ctx, "Workflow: E2E Test Workflow", trace.WithAttributes(
 		attribute.String("type", "workflow"),
 		attribute.String("github.conclusion", "success"),
 		attribute.String("github.repository", "stefanpenner/gha-analyzer"),
@@ -50,7 +51,7 @@ func main() {
 	))
 
 	// Simulate Job 1
-	_, job1Span := tracer.Start(ctx, "Job: Build and Test", sdktrace.WithAttributes(
+	_, job1Span := tracer.Start(ctx, "Job: Build and Test", trace.WithAttributes(
 		attribute.String("type", "job"),
 		attribute.String("github.conclusion", "success"),
 		attribute.String("github.job_name", "Build and Test"),
@@ -59,7 +60,7 @@ func main() {
 	job1Span.End()
 
 	// Simulate Job 2 (Parallel)
-	_, job2Span := tracer.Start(ctx, "Job: Lint", sdktrace.WithAttributes(
+	_, job2Span := tracer.Start(ctx, "Job: Lint", trace.WithAttributes(
 		attribute.String("type", "job"),
 		attribute.String("github.conclusion", "success"),
 		attribute.String("github.job_name", "Lint"),
