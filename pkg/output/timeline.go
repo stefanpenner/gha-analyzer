@@ -257,7 +257,7 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 		case "comment":
 			icon = "💬"
 		case "approved":
-			icon = "✅"
+			icon = "▲"
 		case "changes_requested":
 			icon = "❌"
 		case "commented":
@@ -269,8 +269,6 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 
 	statusIcon := "  " // Default to 2 spaces for empty status
 	switch attrs["github.conclusion"] {
-	case "success":
-		statusIcon = "✅"
 	case "failure":
 		statusIcon = "❌"
 	}
@@ -294,7 +292,7 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 		case "comment":
 			coloredBar = utils.BlueText("💬")
 		case "approved":
-			coloredBar = utils.GreenText("✅")
+			coloredBar = utils.YellowText("▲")
 		case "changes_requested":
 			coloredBar = utils.RedText("❌")
 		case "commented":
@@ -335,8 +333,12 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 		}
 	} else {
 		// icon is typically 3 cells (📋 , ⚙️ ,   ↳)
-		// statusIcon is typically 2 cells (✅, ❌) or 2 spaces
-		displayName = fmt.Sprintf("%s%s %s", icon, statusIcon, label)
+		// statusIcon is typically 2 cells (❌) or empty
+		if statusIcon != "  " {
+			displayName = fmt.Sprintf("%s %s %s", icon, label, statusIcon)
+		} else {
+			displayName = fmt.Sprintf("%s %s", icon, label)
+		}
 	}
 
 	durationDisplay := fmt.Sprintf("(%s)", utils.HumanizeTime(duration.Seconds()))
@@ -599,11 +601,9 @@ func GenerateTimelineVisualization(w io.Writer, metrics analyzer.FinalMetrics, r
 			var displayJobText string
 			switch {
 			case job.Conclusion == "success":
-				statusPrefix = "✅ "
-				displayJobText = statusPrefix + jobLink
+				displayJobText = jobLink
 			case job.Conclusion == "failure":
-				statusPrefix = "❌ "
-				displayJobText = utils.RedText(statusPrefix + jobLink)
+				displayJobText = utils.RedText(jobLink + " ❌")
 			case job.Status == "in_progress" || job.Status == "queued" || job.Status == "waiting":
 				statusPrefix = "⏳ "
 				displayJobText = utils.BlueText(statusPrefix + jobLink)

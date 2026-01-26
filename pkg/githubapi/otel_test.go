@@ -29,7 +29,7 @@ func TestClientInstrumentation(t *testing.T) {
 	ctx := context.Background()
 	
 	// Call a method that uses the tracer directly
-	_, _ = FetchRepository(ctx, client, server.URL)
+	_, _ = client.FetchRepository(ctx, server.URL)
 
 	// Verify spans
 	spans := exporter.GetSpans()

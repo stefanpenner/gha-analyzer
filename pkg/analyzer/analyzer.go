@@ -466,14 +466,11 @@ func processJob(ctx context.Context, job githubapi.Job, jobIndex int, run github
 	*jobEndTimes = append(*jobEndTimes, JobEvent{Ts: jobEndTs, Type: "end"})
 
 	jobIcon := "❓"
-	switch {
-	case isPending:
+	if isPending {
 		jobIcon = "⏳"
-	case job.Conclusion == "success":
-		jobIcon = "✅"
-	case job.Conclusion == "failure":
-		jobIcon = "❌"
-	case job.Conclusion == "skipped" || job.Conclusion == "cancelled":
+	} else if job.Conclusion == "failure" {
+		// No icon here, handled in output rendering
+	} else if job.Conclusion == "skipped" || job.Conclusion == "cancelled" {
 		jobIcon = "⏸️"
 	}
 
@@ -486,7 +483,11 @@ func processJob(ctx context.Context, job githubapi.Job, jobIndex int, run github
 		URL:        jobURL,
 	})
 
-	AddThreadMetadata(traceEvents, processID, jobThreadID, fmt.Sprintf("%s %s", jobIcon, job.Name), intPtr(jobIndex+10))
+	jobLabel := fmt.Sprintf("%s %s", jobIcon, job.Name)
+	if job.Conclusion == "failure" {
+		jobLabel = fmt.Sprintf("%s ❌", job.Name)
+	}
+	AddThreadMetadata(traceEvents, processID, jobThreadID, jobLabel, intPtr(jobIndex+10))
 
 	normalizedJobStart := (jobStartTs - earliestTime) * 1000
 	normalizedJobEnd := (jobEndTs - earliestTime) * 1000

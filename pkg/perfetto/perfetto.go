@@ -326,6 +326,6 @@ func openTraceInPerfetto(w io.Writer, traceFile string) error {
 		fmt.Fprintf(w, "   Then click \"Open trace file\" and select: %s\n", traceFile)
 		return nil
 	}
-	fmt.Fprintln(w, "✅ Trace opened successfully in Perfetto UI!")
+	fmt.Fprintln(w, "Trace opened successfully in Perfetto UI!")
 	return nil
 }
