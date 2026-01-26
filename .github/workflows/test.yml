@@ -26,5 +26,19 @@ jobs:
     - name: Run tests
       run: go test -v ./...
       
+    - name: Start Observability Stack
+      run: ./run.sh up
+      
+    - name: Run E2E Analysis Test
+      run: |
+        # Use a public PR for testing
+        ./run.sh cli https://github.com/stefanpenner/gha-analyzer/pull/1
+        
+    - name: Run E2E Simulation
+      run: ./run.sh simulate
+      
+    - name: Verify Stack Status
+      run: ./run.sh status
+      
     - name: Build
       run: go build -v ./cmd/gha-analyzer ./cmd/gha-server

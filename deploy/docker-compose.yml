@@ -9,6 +9,11 @@ services:
       - "4317:4317"   # OTLP gRPC
       - "4318:4318"   # OTLP HTTP
       - "8888:8888"   # Metrics
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     depends_on:
       - tempo
 
@@ -21,19 +26,44 @@ services:
       - tempo-data:/var/tempo
     ports:
       - "3200:3200"   # Tempo UI / API
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3200/ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   # Grafana (Visuals)
   grafana:
     image: grafana/grafana:latest
     volumes:
       - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+      - ./grafana-dashboard.json:/etc/grafana/provisioning/dashboards/gha-analyzer.json
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
     ports:
       - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     depends_on:
       - tempo
+
+  # GitHub Actions Runner (Self-hosted)
+  runner:
+    image: myoung34/github-runner:latest
+    environment:
+      - REPO_URL=${REPO_URL}
+      - RUNNER_NAME=gha-analyzer-runner
+      - RUNNER_TOKEN=${RUNNER_TOKEN}
+      - RUNNER_WORKDIR=/tmp/runner
+      - LABELS=self-hosted,gha-analyzer
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - otel-collector
 
 volumes:
   tempo-data:
