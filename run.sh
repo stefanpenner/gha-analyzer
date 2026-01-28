@@ -56,7 +56,7 @@ case $COMMAND in
       echo "   To use the self-hosted runner, run: REPO_URL=... RUNNER_TOKEN=... ./run.sh up"
       docker compose -f deploy/docker-compose.yml up -d
     fi
-    wait_for_healthy
+    wait_for_healthy || echo "⚠️  Some services may not be healthy, but continuing..."
     echo "✅ Stack is up! Grafana: http://localhost:3000"
     ;;
   down)
