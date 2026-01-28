@@ -16,6 +16,7 @@ is_stack_up() {
 
 # Function to wait for services to be healthy
 wait_for_healthy() {
+  set +e  # Temporarily disable exit on error
   echo "⏳ Waiting for services to be healthy..."
   local timeout=60
   local count=0
@@ -23,23 +24,24 @@ wait_for_healthy() {
 
   while [ $count -lt $timeout ]; do
     # Count healthy services, suppress errors, default to 0
-    healthy_count=$(docker compose -f deploy/docker-compose.yml ps --format json 2>/dev/null | grep '"Health":"healthy"' | wc -l | tr -d ' ' || echo "0")
-    healthy_count=${healthy_count:-0}
+    healthy_count=$(docker compose -f deploy/docker-compose.yml ps --format json 2>&1 | grep -c '"Health":"healthy"' || echo "0")
 
-    if [ $healthy_count -eq 3 ]; then
+    if [ "$healthy_count" = "3" ]; then
       echo ""
       echo "✅ All services are healthy!"
+      set -e  # Re-enable exit on error
       return 0
     fi
 
     sleep 1
-    ((count++))
+    count=$((count + 1))
     printf "."
   done
 
   echo ""
   echo "❌ Timeout waiting for services to be healthy."
   docker compose -f deploy/docker-compose.yml ps
+  set -e  # Re-enable exit on error
   return 1
 }
 
