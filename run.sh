@@ -35,11 +35,14 @@ wait_for_healthy() {
 case $COMMAND in
   up)
     echo "🚀 Starting observability stack..."
-    if [ -z "$REPO_URL" ] || [ -z "$RUNNER_TOKEN" ]; then
-      echo "⚠️  REPO_URL or RUNNER_TOKEN not set. Runner service will likely fail to start."
+    if [ -n "$REPO_URL" ] && [ -n "$RUNNER_TOKEN" ]; then
+      echo "🏃 Starting with self-hosted runner..."
+      docker compose -f deploy/docker-compose.yml --profile runner up -d
+    else
+      echo "📊 Starting without self-hosted runner (observability only)."
       echo "   To use the self-hosted runner, run: REPO_URL=... RUNNER_TOKEN=... ./run.sh up"
+      docker compose -f deploy/docker-compose.yml up -d
     fi
-    docker compose -f deploy/docker-compose.yml up -d
     wait_for_healthy
     echo "✅ Stack is up! Grafana: http://localhost:3000"
     ;;

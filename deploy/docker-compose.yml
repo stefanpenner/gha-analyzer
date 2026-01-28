@@ -54,6 +54,8 @@ services:
   # GitHub Actions Runner (Self-hosted)
   runner:
     image: myoung34/github-runner:latest
+    profiles:
+      - runner
     environment:
       - REPO_URL=${REPO_URL}
       - RUNNER_NAME=gha-analyzer-runner
