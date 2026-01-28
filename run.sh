@@ -19,14 +19,19 @@ wait_for_healthy() {
   echo "⏳ Waiting for services to be healthy..."
   local timeout=60
   local count=0
-  until [ "$(docker compose -f deploy/docker-compose.yml ps --format json | grep '"Health":"healthy"' | wc -l)" -eq 3 ] || [ $count -eq $timeout ]; do
+  local healthy_count=0
+
+  until [ $healthy_count -eq 3 ] || [ $count -eq $timeout ]; do
     sleep 1
     ((count++))
+    # Count healthy services, suppress errors
+    healthy_count=$(docker compose -f deploy/docker-compose.yml ps --format json 2>/dev/null | grep '"Health":"healthy"' | wc -l | tr -d ' ')
     printf "."
   done
   echo ""
   if [ $count -eq $timeout ]; then
     echo "❌ Timeout waiting for services to be healthy."
+    docker compose -f deploy/docker-compose.yml ps
     return 1
   fi
   echo "✅ All services are healthy!"
