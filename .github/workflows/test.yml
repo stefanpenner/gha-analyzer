@@ -30,11 +30,15 @@ jobs:
       run: ./run.sh up
       
     - name: Run E2E Analysis Test
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         # Use a public PR for testing
         ./run.sh cli https://github.com/stefanpenner/gha-analyzer/pull/1
         
     - name: Run E2E Simulation
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: ./run.sh simulate
       
     - name: Verify Stack Status

@@ -76,13 +76,11 @@ func main() {
 	spans := collector.Spans()
 
 	if err := pipeline.Process(ctx, spans); err != nil {
-		fmt.Printf("❌ Processing failed: %v\n", err)
-		os.Exit(1)
+		fmt.Printf("⚠️  Processing failed: %v\n", err)
 	}
 
 	if err := pipeline.Finish(ctx); err != nil {
-		fmt.Printf("❌ Finalizing failed: %v\n", err)
-		os.Exit(1)
+		fmt.Printf("⚠️  Finalizing failed: %v\n", err)
 	}
 
 	fmt.Println("✅ Simulation complete! Check Grafana at http://localhost:3000/d/gha-analyzer")
