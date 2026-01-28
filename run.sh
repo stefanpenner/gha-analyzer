@@ -21,20 +21,26 @@ wait_for_healthy() {
   local count=0
   local healthy_count=0
 
-  until [ $healthy_count -eq 3 ] || [ $count -eq $timeout ]; do
+  while [ $count -lt $timeout ]; do
+    # Count healthy services, suppress errors, default to 0
+    healthy_count=$(docker compose -f deploy/docker-compose.yml ps --format json 2>/dev/null | grep '"Health":"healthy"' | wc -l | tr -d ' ' || echo "0")
+    healthy_count=${healthy_count:-0}
+
+    if [ $healthy_count -eq 3 ]; then
+      echo ""
+      echo "✅ All services are healthy!"
+      return 0
+    fi
+
     sleep 1
     ((count++))
-    # Count healthy services, suppress errors
-    healthy_count=$(docker compose -f deploy/docker-compose.yml ps --format json 2>/dev/null | grep '"Health":"healthy"' | wc -l | tr -d ' ')
     printf "."
   done
+
   echo ""
-  if [ $count -eq $timeout ]; then
-    echo "❌ Timeout waiting for services to be healthy."
-    docker compose -f deploy/docker-compose.yml ps
-    return 1
-  fi
-  echo "✅ All services are healthy!"
+  echo "❌ Timeout waiting for services to be healthy."
+  docker compose -f deploy/docker-compose.yml ps
+  return 1
 }
 
 case $COMMAND in
