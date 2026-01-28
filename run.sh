@@ -19,7 +19,7 @@ wait_for_healthy() {
   echo "⏳ Waiting for services to be healthy..."
   local timeout=60
   local count=0
-  until [ "$(docker compose -f deploy/docker-compose.yml ps --format json | grep -c '"Health":"healthy"')" -eq 3 ] || [ $count -eq $timeout ]; do
+  until [ "$(docker compose -f deploy/docker-compose.yml ps --format json | grep '"Health":"healthy"' | wc -l)" -eq 3 ] || [ $count -eq $timeout ]; do
     sleep 1
     ((count++))
     printf "."
