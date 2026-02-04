@@ -28,6 +28,41 @@ const (
 	colorReset = "\033[0m"
 )
 
+// reloadProgressAdapter adapts tuiresults.LoadingReporter to analyzer.ProgressReporter
+type reloadProgressAdapter struct {
+	reporter tuiresults.LoadingReporter
+}
+
+func (a *reloadProgressAdapter) StartURL(urlIndex int, url string) {
+	if a.reporter != nil {
+		a.reporter.SetURL(url)
+	}
+}
+
+func (a *reloadProgressAdapter) SetURLRuns(runCount int) {
+	// Not directly reportable to LoadingReporter
+}
+
+func (a *reloadProgressAdapter) SetPhase(phase string) {
+	if a.reporter != nil {
+		a.reporter.SetPhase(phase)
+	}
+}
+
+func (a *reloadProgressAdapter) SetDetail(detail string) {
+	if a.reporter != nil {
+		a.reporter.SetDetail(detail)
+	}
+}
+
+func (a *reloadProgressAdapter) ProcessRun() {
+	// Not directly reportable to LoadingReporter
+}
+
+func (a *reloadProgressAdapter) Finish() {
+	// Not directly reportable to LoadingReporter
+}
+
 func printError(err error, context string) {
 	// Print the full error message, not just flattened
 	fmt.Fprintf(os.Stderr, "%sError: %s: %v%s\n", colorRed, context, err, colorReset)
@@ -203,10 +238,19 @@ func main() {
 		globalEndTime := time.UnixMilli(globalLatest)
 
 		// Create reload function that clears cache and refetches data
-		reloadFunc := func() ([]sdktrace.ReadOnlySpan, time.Time, time.Time, error) {
+		reloadFunc := func(reporter tuiresults.LoadingReporter) ([]sdktrace.ReadOnlySpan, time.Time, time.Time, error) {
+			// Report progress if reporter is available
+			if reporter != nil {
+				reporter.SetPhase("Clearing cache")
+			}
+
 			// Clear cache
 			if err := os.RemoveAll(githubapi.DefaultCacheDir()); err != nil {
 				return nil, time.Time{}, time.Time{}, fmt.Errorf("failed to clear cache: %w", err)
+			}
+
+			if reporter != nil {
+				reporter.SetPhase("Setting up")
 			}
 
 			// Create new collector and tracer provider for reload
@@ -219,15 +263,25 @@ func main() {
 			)
 			otel.SetTracerProvider(reloadTP)
 
+			// Create a progress reporter adapter if we have one
+			var progressReporter analyzer.ProgressReporter
+			if reporter != nil {
+				progressReporter = &reloadProgressAdapter{reporter: reporter}
+			}
+
 			// Re-run ingestion
 			reloadClient := githubapi.NewClient(githubapi.NewContext(token))
-			reloadIngestor := polling.NewPollingIngestor(reloadClient, args, nil, analyzer.AnalyzeOptions{
+			reloadIngestor := polling.NewPollingIngestor(reloadClient, args, progressReporter, analyzer.AnalyzeOptions{
 				Window: window,
 			})
 			_, reloadEarliest, reloadLatest, err := reloadIngestor.Ingest(ctx)
 			if err != nil {
 				reloadTP.Shutdown(ctx)
 				return nil, time.Time{}, time.Time{}, err
+			}
+
+			if reporter != nil {
+				reporter.SetPhase("Finalizing")
 			}
 
 			// Force flush and collect spans before shutdown
