@@ -902,13 +902,11 @@ func (m *Model) toggleFocus() {
 		for i := start; i <= end && i < len(m.visibleItems); i++ {
 			item := m.visibleItems[i]
 			selectedIDs[item.ID] = true
-			// Also include all ancestors (parents) to keep context
-			m.collectAncestorIDs(item.ParentID, selectedIDs)
-			// Also include all descendants
+			// Include all descendants (children, grandchildren, etc.)
 			m.collectDescendantIDs(item.ID, selectedIDs)
 		}
 
-		// Hide everything except selected items and their ancestors/descendants
+		// Hide everything except selected items and their descendants
 		var hideAll func(items []*TreeItem)
 		hideAll = func(items []*TreeItem) {
 			for _, item := range items {

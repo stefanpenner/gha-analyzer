@@ -164,8 +164,8 @@ func RenderTimelineBar(item TreeItem, globalStart, globalEnd time.Time, width in
 	return leftPad + timelineHyperlink(url, styledBar) + rightPad
 }
 
-// RenderTimelineBarPlain renders a timeline bar without colors (for selected items)
-func RenderTimelineBarPlain(item TreeItem, globalStart, globalEnd time.Time, width int, url string) string {
+// RenderTimelineBarSelected renders a timeline bar with dimmed colors for selected items
+func RenderTimelineBarSelected(item TreeItem, globalStart, globalEnd time.Time, width int, url string) string {
 	if globalEnd.Before(globalStart) || globalEnd.Equal(globalStart) || width <= 0 {
 		return strings.Repeat(" ", width)
 	}
@@ -187,7 +187,7 @@ func RenderTimelineBarPlain(item TreeItem, globalStart, globalEnd time.Time, wid
 	// Handle 0-duration items
 	isZeroDuration := itemEnd.Before(itemStart) || itemEnd.Equal(itemStart)
 	if isZeroDuration {
-		markerChar, style := getBarStyle(item)
+		markerChar, style := getBarStyleSelected(item)
 		if item.ItemType != ItemTypeMarker {
 			markerChar = "|"
 		}
@@ -195,7 +195,7 @@ func RenderTimelineBarPlain(item TreeItem, globalStart, globalEnd time.Time, wid
 		startOffset := itemStart.Sub(globalStart)
 		startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
 
-		return renderMarker(markerChar, style, startPos, width, url, false)
+		return renderMarker(markerChar, style, startPos, width, url, true)
 	}
 
 	startOffset := itemStart.Sub(globalStart)
@@ -222,14 +222,15 @@ func RenderTimelineBarPlain(item TreeItem, globalStart, globalEnd time.Time, wid
 		barLength = 1
 	}
 
-	barChar, _ := getBarStyle(item)
+	barChar, style := getBarStyleSelected(item)
 
 	leftPad := strings.Repeat(" ", startPos)
 	bar := strings.Repeat(barChar, barLength)
 	rightPad := strings.Repeat(" ", width-startPos-barLength)
 
-	// Wrap only the bar in hyperlink
-	return leftPad + timelineHyperlink(url, bar) + rightPad
+	// Apply dimmed style and wrap in hyperlink
+	styledBar := style.Render(bar)
+	return leftPad + timelineHyperlink(url, styledBar) + rightPad
 }
 
 // getBarStyle returns the bar character and style based on item status
@@ -280,6 +281,56 @@ func getBarStyle(item TreeItem) (string, lipgloss.Style) {
 	default:
 		// Unknown/empty conclusion - use gray like non-TUI
 		return "░", BarSkippedStyle
+	}
+}
+
+// getBarStyleSelected returns the bar character and dimmed style for selected items
+func getBarStyleSelected(item TreeItem) (string, lipgloss.Style) {
+	// Steps use different character
+	if item.ItemType == ItemTypeStep {
+		switch item.Conclusion {
+		case "success":
+			return "▒", BarSuccessSelectedStyle
+		case "failure":
+			return "▒", BarFailureSelectedStyle
+		case "skipped", "cancelled":
+			return "░", BarSkippedSelectedStyle
+		default:
+			return "▒", BarPendingSelectedStyle
+		}
+	}
+
+	// Markers use point markers
+	if item.ItemType == ItemTypeMarker {
+		switch item.EventType {
+		case "merged":
+			return "◆", BarSuccessSelectedStyle
+		case "approved":
+			return "✓", BarSuccessSelectedStyle
+		case "comment", "commented", "COMMENTED":
+			return "●", BarPendingSelectedStyle
+		case "changes_requested":
+			return "✗", BarFailureSelectedStyle
+		default:
+			return "▲", BarPendingSelectedStyle
+		}
+	}
+
+	// Jobs and workflows
+	switch {
+	case item.Status == "in_progress" || item.Status == "queued" || item.Status == "waiting":
+		return "▒", BarPendingSelectedStyle
+	case item.Conclusion == "success":
+		return "█", BarSuccessSelectedStyle
+	case item.Conclusion == "failure":
+		if item.IsRequired {
+			return "█", BarFailureSelectedStyle
+		}
+		return "░", BarFailureNonBlockingSelectedStyle
+	case item.Conclusion == "skipped" || item.Conclusion == "cancelled":
+		return "░", BarSkippedSelectedStyle
+	default:
+		return "░", BarSkippedSelectedStyle
 	}
 }
 

@@ -14,6 +14,12 @@ var (
 	ColorWhite    = lipgloss.Color("#FFFFFF")
 	ColorOffWhite = lipgloss.Color("#D0D0D0")
 	ColorMagenta  = lipgloss.Color("#C678DD")
+
+	// Dimmed colors for selected state (darker shades that still show status)
+	ColorGreenDim  = lipgloss.Color("#1A7048")
+	ColorBlueDim   = lipgloss.Color("#2E5EA8")
+	ColorRedDim    = lipgloss.Color("#9E3A3A")
+	ColorYellowDim = lipgloss.Color("#A08856")
 )
 
 // Header styles
@@ -92,6 +98,24 @@ var (
 
 	BarSkippedStyle = lipgloss.NewStyle().
 			Foreground(ColorGray)
+)
+
+// Timeline bar colors for selected state (dimmed but still show status)
+var (
+	BarSuccessSelectedStyle = lipgloss.NewStyle().
+				Foreground(ColorGreenDim)
+
+	BarFailureSelectedStyle = lipgloss.NewStyle().
+				Foreground(ColorRedDim)
+
+	BarFailureNonBlockingSelectedStyle = lipgloss.NewStyle().
+						Foreground(ColorYellowDim)
+
+	BarPendingSelectedStyle = lipgloss.NewStyle().
+				Foreground(ColorBlueDim)
+
+	BarSkippedSelectedStyle = lipgloss.NewStyle().
+				Foreground(ColorGrayDim)
 )
 
 // Time header style

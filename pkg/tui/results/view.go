@@ -339,15 +339,17 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	treePart := fmt.Sprintf("%s%s %s %s%s%s %s", indent, expandIndicator, icon, displayName, styledDuration, badges, statusIcon)
 	treePart += strings.Repeat(" ", treePadding)
 
-	// Render timeline bar (empty if hidden, unstyled if selected for consistent background)
-	// URL is passed to render functions so only the bar/marker characters are clickable
+	// Render timeline bar (empty if hidden, dimmed colors if selected, full colors otherwise)
+	// For normal items, URL is passed so bar characters are clickable.
+	// For selected/hidden items, URL is omitted since we apply row-level hyperlink at the end.
 	var timelineBar string
 	if isHidden {
 		timelineBar = strings.Repeat(" ", timelineW)
 	} else if isSelected {
-		// Render without colors so selection background shows through
-		timelineBar = RenderTimelineBarPlain(item, m.chartStart, m.chartEnd, timelineW, item.URL)
+		// Render with dimmed colors to show status while selected
+		timelineBar = RenderTimelineBarSelected(item, m.chartStart, m.chartEnd, timelineW, "")
 	} else {
+		// Normal: full colors, pass URL so bar is clickable
 		timelineBar = RenderTimelineBar(item, m.chartStart, m.chartEnd, timelineW, item.URL)
 	}
 
@@ -357,10 +359,12 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 
 	if isSelected && isHidden {
 		// Hidden and selected: gray text with selection background
-		return BorderStyle.Render("│") + HiddenSelectedStyle.Render(treePart) + midSep + HiddenSelectedStyle.Render(timelineBar) + BorderStyle.Render("│")
+		// Timeline is empty for hidden items, so just apply HiddenSelectedStyle
+		return BorderStyle.Render("│") + HiddenSelectedStyle.Render(treePart) + midSep + timelineBar + BorderStyle.Render("│")
 	} else if isSelected {
 		// Selected but not hidden: white text with selection background
-		return BorderStyle.Render("│") + SelectedStyle.Render(treePart) + midSep + SelectedStyle.Render(timelineBar) + BorderStyle.Render("│")
+		// Timeline bar already has dimmed status colors, don't override with SelectedStyle
+		return BorderStyle.Render("│") + SelectedStyle.Render(treePart) + midSep + timelineBar + BorderStyle.Render("│")
 	} else if isHidden {
 		// Hidden but not selected: gray text, no background
 		return BorderStyle.Render("│") + HiddenStyle.Render(treePart) + midSep + timelineBar + BorderStyle.Render("│")

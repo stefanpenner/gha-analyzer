@@ -187,7 +187,7 @@ func TestRenderTimelineBar(t *testing.T) {
 	})
 }
 
-func TestRenderTimelineBarPlain(t *testing.T) {
+func TestRenderTimelineBarSelected(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
@@ -196,11 +196,11 @@ func TestRenderTimelineBarPlain(t *testing.T) {
 	width := 20
 
 	t.Run("returns spaces for invalid time range", func(t *testing.T) {
-		result := RenderTimelineBarPlain(TreeItem{}, now, now.Add(-time.Second), width, "")
+		result := RenderTimelineBarSelected(TreeItem{}, now, now.Add(-time.Second), width, "")
 		assert.Equal(t, strings.Repeat(" ", width), result)
 	})
 
-	t.Run("renders without ANSI color codes", func(t *testing.T) {
+	t.Run("renders bar for selected items", func(t *testing.T) {
 		item := TreeItem{
 			ItemType:   ItemTypeJob,
 			StartTime:  globalStart,
@@ -208,12 +208,12 @@ func TestRenderTimelineBarPlain(t *testing.T) {
 			Conclusion: "success",
 		}
 
-		result := RenderTimelineBarPlain(item, globalStart, globalEnd, width, "")
+		result := RenderTimelineBarSelected(item, globalStart, globalEnd, width, "")
 
-		// Should not contain ANSI SGR color codes (but may have hyperlink codes)
-		// Check for absence of color codes like \x1b[32m (green), \x1b[31m (red), etc.
-		assert.NotContains(t, result, "\x1b[32m")
-		assert.NotContains(t, result, "\x1b[31m")
+		// Should contain the bar character
+		assert.Contains(t, result, "█")
+		// Note: ANSI color codes only appear when connected to TTY
+		// The dimmed colors will be visible in actual TUI usage
 	})
 }
 
