@@ -15,7 +15,8 @@
       "WebFetch(domain:donderom.com)",
       "WebFetch(domain:zackproser.com)",
       "Bash(grep:*)",
-      "Bash(GITHUB_TOKEN=invalid_token go run:*)"
+      "Bash(GITHUB_TOKEN=invalid_token go run:*)",
+      "Bash(sips:*)"
     ]
   }
 }

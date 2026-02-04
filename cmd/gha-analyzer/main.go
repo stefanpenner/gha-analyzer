@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -10,8 +11,9 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/gha-analyzer/pkg/core"
 	otelexport "github.com/stefanpenner/gha-analyzer/pkg/export/otel"
-	"github.com/stefanpenner/gha-analyzer/pkg/export/perfetto"
+	perfettoexport "github.com/stefanpenner/gha-analyzer/pkg/export/perfetto"
 	"github.com/stefanpenner/gha-analyzer/pkg/export/terminal"
+	"github.com/stefanpenner/gha-analyzer/pkg/perfetto"
 	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
 	"github.com/stefanpenner/gha-analyzer/pkg/ingest/polling"
 	"github.com/stefanpenner/gha-analyzer/pkg/output"
@@ -194,7 +196,7 @@ func main() {
 	}
 
 	if perfettoFile != "" {
-		exporters = append(exporters, perfetto.NewExporter(os.Stderr, perfettoFile, openInPerfetto))
+		exporters = append(exporters, perfettoexport.NewExporter(os.Stderr, perfettoFile, openInPerfetto))
 	}
 
 	if otelEndpoint != "" {
@@ -234,6 +236,18 @@ func main() {
 
 	// If TUI mode is enabled, launch interactive TUI
 	if tuiMode {
+		// Handle perfetto export before TUI starts (so it opens immediately)
+		if perfettoFile != "" {
+			combined := analyzer.CalculateCombinedMetrics(results, sumRuns(results), collectStarts(results), collectEnds(results))
+			var allTraceEvents []analyzer.TraceEvent
+			for _, res := range results {
+				allTraceEvents = append(allTraceEvents, res.TraceEvents...)
+			}
+			if err := perfetto.WriteTrace(os.Stderr, results, combined, allTraceEvents, globalEarliest, perfettoFile, openInPerfetto, spans); err != nil {
+				printError(err, "writing perfetto trace failed")
+			}
+		}
+
 		globalStartTime := time.UnixMilli(globalEarliest)
 		globalEndTime := time.UnixMilli(globalLatest)
 
@@ -292,7 +306,24 @@ func main() {
 			return reloadSpans, time.UnixMilli(reloadEarliest), time.UnixMilli(reloadLatest), nil
 		}
 
-		if err := tuiresults.Run(spans, globalStartTime, globalEndTime, args, reloadFunc); err != nil {
+		// Create function to open in Perfetto from TUI
+		openPerfettoFunc := func() {
+			// Create temp file for perfetto trace
+			tmpFile, err := os.CreateTemp("", "gha-trace-*.json")
+			if err != nil {
+				return
+			}
+			tmpFile.Close()
+
+			combined := analyzer.CalculateCombinedMetrics(results, sumRuns(results), collectStarts(results), collectEnds(results))
+			var allTraceEvents []analyzer.TraceEvent
+			for _, res := range results {
+				allTraceEvents = append(allTraceEvents, res.TraceEvents...)
+			}
+			_ = perfetto.WriteTrace(io.Discard, results, combined, allTraceEvents, globalEarliest, tmpFile.Name(), true, spans)
+		}
+
+		if err := tuiresults.Run(spans, globalStartTime, globalEndTime, args, reloadFunc, openPerfettoFunc); err != nil {
 			fmt.Fprintf(os.Stderr, "%sError: TUI failed: %v%s\n", colorRed, err, colorReset)
 			os.Exit(1)
 		}

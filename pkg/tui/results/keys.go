@@ -18,6 +18,7 @@ type KeyMap struct {
 	Reload      key.Binding
 	ExpandAll   key.Binding
 	CollapseAll key.Binding
+	Perfetto    key.Binding
 	Quit        key.Binding
 }
 
@@ -80,6 +81,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("c"),
 			key.WithHelp("c", "collapse all"),
 		),
+		Perfetto: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "perfetto"),
+		),
 		Quit: key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q", "quit"),
@@ -89,5 +94,5 @@ func DefaultKeyMap() KeyMap {
 
 // ShortHelp returns a short help string for the footer
 func (k KeyMap) ShortHelp() string {
-	return "↑↓ nav • shift+↑↓ select • space toggle • f focus • ←→ expand/collapse • e/c all • o open • i info • r reload • q quit"
+	return "↑↓ nav • space toggle • f focus • ←→ expand/collapse • o open • i info • p perfetto • r reload • q quit"
 }

@@ -74,30 +74,39 @@ type Model struct {
 	// Focus state
 	isFocused           bool
 	preFocusHiddenState map[string]bool
+	// Spans for export
+	spans []trace.ReadOnlySpan
+	// Perfetto open function
+	openPerfettoFunc func()
 }
 
 // ReloadFunc is the function signature for reloading data
 type ReloadFunc func(reporter LoadingReporter) ([]trace.ReadOnlySpan, time.Time, time.Time, error)
 
+// OpenPerfettoFunc is the function signature for opening Perfetto
+type OpenPerfettoFunc func()
+
 // NewModel creates a new TUI model from OTel spans
-func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc) Model {
+func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc, openPerfettoFunc OpenPerfettoFunc) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 
 	m := Model{
-		expandedState:  make(map[string]bool),
-		hiddenState:    make(map[string]bool),
-		globalStart:    globalStart,
-		globalEnd:      globalEnd,
-		chartStart:     globalStart,
-		chartEnd:       globalEnd,
-		keys:           DefaultKeyMap(),
-		width:          80,
-		height:         24,
-		inputURLs:      inputURLs,
-		selectionStart: -1, // no range selection initially
-		reloadFunc:     reloadFunc,
-		spinner:        s,
+		expandedState:    make(map[string]bool),
+		hiddenState:      make(map[string]bool),
+		globalStart:      globalStart,
+		globalEnd:        globalEnd,
+		chartStart:       globalStart,
+		chartEnd:         globalEnd,
+		keys:             DefaultKeyMap(),
+		width:            80,
+		height:           24,
+		inputURLs:        inputURLs,
+		selectionStart:   -1, // no range selection initially
+		reloadFunc:       reloadFunc,
+		openPerfettoFunc: openPerfettoFunc,
+		spinner:          s,
+		spans:            spans,
 	}
 
 	// Calculate summary statistics
@@ -340,6 +349,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.CollapseAll):
 			m.collapseAll()
+
+		case key.Matches(msg, m.keys.Perfetto):
+			if m.openPerfettoFunc != nil {
+				m.openPerfettoFunc()
+			}
 		}
 
 	case tea.WindowSizeMsg:
@@ -1001,8 +1015,8 @@ func (m *Model) IsHidden(id string) bool {
 }
 
 // Run starts the TUI
-func Run(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc) error {
-	m := NewModel(spans, globalStart, globalEnd, inputURLs, reloadFunc)
+func Run(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc, openPerfettoFunc OpenPerfettoFunc) error {
+	m := NewModel(spans, globalStart, globalEnd, inputURLs, reloadFunc, openPerfettoFunc)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	finalModel, err := p.Run()
 	if err != nil {
