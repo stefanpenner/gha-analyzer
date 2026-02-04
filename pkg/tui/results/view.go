@@ -83,26 +83,23 @@ func (m Model) renderHeader() string {
 	}
 	line3 := BorderStyle.Render("│") + " " + HeaderCountStyle.Render(countsText) + strings.Repeat(" ", countsPadding) + " " + BorderStyle.Render("│")
 
-	// Line 4: Source URL (if available)
+	// Line 4: Input URLs (clickable links)
 	line4 := ""
-	if m.sourceURL != "" {
-		urlText := m.sourceURL
-		if m.sourceName != "" {
-			urlText = m.sourceName + ": " + m.sourceURL
-		}
+	for _, inputURL := range m.inputURLs {
 		// Truncate if too long
+		urlText := inputURL
 		maxURLWidth := totalWidth - 6
 		if lipgloss.Width(urlText) > maxURLWidth {
 			urlText = urlText[:maxURLWidth-3] + "..."
 		}
 		// Make it a clickable hyperlink
-		linkedURL := hyperlink(m.sourceURL, urlText)
+		linkedURL := hyperlink(inputURL, urlText)
 		urlWidth := lipgloss.Width(urlText)
 		urlPadding := totalWidth - urlWidth - 4
 		if urlPadding < 0 {
 			urlPadding = 0
 		}
-		line4 = "\n" + BorderStyle.Render("│") + " " + linkedURL + strings.Repeat(" ", urlPadding) + " " + BorderStyle.Render("│")
+		line4 += "\n" + BorderStyle.Render("│") + " " + linkedURL + strings.Repeat(" ", urlPadding) + " " + BorderStyle.Render("│")
 	}
 
 	// Line 5: Time range info

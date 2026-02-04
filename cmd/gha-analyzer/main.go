@@ -181,7 +181,7 @@ func main() {
 	if tuiMode {
 		globalStartTime := time.UnixMilli(globalEarliest)
 		globalEndTime := time.UnixMilli(globalLatest)
-		if err := tuiresults.Run(spans, globalStartTime, globalEndTime); err != nil {
+		if err := tuiresults.Run(spans, globalStartTime, globalEndTime, args); err != nil {
 			fmt.Fprintf(os.Stderr, "%sError: TUI failed: %v%s\n", colorRed, err, colorReset)
 			os.Exit(1)
 		}

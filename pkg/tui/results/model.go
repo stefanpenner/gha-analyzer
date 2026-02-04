@@ -32,13 +32,12 @@ type Model struct {
 	wallTimeMs  int64
 	computeMs   int64
 	stepCount   int
-	// Source URL (PR or commit)
-	sourceURL   string
-	sourceName  string
+	// Input URLs from CLI
+	inputURLs []string
 }
 
 // NewModel creates a new TUI model from OTel spans
-func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time) Model {
+func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string) Model {
 	m := Model{
 		expandedState: make(map[string]bool),
 		hiddenState:   make(map[string]bool),
@@ -49,13 +48,13 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time) Mode
 		keys:          DefaultKeyMap(),
 		width:         80,
 		height:        24,
+		inputURLs:     inputURLs,
 	}
 
 	// Calculate summary statistics
 	m.summary = analyzer.CalculateSummary(spans)
 	m.wallTimeMs = globalEnd.Sub(globalStart).Milliseconds()
 	m.computeMs, m.stepCount = calculateComputeAndSteps(spans)
-	m.sourceURL, m.sourceName = extractSourceInfo(spans)
 
 	// Build tree from spans
 	m.roots = analyzer.BuildTreeFromSpans(spans, globalStart, globalEnd)
@@ -87,27 +86,6 @@ func calculateComputeAndSteps(spans []trace.ReadOnlySpan) (computeMs int64, step
 		}
 	}
 	return
-}
-
-// extractSourceInfo extracts the source URL and name from spans (e.g., PR or commit URL)
-func extractSourceInfo(spans []trace.ReadOnlySpan) (url, name string) {
-	// Look for the first workflow span with a source URL
-	for _, s := range spans {
-		attrs := make(map[string]string)
-		for _, a := range s.Attributes() {
-			attrs[string(a.Key)] = a.Value.AsString()
-		}
-		if attrs["type"] == "workflow" {
-			if u := attrs["github.source_url"]; u != "" {
-				return u, attrs["github.source_name"]
-			}
-			// Fallback to workflow URL
-			if u := attrs["github.url"]; u != "" {
-				return u, s.Name()
-			}
-		}
-	}
-	return "", ""
 }
 
 // expandAllToDepth expands all items up to the given depth
@@ -400,8 +378,8 @@ func (m *Model) IsHidden(id string) bool {
 }
 
 // Run starts the TUI
-func Run(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time) error {
-	m := NewModel(spans, globalStart, globalEnd)
+func Run(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string) error {
+	m := NewModel(spans, globalStart, globalEnd, inputURLs)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	finalModel, err := p.Run()
 	if err != nil {
