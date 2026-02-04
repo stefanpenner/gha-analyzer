@@ -234,8 +234,12 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 	
 	// Determine color/icon from attributes
 	attrs := make(map[string]string)
+	isRequired := false
 	for _, a := range s.Attributes() {
 		attrs[string(a.Key)] = a.Value.AsString()
+		if string(a.Key) == "is_required" {
+			isRequired = a.Value.AsBool()
+		}
 	}
 	
 	icon := "• "
@@ -316,6 +320,9 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 	remaining := strings.Repeat(" ", maxInt(0, remainingCount))
 
 	label := s.Name()
+	if attrs["type"] == "job" {
+		label += requiredEmoji(isRequired)
+	}
 	if user, ok := attrs["github.user"]; ok && user != "" {
 		label = fmt.Sprintf("%s by %s", label, user)
 	}
