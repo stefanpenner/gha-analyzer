@@ -85,6 +85,15 @@ func main() {
 	}
 	args = filtered
 
+	// Auto-generate perfetto file if --open-in-perfetto is used without --perfetto
+	if openInPerfetto && perfettoFile == "" {
+		tmpFile, err := os.CreateTemp("", "gha-trace-*.json")
+		if err == nil {
+			perfettoFile = tmpFile.Name()
+			tmpFile.Close()
+		}
+	}
+
 	// 1. Setup GitHub Token
 	token := os.Getenv("GITHUB_TOKEN")
 	if token == "" {
