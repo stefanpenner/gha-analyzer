@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  CACHE_VERSION: v1
-
 jobs:
   required-check:
     runs-on: ubuntu-latest
@@ -46,9 +43,9 @@ jobs:
         path: |
           ~/go/pkg/mod
           ~/.cache/go-build
-        key: ${{ env.CACHE_VERSION }}-go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+        key: v1-go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
         restore-keys: |
-          ${{ env.CACHE_VERSION }}-go-${{ runner.os }}-
+          v1-go-${{ runner.os }}-
 
     - name: Install dependencies
       run: go mod download
