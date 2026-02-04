@@ -59,6 +59,14 @@ func (m *mockGitHubProvider) FetchJobsPaginated(ctx context.Context, urlValue st
 	return args.Get(0).([]githubapi.Job), args.Error(1)
 }
 
+func (m *mockGitHubProvider) FetchBranchProtection(ctx context.Context, owner, repo, branch string) (*githubapi.BranchProtection, error) {
+	args := m.Called(ctx, owner, repo, branch)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*githubapi.BranchProtection), args.Error(1)
+}
+
 func TestOTelSpanGeneration(t *testing.T) {
 	ctx := context.Background()
 
@@ -98,7 +106,7 @@ func TestOTelSpanGeneration(t *testing.T) {
 			ReviewEvents: reviewEvents,
 		})
 
-		_, err := buildURLResult(ctx, parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, mockClient, nil, 0)
+		_, err := buildURLResult(ctx, parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, nil, mockClient, nil, 0)
 		assert.NoError(t, err)
 
 		spans := collector.Spans()
@@ -136,7 +144,7 @@ func TestOTelSpanGeneration(t *testing.T) {
 			CommitTimeMs: &commitTimeMs,
 		})
 
-		_, err := buildURLResult(ctx, parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, mockClient, nil, 0)
+		_, err := buildURLResult(ctx, parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, nil, mockClient, nil, 0)
 		assert.NoError(t, err)
 
 		spans := collector.Spans()

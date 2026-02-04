@@ -45,13 +45,15 @@ type TimelineJob struct {
 	Conclusion string
 	Status     string
 	URL        string
+	IsRequired bool
 }
 
 type PendingJob struct {
-	Name      string
-	Status    string
-	StartedAt string
-	URL       string
+	Name       string
+	Status     string
+	StartedAt  string
+	URL        string
+	IsRequired bool
 }
 
 type FinalMetrics struct {

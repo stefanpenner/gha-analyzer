@@ -24,6 +24,7 @@ type RawData struct {
 	Runs                   []githubapi.WorkflowRun
 	AllCommitRunsCount     int
 	AllCommitRunsComputeMs int64
+	RequiredContexts       []string
 }
 
 // DataProvider handles fetching data from GitHub.
@@ -54,6 +55,8 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 	var runs []githubapi.WorkflowRun
 	allCommitRunsCount := 0
 	var allCommitRunsComputeMs int64
+	var requiredContexts []string
+	var protectionTargetBranch string
 
 	if parsed.Type == "pr" {
 		if reporter != nil {
@@ -127,6 +130,9 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 		if err != nil {
 			return nil, err
 		}
+
+		// Track target branch for branch protection lookup (base branch of PR)
+		protectionTargetBranch = prData.Base.Ref
 	} else {
 		analyzingCommitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", parsed.Owner, parsed.Repo, parsed.Identifier)
 		headSHA = parsed.Identifier
@@ -302,6 +308,24 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 			}(run)
 		}
 		computeWg.Wait()
+
+		// Track target branch for branch protection lookup
+		protectionTargetBranch = branchName
+	}
+
+	// Fetch branch protection for target branch
+	if protectionTargetBranch != "" && protectionTargetBranch != "unknown" {
+		if reporter != nil {
+			reporter.SetPhase("Fetching branch protection")
+			reporter.SetDetail(protectionTargetBranch)
+		}
+		protection, err := p.client.FetchBranchProtection(ctx, parsed.Owner, parsed.Repo, protectionTargetBranch)
+		if err == nil && protection != nil && protection.RequiredStatusChecks != nil {
+			requiredContexts = append(requiredContexts, protection.RequiredStatusChecks.Contexts...)
+			for _, check := range protection.RequiredStatusChecks.Checks {
+				requiredContexts = append(requiredContexts, check.Context)
+			}
+		}
 	}
 
 	if len(runs) == 0 && len(reviewEvents) == 0 && commitTimeMs == nil && commitPushedAtMs == nil {
@@ -378,6 +402,7 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 		Runs:                   runs,
 		AllCommitRunsCount:     allCommitRunsCount,
 		AllCommitRunsComputeMs: allCommitRunsComputeMs,
+		RequiredContexts:       requiredContexts,
 	}, nil
 }
 
