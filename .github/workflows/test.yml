@@ -8,6 +8,7 @@ on:
 
 jobs:
   required-check:
+    name: 🔒 Required
     runs-on: ubuntu-latest
     steps:
       - name: Required check
@@ -17,6 +18,7 @@ jobs:
           echo "Done!"
 
   optional-check:
+    name: 📋 Optional
     runs-on: ubuntu-latest
     steps:
       - name: Optional check
@@ -26,6 +28,7 @@ jobs:
           echo "Done!"
 
   test:
+    name: 🧪 Test
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
