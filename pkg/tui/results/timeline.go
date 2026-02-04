@@ -14,7 +14,8 @@ func timelineHyperlink(url, text string) string {
 		return text
 	}
 	// \x1b[24m disables underline
-	return fmt.Sprintf("\x1b]8;;%s\x07\x1b[24m%s\x1b[24m\x1b]8;;\x07", url, text)
+	// id parameter ensures terminals treat each link independently
+	return fmt.Sprintf("\x1b]8;id=%s;%s\x07\x1b[24m%s\x1b[24m\x1b]8;;\x07", url, url, text)
 }
 
 // renderMarker renders a marker character with proper padding, handling width consistently.

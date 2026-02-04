@@ -84,6 +84,8 @@ type Model struct {
 	spans []trace.ReadOnlySpan
 	// Perfetto open function
 	openPerfettoFunc func()
+	// Mouse mode state
+	mouseEnabled bool
 }
 
 // ReloadFunc is the function signature for reloading data
@@ -376,6 +378,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.openPerfettoFunc != nil {
 				m.openPerfettoFunc()
 			}
+
+		case key.Matches(msg, m.keys.Mouse):
+			m.mouseEnabled = !m.mouseEnabled
+			if m.mouseEnabled {
+				return m, tea.EnableMouseCellMotion
+			}
+			return m, tea.DisableMouse
 
 		case key.Matches(msg, m.keys.Help):
 			m.showHelpModal = true
@@ -1117,7 +1126,9 @@ func (m *Model) IsHidden(id string) bool {
 // Run starts the TUI
 func Run(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc, openPerfettoFunc OpenPerfettoFunc) error {
 	m := NewModel(spans, globalStart, globalEnd, inputURLs, reloadFunc, openPerfettoFunc)
-	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	// Mouse mode disabled by default to allow OSC 8 hyperlinks to work
+	// Press 'm' to toggle mouse mode for scrolling
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	finalModel, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("tea.Program.Run failed: %w", err)

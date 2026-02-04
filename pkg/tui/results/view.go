@@ -15,13 +15,15 @@ const (
 )
 
 // hyperlink wraps text in OSC 8 terminal hyperlink escape sequence.
-// This makes the text clickable in supporting terminals (iTerm2, Windows Terminal, etc.)
+// This makes the text clickable in supporting terminals (iTerm2, Kitty, WezTerm, etc.)
+// The id parameter ensures terminals treat each link independently.
 func hyperlink(url, text string) string {
 	if url == "" {
 		return text
 	}
-	// OSC 8 format: \x1b]8;;URL\x07TEXT\x1b]8;;\x07
-	return fmt.Sprintf("\x1b]8;;%s\x07%s\x1b]8;;\x07", url, text)
+	// OSC 8 format with id: \x1b]8;id=ID;URL\x07TEXT\x1b]8;;\x07
+	// Using URL as ID ensures same URLs are grouped, different URLs are independent
+	return fmt.Sprintf("\x1b]8;id=%s;%s\x07%s\x1b]8;;\x07", url, url, text)
 }
 
 // colorForRate returns a style based on the success rate value

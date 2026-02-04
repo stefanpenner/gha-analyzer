@@ -248,8 +248,8 @@ func TestRenderMarker(t *testing.T) {
 	t.Run("adds hyperlink when URL provided", func(t *testing.T) {
 		result := renderMarker("○", BarPendingStyle, 5, width, "https://example.com", false)
 
-		// Should contain OSC 8 hyperlink sequence
-		assert.Contains(t, result, "\x1b]8;;https://example.com\x07")
+		// Should contain OSC 8 hyperlink sequence with id parameter
+		assert.Contains(t, result, "\x1b]8;id=https://example.com;https://example.com\x07")
 		assert.Contains(t, result, "\x1b]8;;\x07") // Closing sequence
 	})
 }
@@ -265,7 +265,8 @@ func TestTimelineHyperlink(t *testing.T) {
 	t.Run("wraps text in OSC 8 hyperlink", func(t *testing.T) {
 		result := timelineHyperlink("https://example.com", "click me")
 
-		assert.Contains(t, result, "\x1b]8;;https://example.com\x07")
+		// Should contain OSC 8 hyperlink sequence with id parameter
+		assert.Contains(t, result, "\x1b]8;id=https://example.com;https://example.com\x07")
 		assert.Contains(t, result, "click me")
 		assert.Contains(t, result, "\x1b]8;;\x07")
 	})

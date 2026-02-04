@@ -16,7 +16,8 @@
       "WebFetch(domain:zackproser.com)",
       "Bash(grep:*)",
       "Bash(GITHUB_TOKEN=invalid_token go run:*)",
-      "Bash(sips:*)"
+      "Bash(sips:*)",
+      "Bash(id=%s)",
     ]
   }
 }

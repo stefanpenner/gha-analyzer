@@ -19,6 +19,7 @@ type KeyMap struct {
 	ExpandAll   key.Binding
 	CollapseAll key.Binding
 	Perfetto    key.Binding
+	Mouse       key.Binding
 	Help        key.Binding
 	Quit        key.Binding
 }
@@ -86,6 +87,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("p"),
 			key.WithHelp("p", "perfetto"),
 		),
+		Mouse: key.NewBinding(
+			key.WithKeys("m"),
+			key.WithHelp("m", "toggle mouse"),
+		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
 			key.WithHelp("?", "help"),
@@ -120,6 +125,7 @@ func (k KeyMap) FullHelp() [][]string {
 		{"c", "Collapse all"},
 		{"r", "Reload data"},
 		{"p", "Open in Perfetto"},
+		{"m", "Toggle mouse mode"},
 		{"?", "Show this help"},
 		{"q", "Quit"},
 	}
