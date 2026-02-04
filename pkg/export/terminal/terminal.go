@@ -41,7 +41,7 @@ func (e *Exporter) Finish(ctx context.Context) error {
 	summary := analyzer.CalculateSummary(e.spans)
 	
 	fmt.Fprintf(e.writer, "\n%s\n", strings.Repeat("=", 80))
-	fmt.Fprintf(e.writer, "📊 GitHub Actions Performance Report (OTel-native)\n")
+	fmt.Fprintf(e.writer, "📊 GitHub Actions Performance Report\n")
 	fmt.Fprintf(e.writer, "%s\n", strings.Repeat("=", 80))
 
 	fmt.Fprintf(e.writer, "\nSummary\n-------\n")

@@ -4,12 +4,9 @@ import (
 	"sort"
 	"time"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
-
-var tracer = otel.Tracer("analyzer")
 
 // Summary represents the aggregated metrics from a set of spans.
 type Summary struct {

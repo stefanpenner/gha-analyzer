@@ -15,7 +15,11 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-var analyzerTracer = otel.Tracer("analyzer")
+// getTracer returns the current tracer from the global provider.
+// This must be called at runtime (not package init) to pick up the correct provider.
+func getTracer() trace.Tracer {
+	return otel.Tracer("analyzer")
+}
 
 type ProgressReporter interface {
 	StartURL(urlIndex int, url string)
@@ -49,7 +53,7 @@ func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProv
 	urlErrors := []URLError{}
 
 	provider := NewDataProvider(client)
-	emitter := NewTraceEmitter(analyzerTracer)
+	emitter := NewTraceEmitter(getTracer())
 
 	for urlIndex, githubURL := range urls {
 		if reporter != nil {
@@ -270,7 +274,7 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 	sid := githubapi.NewSpanID(run.ID)
 	ctx = githubapi.ContextWithIDs(ctx, tid, sid)
 
-	ctx, span := analyzerTracer.Start(ctx, defaultRunName(run),
+	ctx, span := getTracer().Start(ctx, defaultRunName(run),
 		trace.WithTimestamp(runStart),
 		trace.WithAttributes(
 			attribute.String("type", "workflow"),
@@ -411,7 +415,7 @@ func processJob(ctx context.Context, job githubapi.Job, jobIndex int, run github
 		requiredSuffix = " 🔒"
 	}
 
-	ctx, span := analyzerTracer.Start(ctx, job.Name+requiredSuffix,
+	ctx, span := getTracer().Start(ctx, job.Name+requiredSuffix,
 		trace.WithTimestamp(jobStart),
 		trace.WithAttributes(
 			attribute.String("type", "job"),
@@ -559,7 +563,7 @@ func processStep(ctx context.Context, step githubapi.Step, job githubapi.Job, ru
 	sid := githubapi.NewSpanIDFromString(fmt.Sprintf("%d-%s", job.ID, step.Name))
 	ctx = githubapi.ContextWithIDs(ctx, trace.TraceID{}, sid)
 
-	_, span := analyzerTracer.Start(ctx, step.Name,
+	_, span := getTracer().Start(ctx, step.Name,
 		trace.WithTimestamp(start),
 		trace.WithAttributes(
 			attribute.String("type", "step"),
