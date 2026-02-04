@@ -542,6 +542,15 @@ func (m Model) renderDetailModal(maxHeight, maxWidth int) (string, int) {
 		scroll = maxScroll
 	}
 
+	// Calculate max content width from ALL lines (not just visible)
+	maxContentWidth := 0
+	for _, line := range lines {
+		w := lipgloss.Width(line)
+		if w > maxContentWidth {
+			maxContentWidth = w
+		}
+	}
+
 	// Get visible lines
 	endIdx := scroll + contentMaxHeight
 	if endIdx > totalLines {
@@ -549,51 +558,109 @@ func (m Model) renderDetailModal(maxHeight, maxWidth int) (string, int) {
 	}
 	visibleLines := lines[scroll:endIdx]
 
-	// Build content with scrollbar if needed
+	// Build content without scrollbar (scrollbar added outside modal border)
 	var b strings.Builder
 	showScrollbar := maxScroll > 0
 	visibleCount := len(visibleLines)
 
-	// Calculate thumb position for scrollbar
-	var thumbStart, thumbEnd int
-	if showScrollbar && visibleCount > 0 {
-		// Thumb size is proportional to visible/total ratio
-		thumbSize := max(1, (visibleCount*visibleCount+totalLines-1)/totalLines)
-		if thumbSize > visibleCount {
-			thumbSize = visibleCount
-		}
-		// Thumb position based on scroll position
-		scrollRange := totalLines - visibleCount
-		if scrollRange > 0 {
-			thumbStart = (scroll * (visibleCount - thumbSize)) / scrollRange
-		}
-		thumbEnd = thumbStart + thumbSize
-	}
-
-	for i, line := range visibleLines {
+	// Pad each visible line to max content width for consistent modal width
+	for _, line := range visibleLines {
+		lineWidth := lipgloss.Width(line)
 		b.WriteString(line)
-		if showScrollbar {
-			// Render scrollbar: ▓ for thumb, ░ for track
-			if i >= thumbStart && i < thumbEnd {
-				b.WriteString("  ▓")
-			} else {
-				b.WriteString("  ░")
-			}
+		if lineWidth < maxContentWidth {
+			b.WriteString(strings.Repeat(" ", maxContentWidth-lineWidth))
 		}
 		b.WriteString("\n")
 	}
 
-	// Footer hint with scroll indicator
+	// Footer hint with scroll indicator (padded to match content width)
 	b.WriteString("\n")
+	var footerText string
 	if maxScroll > 0 {
 		scrollInfo := fmt.Sprintf("[%d/%d] ", scroll+1, maxScroll+1)
-		b.WriteString(FooterStyle.Render(scrollInfo + "↑↓ scroll • ←→ prev/next • Esc close"))
+		footerText = FooterStyle.Render(scrollInfo + "↑↓ scroll • ←→ prev/next • Esc close")
 	} else {
-		b.WriteString(FooterStyle.Render("←→ prev/next • Esc/i close"))
+		footerText = FooterStyle.Render("←→ prev/next • Esc/i close")
+	}
+	footerWidth := lipgloss.Width(footerText)
+	b.WriteString(footerText)
+	if footerWidth < maxContentWidth {
+		b.WriteString(strings.Repeat(" ", maxContentWidth-footerWidth))
 	}
 
 	// Apply max width constraint to the style
 	modalStyle := ModalStyle.MaxWidth(maxWidth)
 	content := b.String()
-	return modalStyle.Render(content), maxScroll
+	renderedModal := modalStyle.Render(content)
+
+	// Add scrollbar outside the modal border if needed
+	if showScrollbar {
+		renderedModal = addScrollbarToModal(renderedModal, scroll, maxScroll, visibleCount, totalLines)
+	}
+
+	return renderedModal, maxScroll
+}
+
+// addScrollbarToModal adds a scrollbar column to the right of the modal border
+// The scrollbar is 80% of the modal height, vertically centered
+func addScrollbarToModal(modal string, scroll, maxScroll, visibleCount, totalLines int) string {
+	lines := strings.Split(modal, "\n")
+	if len(lines) == 0 {
+		return modal
+	}
+
+	// Calculate scrollbar track dimensions (80% height, centered)
+	totalHeight := len(lines)
+	trackHeight := totalHeight * 80 / 100
+	if trackHeight < 3 {
+		trackHeight = min(3, totalHeight)
+	}
+	topPadding := (totalHeight - trackHeight) / 2
+	bottomPadding := totalHeight - trackHeight - topPadding
+
+	// Calculate thumb size and position within the track
+	thumbSize := max(1, trackHeight*visibleCount/totalLines)
+	if thumbSize > trackHeight {
+		thumbSize = trackHeight
+	}
+
+	thumbStart := 0
+	if maxScroll > 0 {
+		thumbStart = scroll * (trackHeight - thumbSize) / maxScroll
+	}
+	thumbEnd := thumbStart + thumbSize
+
+	// Scrollbar style (same color as modal border)
+	scrollStyle := lipgloss.NewStyle().Foreground(ColorPurple)
+	thumbChar := scrollStyle.Render("┃")
+	trackChar := scrollStyle.Render("│")
+
+	var result strings.Builder
+	for i, line := range lines {
+		result.WriteString(line)
+
+		// Determine scrollbar character for this line
+		trackIndex := i - topPadding
+		if i < topPadding || i >= totalHeight-bottomPadding {
+			// Outside track area - no scrollbar character, just space
+			result.WriteString(" ")
+		} else if trackIndex >= thumbStart && trackIndex < thumbEnd {
+			result.WriteString(thumbChar)
+		} else {
+			result.WriteString(trackChar)
+		}
+
+		if i < len(lines)-1 {
+			result.WriteString("\n")
+		}
+	}
+
+	return result.String()
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }

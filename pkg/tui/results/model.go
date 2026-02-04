@@ -21,6 +21,20 @@ type ReloadResultMsg struct {
 	err         error
 }
 
+// LoadingProgressMsg updates loading progress display
+type LoadingProgressMsg struct {
+	Phase  string
+	Detail string
+	URL    string
+}
+
+// LoadingReporter reports loading progress
+type LoadingReporter interface {
+	SetPhase(phase string)
+	SetDetail(detail string)
+	SetURL(url string)
+}
+
 // Model represents the TUI state
 type Model struct {
 	roots         []*analyzer.TreeNode
@@ -49,16 +63,21 @@ type Model struct {
 	modalItem       *TreeItem
 	modalScroll     int
 	// Reload state
-	isLoading  bool
-	reloadFunc func() ([]trace.ReadOnlySpan, time.Time, time.Time, error)
-	spinner    spinner.Model
+	isLoading     bool
+	reloadFunc    func(reporter LoadingReporter) ([]trace.ReadOnlySpan, time.Time, time.Time, error)
+	spinner       spinner.Model
+	loadingPhase  string
+	loadingDetail string
+	loadingURL    string
+	progressCh    chan LoadingProgressMsg
+	resultCh      chan ReloadResultMsg
 	// Focus state
-	isFocused          bool
+	isFocused           bool
 	preFocusHiddenState map[string]bool
 }
 
 // ReloadFunc is the function signature for reloading data
-type ReloadFunc func() ([]trace.ReadOnlySpan, time.Time, time.Time, error)
+type ReloadFunc func(reporter LoadingReporter) ([]trace.ReadOnlySpan, time.Time, time.Time, error)
 
 // NewModel creates a new TUI model from OTel spans
 func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc) Model {
@@ -143,6 +162,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case ReloadResultMsg:
 		m.isLoading = false
+		m.progressCh = nil
+		m.resultCh = nil
+		m.loadingPhase = ""
+		m.loadingDetail = ""
+		m.loadingURL = ""
 		if msg.err != nil {
 			// TODO: show error in UI
 			return m, nil
@@ -171,6 +195,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		return m, nil
+
+	case LoadingProgressMsg:
+		if msg.Phase != "" {
+			m.loadingPhase = msg.Phase
+		}
+		if msg.Detail != "" {
+			m.loadingDetail = msg.Detail
+		}
+		if msg.URL != "" {
+			m.loadingURL = msg.URL
+		}
+		// Continue listening for more progress updates
+		return m, m.listenForProgress()
 
 	case tea.KeyMsg:
 		// Ignore keys while loading (except quit)
@@ -312,7 +349,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	// Show loading overlay if reloading
 	if m.isLoading {
-		loadingText := m.spinner.View() + " Reloading data..."
+		loadingText := m.renderLoadingView()
 		return placeModalCentered(ModalStyle.Render(loadingText), m.width, m.height)
 	}
 
@@ -456,6 +493,40 @@ func (m *Model) openCurrentItem() {
 	}
 }
 
+// renderLoadingView renders the loading progress display
+func (m Model) renderLoadingView() string {
+	var b strings.Builder
+
+	// Header
+	b.WriteString(ModalTitleStyle.Render("🚀 Reloading Data"))
+	b.WriteString("\n\n")
+
+	// URL being processed
+	if m.loadingURL != "" {
+		b.WriteString(m.spinner.View())
+		b.WriteString(" ")
+		b.WriteString(m.loadingURL)
+		b.WriteString("\n")
+	} else {
+		b.WriteString(m.spinner.View())
+		b.WriteString(" Loading...\n")
+	}
+
+	// Phase and detail
+	if m.loadingPhase != "" {
+		b.WriteString("  ↳ ")
+		b.WriteString(m.loadingPhase)
+		if m.loadingDetail != "" {
+			b.WriteString(" (")
+			b.WriteString(m.loadingDetail)
+			b.WriteString(")")
+		}
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
 // openDetailModal opens the detail modal for the current item
 func (m *Model) openDetailModal() {
 	if m.cursor >= len(m.visibleItems) {
@@ -468,15 +539,77 @@ func (m *Model) openDetailModal() {
 	m.modalScroll = 0
 }
 
-// doReload returns a command that performs the reload
+// channelReporter implements LoadingReporter and sends updates via a channel
+type channelReporter struct {
+	ch chan<- LoadingProgressMsg
+}
+
+func (r *channelReporter) SetPhase(phase string) {
+	select {
+	case r.ch <- LoadingProgressMsg{Phase: phase}:
+	default:
+	}
+}
+
+func (r *channelReporter) SetDetail(detail string) {
+	select {
+	case r.ch <- LoadingProgressMsg{Detail: detail}:
+	default:
+	}
+}
+
+func (r *channelReporter) SetURL(url string) {
+	select {
+	case r.ch <- LoadingProgressMsg{URL: url}:
+	default:
+	}
+}
+
+// doReload returns a command that performs the reload with progress updates
 func (m *Model) doReload() tea.Cmd {
-	return func() tea.Msg {
-		spans, start, end, err := m.reloadFunc()
-		return ReloadResultMsg{
+	// Store channels in model for listenForProgress to access
+	m.progressCh = make(chan LoadingProgressMsg, 10)
+	m.resultCh = make(chan ReloadResultMsg, 1)
+
+	reporter := &channelReporter{ch: m.progressCh}
+	progressCh := m.progressCh
+	resultCh := m.resultCh
+
+	// Start the reload in a goroutine
+	go func() {
+		defer close(progressCh)
+		spans, start, end, err := m.reloadFunc(reporter)
+		resultCh <- ReloadResultMsg{
 			spans:       spans,
 			globalStart: start,
 			globalEnd:   end,
 			err:         err,
+		}
+	}()
+
+	// Return a command that listens for progress and result
+	return m.listenForProgress()
+}
+
+// listenForProgress returns a command that listens for progress updates or results
+func (m *Model) listenForProgress() tea.Cmd {
+	progressCh := m.progressCh
+	resultCh := m.resultCh
+
+	if progressCh == nil || resultCh == nil {
+		return nil
+	}
+
+	return func() tea.Msg {
+		select {
+		case progress, ok := <-progressCh:
+			if ok {
+				return progress
+			}
+			// Channel closed, wait for result
+			return <-resultCh
+		case result := <-resultCh:
+			return result
 		}
 	}
 }
