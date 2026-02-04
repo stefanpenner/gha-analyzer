@@ -234,8 +234,12 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 	
 	// Determine color/icon from attributes
 	attrs := make(map[string]string)
+	isRequired := false
 	for _, a := range s.Attributes() {
 		attrs[string(a.Key)] = a.Value.AsString()
+		if string(a.Key) == "is_required" {
+			isRequired = a.Value.AsBool()
+		}
 	}
 	
 	icon := "• "
@@ -316,6 +320,9 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 	remaining := strings.Repeat(" ", maxInt(0, remainingCount))
 
 	label := s.Name()
+	if attrs["type"] == "job" {
+		label += requiredEmoji(isRequired)
+	}
 	if user, ok := attrs["github.user"]; ok && user != "" {
 		label = fmt.Sprintf("%s by %s", label, user)
 	}
@@ -418,12 +425,17 @@ func GenerateHighLevelTimeline(w io.Writer, results []analyzer.URLResult, global
 		maxBarLength := scale - startPos
 		barLength := maxInt(1, minInt(maxBarLength, int(wallTimeSec/(float64(totalDuration)/1000)*float64(scale))))
 
-		hasFailed := false
+		hasBlockingFailure := false
+		hasNonBlockingFailure := false
 		hasPending := len(result.Metrics.PendingJobs) > 0
 		hasSkipped := false
 		for _, job := range result.Metrics.JobTimeline {
 			if job.Conclusion == "failure" {
-				hasFailed = true
+				if job.IsRequired {
+					hasBlockingFailure = true
+				} else {
+					hasNonBlockingFailure = true
+				}
 			}
 			if job.Conclusion == "skipped" || job.Conclusion == "cancelled" {
 				hasSkipped = true
@@ -451,9 +463,12 @@ func GenerateHighLevelTimeline(w io.Writer, results []analyzer.URLResult, global
 
 		fullText := fmt.Sprintf("[%d] %s (%s)", result.URLIndex+1, result.DisplayName, utils.HumanizeTime(wallTimeSec))
 		var coloredBar, coloredLink string
-		if hasFailed {
+		if hasBlockingFailure {
 			coloredBar = utils.RedText(barString)
 			coloredLink = utils.RedText(utils.MakeClickableLink(result.DisplayURL, fullText))
+		} else if hasNonBlockingFailure {
+			coloredBar = utils.YellowText(barString)
+			coloredLink = utils.YellowText(utils.MakeClickableLink(result.DisplayURL, fullText))
 		} else if hasPending {
 			coloredBar = utils.BlueText(barString)
 			coloredLink = utils.BlueText(utils.MakeClickableLink(result.DisplayURL, fullText))
@@ -563,7 +578,11 @@ func GenerateTimelineVisualization(w io.Writer, metrics analyzer.FinalMetrics, r
 			case job.Conclusion == "success":
 				coloredBar = utils.GreenText(strings.Repeat("█", maxInt(1, clampedLength)))
 			case job.Conclusion == "failure":
-				coloredBar = utils.RedText(strings.Repeat("█", maxInt(1, clampedLength)))
+				if job.IsRequired {
+					coloredBar = utils.RedText(strings.Repeat("█", maxInt(1, clampedLength)))
+				} else {
+					coloredBar = utils.YellowText(strings.Repeat("░", maxInt(1, clampedLength)))
+				}
 			case job.Status == "in_progress" || job.Status == "queued" || job.Status == "waiting":
 				coloredBar = utils.BlueText(strings.Repeat("▒", maxInt(1, clampedLength)))
 			case job.Conclusion == "skipped" || job.Conclusion == "cancelled":
@@ -592,7 +611,7 @@ func GenerateTimelineVisualization(w io.Writer, metrics analyzer.FinalMetrics, r
 			if _, ok := bottleneckKeys[jobKey]; ok {
 				bottleneckIndicator = " 🔥"
 			}
-			jobNameAndTime := fmt.Sprintf("%s%s (%s)%s", cleanJobName, groupIndicator, utils.HumanizeTime(durationSec), bottleneckIndicator)
+			jobNameAndTime := fmt.Sprintf("%s%s (%s)%s%s", cleanJobName, groupIndicator, utils.HumanizeTime(durationSec), bottleneckIndicator, requiredEmoji(job.IsRequired))
 			jobLink := jobNameAndTime
 			if job.URL != "" {
 				jobLink = utils.MakeClickableLink(job.URL, jobNameAndTime)
@@ -603,7 +622,11 @@ func GenerateTimelineVisualization(w io.Writer, metrics analyzer.FinalMetrics, r
 			case job.Conclusion == "success":
 				displayJobText = jobLink
 			case job.Conclusion == "failure":
-				displayJobText = utils.RedText(jobLink + " ❌")
+				if job.IsRequired {
+					displayJobText = utils.RedText(jobLink + " ❌")
+				} else {
+					displayJobText = utils.YellowText(jobLink + " ⚠")
+				}
 			case job.Status == "in_progress" || job.Status == "queued" || job.Status == "waiting":
 				statusPrefix = "⏳ "
 				displayJobText = utils.BlueText(statusPrefix + jobLink)
@@ -627,7 +650,7 @@ func GenerateTimelineVisualization(w io.Writer, metrics analyzer.FinalMetrics, r
 	footerLine := " " + footerText
 	footerPadding := strings.Repeat(" ", maxInt(0, headerScale+2-len(footerLine)))
 	fmt.Fprintf(w, "│%s%s│\n", footerLine, footerPadding)
-	baseLegend := fmt.Sprintf("Legend: %s  %s  %s  %s", utils.GreenText("█ Success"), utils.RedText("█ Failed"), utils.BlueText("▒ Pending/Running"), utils.GrayText("░ Cancelled/Skipped"))
+	baseLegend := fmt.Sprintf("Legend: %s  %s  %s  %s  %s", utils.GreenText("█ Success"), utils.RedText("█ Failed (blocking)"), utils.YellowText("░ Failed (non-blocking)"), utils.BlueText("▒ Pending/Running"), utils.GrayText("░ Cancelled/Skipped"))
 	markersLegend := ""
 	if countReviewEvents(reviewEvents, "shippit") > 0 {
 		markersLegend += "  " + utils.YellowText("▲ approvals")

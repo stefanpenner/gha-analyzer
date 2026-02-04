@@ -157,3 +157,57 @@ func countOccurrences(s, substr string) int {
 	}
 	return count
 }
+
+func TestRequiredEmoji(t *testing.T) {
+	t.Run("Returns lock emoji for required checks", func(t *testing.T) {
+		assert.Equal(t, " 🔒", requiredEmoji(true))
+	})
+
+	t.Run("Returns clipboard emoji for optional checks", func(t *testing.T) {
+		assert.Equal(t, " 📋", requiredEmoji(false))
+	})
+}
+
+func TestJobSpanRequiredEmoji(t *testing.T) {
+	now := time.Now()
+
+	createJobSpan := func(name string, isRequired bool) sdktrace.ReadOnlySpan {
+		return &mockReadOnlySpan{
+			name:      name,
+			startTime: now,
+			endTime:   now.Add(time.Second * 5),
+			spanID:    trace.SpanID{1, 2, 3, 4, 5, 6, 7, 8},
+			attrs: []attribute.KeyValue{
+				attribute.String("type", "job"),
+				attribute.String("github.status", "completed"),
+				attribute.String("github.conclusion", "success"),
+				attribute.String("github.url", "https://github.com/test/repo/actions/runs/1/job/1"),
+				attribute.Bool("is_required", isRequired),
+			},
+		}
+	}
+
+	t.Run("Shows lock emoji for required job", func(t *testing.T) {
+		span := createJobSpan("required-check", true)
+
+		var buf bytes.Buffer
+		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{span}, time.Time{}, time.Time{})
+
+		output := buf.String()
+		assert.Contains(t, output, "required-check")
+		assert.Contains(t, output, "🔒")
+		assert.NotContains(t, output, "📋")
+	})
+
+	t.Run("Shows clipboard emoji for optional job", func(t *testing.T) {
+		span := createJobSpan("optional-check", false)
+
+		var buf bytes.Buffer
+		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{span}, time.Time{}, time.Time{})
+
+		output := buf.String()
+		assert.Contains(t, output, "optional-check")
+		assert.Contains(t, output, "📋")
+		assert.NotContains(t, output, "🔒")
+	})
+}

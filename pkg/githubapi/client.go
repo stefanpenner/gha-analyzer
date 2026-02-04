@@ -225,6 +225,21 @@ type GitHubError struct {
 	DocumentationURL string `json:"documentation_url"`
 }
 
+type BranchProtection struct {
+	RequiredStatusChecks *RequiredStatusChecks `json:"required_status_checks"`
+}
+
+type RequiredStatusChecks struct {
+	Strict   bool     `json:"strict"`
+	Contexts []string `json:"contexts"`
+	Checks   []Check  `json:"checks,omitempty"`
+}
+
+type Check struct {
+	Context string `json:"context"`
+	AppID   *int64 `json:"app_id,omitempty"`
+}
+
 type rateLimiter struct {
 	mu        sync.Mutex
 	remaining int
@@ -717,4 +732,45 @@ func parseNextLink(linkHeader string) string {
 		}
 	}
 	return ""
+}
+
+func (c *Client) FetchBranchProtection(ctx context.Context, owner, repo, branch string) (*BranchProtection, error) {
+	ctx, span := tracer.Start(ctx, "FetchBranchProtection", trace.WithAttributes(
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+		attribute.String("github.branch", branch),
+	))
+	defer span.End()
+
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/branches/%s/protection/required_status_checks", owner, repo, branch)
+	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "token "+c.context.GitHubToken)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("User-Agent", "Node")
+
+	resp, err := doRequest(ctx, c, req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// 404 means no branch protection configured - this is not an error
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, nil
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Log warning but don't fail - fall back to treating all as required
+		return nil, nil
+	}
+
+	var protection RequiredStatusChecks
+	if err := json.NewDecoder(resp.Body).Decode(&protection); err != nil {
+		return nil, nil
+	}
+
+	return &BranchProtection{RequiredStatusChecks: &protection}, nil
 }

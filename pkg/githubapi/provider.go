@@ -14,4 +14,5 @@ type GitHubProvider interface {
 	FetchPRReviews(ctx context.Context, owner, repo, prNumber string) ([]Review, error)
 	FetchPRComments(ctx context.Context, owner, repo, prNumber string) ([]Review, error)
 	FetchJobsPaginated(ctx context.Context, urlValue string) ([]Job, error)
+	FetchBranchProtection(ctx context.Context, owner, repo, branch string) (*BranchProtection, error)
 }

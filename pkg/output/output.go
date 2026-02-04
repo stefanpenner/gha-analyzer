@@ -55,7 +55,7 @@ func OutputCombinedResults(w io.Writer, urlResults []analyzer.URLResult, combine
 		section(w, "Pending Jobs")
 		fmt.Fprintf(w, "%s %d jobs still running\n", utils.BlueText("⚠️  Pending Jobs Detected:"), len(allPending))
 		for i, job := range allPending {
-			jobLink := utils.MakeClickableLink(job.URL, job.Name)
+			jobLink := utils.MakeClickableLink(job.URL, job.Name+requiredEmoji(job.IsRequired))
 			fmt.Fprintf(w, "  %d. %s (%s) - %s\n", i+1, utils.BlueText(jobLink), job.Status, job.SourceName)
 		}
 		fmt.Fprintf(w, "\n  Note: Timeline shows current progress for pending jobs. Results may change as jobs complete.\n")
@@ -196,7 +196,7 @@ func OutputCombinedResults(w io.Writer, urlResults []analyzer.URLResult, combine
 				if _, ok := bottleneckKeys[key]; ok {
 					bottleneck = " 🔥"
 				}
-				fullText := fmt.Sprintf("%d. %s - %s%s", i+1, utils.HumanizeTime(duration), job.Name, bottleneck)
+				fullText := fmt.Sprintf("%d. %s - %s%s%s", i+1, utils.HumanizeTime(duration), job.Name, bottleneck, requiredEmoji(job.IsRequired))
 				jobLink := fullText
 				if job.URL != "" {
 					jobLink = utils.MakeClickableLink(job.URL, fullText)
