@@ -225,11 +225,6 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	treePart := fmt.Sprintf("%s%s %s %s%s %s", indent, expandIndicator, icon, displayName, badges, statusIcon)
 	treePart += strings.Repeat(" ", treePadding)
 
-	// Apply gray style to tree part if hidden (but not if selected)
-	if isHidden && !isSelected {
-		treePart = HiddenStyle.Render(treePart)
-	}
-
 	// Render timeline bar (empty if hidden, unstyled if selected for consistent background)
 	// URL is passed to render functions so only the bar/marker characters are clickable
 	var timelineBar string
@@ -243,11 +238,17 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	}
 
 	// Combine with styled borders (borders always gray)
-	if isSelected {
-		// For selected items, apply selection style to content but keep borders gray
+	if isSelected && isHidden {
+		// Hidden and selected: gray text with selection background
+		return BorderStyle.Render("│") + HiddenSelectedStyle.Render(treePart) + BorderStyle.Render("│") + HiddenSelectedStyle.Render(timelineBar) + BorderStyle.Render("│")
+	} else if isSelected {
+		// Selected but not hidden: white text with selection background
 		return BorderStyle.Render("│") + SelectedStyle.Render(treePart) + BorderStyle.Render("│") + SelectedStyle.Render(timelineBar) + BorderStyle.Render("│")
+	} else if isHidden {
+		// Hidden but not selected: gray text, no background
+		return BorderStyle.Render("│") + HiddenStyle.Render(treePart) + BorderStyle.Render("│") + timelineBar + BorderStyle.Render("│")
 	}
-	// For non-selected items, apply border style to │ characters
+	// Normal: no special styling
 	return BorderStyle.Render("│") + treePart + BorderStyle.Render("│") + timelineBar + BorderStyle.Render("│")
 }
 

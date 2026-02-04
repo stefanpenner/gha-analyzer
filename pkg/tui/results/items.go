@@ -1,6 +1,7 @@
 package results
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
@@ -117,9 +118,9 @@ func FlattenVisibleItems(items []*TreeItem, expandedState map[string]bool) []Tre
 
 func makeNodeID(parentID, name string, index int) string {
 	if parentID == "" {
-		return name
+		return fmt.Sprintf("%s/%d", name, index)
 	}
-	return parentID + "/" + name + "/" + string(rune('0'+index%10))
+	return fmt.Sprintf("%s/%s/%d", parentID, name, index)
 }
 
 // BuildTreeFromSpans is a convenience wrapper

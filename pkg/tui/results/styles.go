@@ -36,6 +36,11 @@ var (
 			Foreground(ColorWhite).
 			Background(lipgloss.Color("#3D3D3D"))
 
+	// HiddenSelectedStyle combines hidden (gray text) with selection background
+	HiddenSelectedStyle = lipgloss.NewStyle().
+				Foreground(ColorGray).
+				Background(lipgloss.Color("#3D3D3D"))
+
 	NormalStyle = lipgloss.NewStyle()
 
 	HiddenStyle = lipgloss.NewStyle().
