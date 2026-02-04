@@ -4,16 +4,17 @@ import "github.com/charmbracelet/bubbles/key"
 
 // KeyMap defines all key bindings for the TUI
 type KeyMap struct {
-	Up         key.Binding
-	Down       key.Binding
-	Left       key.Binding
-	Right      key.Binding
-	Enter      key.Binding
-	Space      key.Binding
-	Open       key.Binding
-	ExpandAll  key.Binding
+	Up          key.Binding
+	Down        key.Binding
+	Left        key.Binding
+	Right       key.Binding
+	Enter       key.Binding
+	Space       key.Binding
+	Open        key.Binding
+	ExpandAll   key.Binding
 	CollapseAll key.Binding
-	Quit       key.Binding
+	ToggleChart key.Binding
+	Quit        key.Binding
 }
 
 // DefaultKeyMap returns the default key bindings
@@ -55,6 +56,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("c"),
 			key.WithHelp("c", "collapse all"),
 		),
+		ToggleChart: key.NewBinding(
+			key.WithKeys("v"),
+			key.WithHelp("v", "toggle chart"),
+		),
 		Quit: key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q", "quit"),
@@ -64,5 +69,5 @@ func DefaultKeyMap() KeyMap {
 
 // ShortHelp returns a short help string for the footer
 func (k KeyMap) ShortHelp() string {
-	return "↑↓ navigate • ←→ expand/collapse • o open • e/c expand/collapse all • q quit"
+	return "↑↓ navigate • ←→ expand/collapse • v toggle chart • o open • e/c all • q quit"
 }

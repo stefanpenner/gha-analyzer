@@ -18,11 +18,14 @@ type Model struct {
 	treeItems     []*TreeItem
 	visibleItems  []TreeItem
 	expandedState map[string]bool
+	hiddenState   map[string]bool // items hidden from chart
 	cursor        int
 	width         int
 	height        int
 	globalStart   time.Time
 	globalEnd     time.Time
+	chartStart    time.Time // calculated from non-hidden items
+	chartEnd      time.Time // calculated from non-hidden items
 	keys          KeyMap
 	// Statistics
 	summary     analyzer.Summary
@@ -38,8 +41,11 @@ type Model struct {
 func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time) Model {
 	m := Model{
 		expandedState: make(map[string]bool),
+		hiddenState:   make(map[string]bool),
 		globalStart:   globalStart,
 		globalEnd:     globalEnd,
+		chartStart:    globalStart,
+		chartEnd:      globalEnd,
 		keys:          DefaultKeyMap(),
 		width:         80,
 		height:        24,
@@ -156,6 +162,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.CollapseAll):
 			m.collapseAll()
+
+		case key.Matches(msg, m.keys.ToggleChart):
+			m.toggleChartVisibility()
 		}
 
 	case tea.WindowSizeMsg:
@@ -171,22 +180,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) View() string {
 	var b strings.Builder
 
-	// Header
+	// Header (includes time range info)
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n")
 
-	// Time header
-	timeHeader := m.renderTimeHeader()
-	if timeHeader != "" {
-		b.WriteString(timeHeader)
-		b.WriteString("\n")
-	}
-
 	// Calculate available height for items
-	headerLines := 7 // header box (up to 6 lines + margin)
-	timeHeaderLines := 2
+	headerLines := 8 // header box (up to 7 lines + margin)
 	footerLines := 3
-	availableHeight := m.height - headerLines - timeHeaderLines - footerLines
+	availableHeight := m.height - headerLines - footerLines
 	if availableHeight < 1 {
 		availableHeight = 10
 	}
@@ -219,14 +220,21 @@ func (m Model) View() string {
 		b.WriteString("\n")
 	}
 
-	// Pad if needed
+	// Pad if needed (with separator matching item rows)
 	renderedItems := endIdx - startIdx
 	for i := renderedItems; i < availableHeight; i++ {
 		totalWidth := m.width
 		if totalWidth < 1 {
 			totalWidth = 80
 		}
-		b.WriteString("│" + strings.Repeat(" ", max(0, totalWidth-2)) + "│\n")
+		// Match the structure: │ tree │ timeline │
+		treeW := 55 // treeWidth constant
+		availableW := totalWidth - 3
+		timelineW := availableW - treeW
+		if timelineW < 10 {
+			timelineW = 10
+		}
+		b.WriteString(BorderStyle.Render("│") + strings.Repeat(" ", treeW) + BorderStyle.Render("│") + strings.Repeat(" ", timelineW) + BorderStyle.Render("│") + "\n")
 	}
 
 	// Footer
@@ -321,6 +329,74 @@ func (m *Model) collapseAll() {
 		m.expandedState[id] = false
 	}
 	m.rebuildItems()
+}
+
+// toggleChartVisibility toggles the current item's visibility in the chart
+func (m *Model) toggleChartVisibility() {
+	if m.cursor >= len(m.visibleItems) {
+		return
+	}
+
+	item := m.visibleItems[m.cursor]
+	m.hiddenState[item.ID] = !m.hiddenState[item.ID]
+
+	// Also toggle all children
+	m.toggleChildrenVisibility(item.ID, m.hiddenState[item.ID])
+
+	// Recalculate chart bounds
+	m.recalculateChartBounds()
+}
+
+// toggleChildrenVisibility recursively sets visibility for all children
+func (m *Model) toggleChildrenVisibility(parentID string, hidden bool) {
+	for _, item := range m.visibleItems {
+		if item.ParentID == parentID {
+			m.hiddenState[item.ID] = hidden
+			m.toggleChildrenVisibility(item.ID, hidden)
+		}
+	}
+}
+
+// recalculateChartBounds recalculates the chart time window based on visible items
+func (m *Model) recalculateChartBounds() {
+	var earliest, latest time.Time
+
+	var checkItems func(items []*TreeItem)
+	checkItems = func(items []*TreeItem) {
+		for _, item := range items {
+			if m.hiddenState[item.ID] {
+				continue
+			}
+			if !item.StartTime.IsZero() {
+				if earliest.IsZero() || item.StartTime.Before(earliest) {
+					earliest = item.StartTime
+				}
+			}
+			if !item.EndTime.IsZero() {
+				if latest.IsZero() || item.EndTime.After(latest) {
+					latest = item.EndTime
+				}
+			}
+			checkItems(item.Children)
+		}
+	}
+	checkItems(m.treeItems)
+
+	// If all items are hidden, use global bounds
+	if earliest.IsZero() {
+		earliest = m.globalStart
+	}
+	if latest.IsZero() {
+		latest = m.globalEnd
+	}
+
+	m.chartStart = earliest
+	m.chartEnd = latest
+}
+
+// IsHidden returns whether an item is hidden from the chart
+func (m *Model) IsHidden(id string) bool {
+	return m.hiddenState[id]
 }
 
 // Run starts the TUI

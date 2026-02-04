@@ -73,17 +73,21 @@ func BuildTreeFromSpans(spans []trace.ReadOnlySpan, globalEarliest, globalLatest
 			continue
 		}
 
-		// Deduplicate markers
+		// Deduplicate markers using multiple attributes for robust deduplication
 		if spanType == "marker" {
 			eventID := attrs["github.event_id"]
 			eventTime := attrs["github.event_time"]
+			eventType := attrs["github.event_type"]
+			user := attrs["github.user"]
+			// Build a composite key from available attributes
+			key := eventType + "-" + user + "-" + eventTime
 			if eventID != "" {
-				key := eventID + "-" + eventTime
-				if _, seen := seenMarkers[key]; seen {
-					continue
-				}
-				seenMarkers[key] = struct{}{}
+				key = eventID + "-" + key
 			}
+			if _, seen := seenMarkers[key]; seen {
+				continue
+			}
+			seenMarkers[key] = struct{}{}
 		}
 
 		filtered = append(filtered, spanWithAttrs{span: s, attrs: attrs})

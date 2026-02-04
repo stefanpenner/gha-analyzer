@@ -17,15 +17,13 @@ var (
 var (
 	HeaderStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(ColorPurple).
-			Padding(0, 1)
+			Foreground(ColorPurple)
 
 	HeaderCountStyle = lipgloss.NewStyle().
 				Foreground(ColorGray)
 
 	FooterStyle = lipgloss.NewStyle().
-			Foreground(ColorGray).
-			Padding(0, 1)
+			Foreground(ColorGray)
 
 	BorderStyle = lipgloss.NewStyle().
 			Foreground(ColorGray)
@@ -39,6 +37,9 @@ var (
 			Background(lipgloss.Color("#3D3D3D"))
 
 	NormalStyle = lipgloss.NewStyle()
+
+	HiddenStyle = lipgloss.NewStyle().
+			Foreground(ColorGray)
 
 	WorkflowStyle = lipgloss.NewStyle().
 			Foreground(ColorPurple)

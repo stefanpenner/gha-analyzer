@@ -27,8 +27,33 @@ func RenderTimelineBar(item TreeItem, globalStart, globalEnd time.Time, width in
 		itemEnd = globalEnd
 	}
 
-	if itemEnd.Before(itemStart) || itemEnd.Equal(itemStart) {
-		return strings.Repeat(" ", width)
+	// Handle 0-duration items (show as a marker at start position)
+	isZeroDuration := itemEnd.Before(itemStart) || itemEnd.Equal(itemStart)
+	if isZeroDuration {
+		// Get character and style based on item type/status
+		markerChar, style := getBarStyle(item)
+		// For non-markers, use | as the zero-duration indicator
+		if item.ItemType != ItemTypeMarker {
+			markerChar = "|"
+		}
+
+		// Get the display width of the marker character
+		markerWidth := lipgloss.Width(markerChar)
+
+		// Calculate position for the marker
+		startOffset := itemStart.Sub(globalStart)
+		startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
+		if startPos < 0 {
+			startPos = 0
+		}
+		// Ensure marker doesn't overflow (account for marker width)
+		if startPos > width-markerWidth {
+			startPos = width - markerWidth
+		}
+
+		leftPad := strings.Repeat(" ", startPos)
+		rightPad := strings.Repeat(" ", maxInt(0, width-startPos-markerWidth))
+		return leftPad + style.Render(markerChar) + rightPad
 	}
 
 	startOffset := itemStart.Sub(globalStart)
@@ -70,6 +95,82 @@ func RenderTimelineBar(item TreeItem, globalStart, globalEnd time.Time, width in
 	return leftPad + style.Render(bar) + rightPad
 }
 
+// RenderTimelineBarPlain renders a timeline bar without colors (for selected items)
+func RenderTimelineBarPlain(item TreeItem, globalStart, globalEnd time.Time, width int) string {
+	if globalEnd.Before(globalStart) || globalEnd.Equal(globalStart) || width <= 0 {
+		return strings.Repeat(" ", width)
+	}
+
+	totalDuration := globalEnd.Sub(globalStart)
+
+	// Calculate bar position
+	itemStart := item.StartTime
+	itemEnd := item.EndTime
+
+	// Clamp to global bounds
+	if itemStart.Before(globalStart) {
+		itemStart = globalStart
+	}
+	if itemEnd.After(globalEnd) {
+		itemEnd = globalEnd
+	}
+
+	// Handle 0-duration items
+	isZeroDuration := itemEnd.Before(itemStart) || itemEnd.Equal(itemStart)
+	if isZeroDuration {
+		markerChar, _ := getBarStyle(item)
+		if item.ItemType != ItemTypeMarker {
+			markerChar = "|"
+		}
+		markerWidth := lipgloss.Width(markerChar)
+
+		startOffset := itemStart.Sub(globalStart)
+		startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
+		if startPos < 0 {
+			startPos = 0
+		}
+		if startPos > width-markerWidth {
+			startPos = width - markerWidth
+		}
+
+		leftPad := strings.Repeat(" ", startPos)
+		rightPad := strings.Repeat(" ", maxInt(0, width-startPos-markerWidth))
+		return leftPad + markerChar + rightPad
+	}
+
+	startOffset := itemStart.Sub(globalStart)
+	endOffset := itemEnd.Sub(globalStart)
+
+	startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
+	endPos := int(float64(endOffset) / float64(totalDuration) * float64(width))
+
+	barLength := endPos - startPos
+	if barLength < 1 {
+		barLength = 1
+	}
+
+	if startPos < 0 {
+		startPos = 0
+	}
+	if startPos > width-1 {
+		startPos = width - 1
+	}
+	if startPos+barLength > width {
+		barLength = width - startPos
+	}
+	if barLength < 1 {
+		barLength = 1
+	}
+
+	barChar, _ := getBarStyle(item)
+
+	leftPad := strings.Repeat(" ", startPos)
+	bar := strings.Repeat(barChar, barLength)
+	rightPad := strings.Repeat(" ", width-startPos-barLength)
+
+	return leftPad + bar + rightPad
+}
+
 // getBarStyle returns the bar character and style based on item status
 func getBarStyle(item TreeItem) (string, lipgloss.Style) {
 	// Steps use different character
@@ -92,7 +193,11 @@ func getBarStyle(item TreeItem) (string, lipgloss.Style) {
 		case "merged":
 			return "◆", BarSuccessStyle
 		case "approved":
-			return "▲", BarPendingStyle
+			return "✓", BarSuccessStyle
+		case "comment", "commented", "COMMENTED":
+			return "💬", BarPendingStyle
+		case "changes_requested":
+			return "✗", BarFailureStyle
 		default:
 			return "▲", BarPendingStyle
 		}
