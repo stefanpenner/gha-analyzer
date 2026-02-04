@@ -45,14 +45,6 @@ func (m Model) renderHeader() string {
 		totalWidth = 80
 	}
 
-	// Calculate widths to match item rows
-	treeW := treeWidth
-	availableW := totalWidth - 3 // 3 border chars
-	timelineW := availableW - treeW
-	if timelineW < 10 {
-		timelineW = 10
-	}
-
 	// Build borders (all in gray, rounded corners)
 	topBorder := BorderStyle.Render("╭" + strings.Repeat("─", max(0, totalWidth-2)) + "╮")
 
@@ -66,28 +58,30 @@ func (m Model) renderHeader() string {
 	}
 	line1 := BorderStyle.Render("│") + " " + title + strings.Repeat(" ", titlePadding) + " " + BorderStyle.Render("│")
 
-	// Line 2: Success rate and concurrency (with colored percentages)
+	// Line 2: Success rates (using displayed stats)
 	successRate := float64(0)
-	if m.summary.TotalRuns > 0 {
-		successRate = float64(m.summary.SuccessfulRuns) / float64(m.summary.TotalRuns) * 100
+	if m.displayedSummary.TotalRuns > 0 {
+		successRate = float64(m.displayedSummary.SuccessfulRuns) / float64(m.displayedSummary.TotalRuns) * 100
 	}
 	jobSuccessRate := float64(0)
-	if m.summary.TotalJobs > 0 {
-		jobSuccessRate = float64(m.summary.TotalJobs-m.summary.FailedJobs) / float64(m.summary.TotalJobs) * 100
+	if m.displayedSummary.TotalJobs > 0 {
+		jobSuccessRate = float64(m.displayedSummary.TotalJobs-m.displayedSummary.FailedJobs) / float64(m.displayedSummary.TotalJobs) * 100
 	}
 
 	// Build stats line with colored percentages
 	workflowRateStr := colorForRate(successRate).Render(fmt.Sprintf("%.0f%%", successRate))
 	jobRateStr := colorForRate(jobSuccessRate).Render(fmt.Sprintf("%.0f%%", jobSuccessRate))
-	concurrencyStr := HeaderCountStyle.Render(fmt.Sprintf("%d", m.summary.MaxConcurrency))
+	numStyle := lipgloss.NewStyle().Foreground(ColorBlue)
+	concurrencyStr := numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.MaxConcurrency))
 
 	statsLine := HeaderCountStyle.Render("Success: ") + workflowRateStr +
 		HeaderCountStyle.Render(" workflows, ") + jobRateStr +
-		HeaderCountStyle.Render(" jobs • Peak Concurrency: ") + concurrencyStr
+		HeaderCountStyle.Render(" jobs") +
+		HeaderCountStyle.Render("    Peak Concurrency: ") + concurrencyStr
 
 	// Calculate width for padding (use plain text version)
-	statsText := fmt.Sprintf("Success: %.0f%% workflows, %.0f%% jobs • Peak Concurrency: %d",
-		successRate, jobSuccessRate, m.summary.MaxConcurrency)
+	statsText := fmt.Sprintf("Success: %.0f%% workflows, %.0f%% jobs    Peak Concurrency: %d",
+		successRate, jobSuccessRate, m.displayedSummary.MaxConcurrency)
 	statsWidth := lipgloss.Width(statsText)
 	statsPadding := totalWidth - statsWidth - 4
 	if statsPadding < 0 {
@@ -95,26 +89,18 @@ func (m Model) renderHeader() string {
 	}
 	line2 := BorderStyle.Render("│") + " " + statsLine + strings.Repeat(" ", statsPadding) + " " + BorderStyle.Render("│")
 
-	// Line 3: Counts and times (with subtle coloring)
-	wallTime := utils.HumanizeTime(float64(m.wallTimeMs) / 1000)
-	computeTime := utils.HumanizeTime(float64(m.computeMs) / 1000)
+	// Line 3: Counts (using displayed stats)
+	runsStr := numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.TotalRuns))
+	jobsStr := numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.TotalJobs))
+	stepsStr := numStyle.Render(fmt.Sprintf("%d", m.displayedStepCount))
 
-	// Style numbers in subtle blue, labels in off-white, times in muted gray
-	numStyle := lipgloss.NewStyle().Foreground(ColorBlue)
-	runsStr := numStyle.Render(fmt.Sprintf("%d", m.summary.TotalRuns))
-	jobsStr := numStyle.Render(fmt.Sprintf("%d", m.summary.TotalJobs))
-	stepsStr := numStyle.Render(fmt.Sprintf("%d", m.stepCount))
-	wallStr := FooterStyle.Render(wallTime)
-	computeStr := FooterStyle.Render(computeTime)
+	countsLine := runsStr + HeaderCountStyle.Render(" runs    ") +
+		jobsStr + HeaderCountStyle.Render(" jobs    ") +
+		stepsStr + HeaderCountStyle.Render(" steps")
 
-	countsLine := runsStr + HeaderCountStyle.Render(" runs • ") +
-		jobsStr + HeaderCountStyle.Render(" jobs • ") +
-		stepsStr + HeaderCountStyle.Render(" steps • wall: ") +
-		wallStr + HeaderCountStyle.Render(" • compute: ") + computeStr
-
-	// Calculate width for padding (use plain text version)
-	countsText := fmt.Sprintf("%d runs • %d jobs • %d steps • wall: %s • compute: %s",
-		m.summary.TotalRuns, m.summary.TotalJobs, m.stepCount, wallTime, computeTime)
+	// Calculate width for padding
+	countsText := fmt.Sprintf("%d runs    %d jobs    %d steps",
+		m.displayedSummary.TotalRuns, m.displayedSummary.TotalJobs, m.displayedStepCount)
 	countsWidth := lipgloss.Width(countsText)
 	countsPadding := totalWidth - countsWidth - 4
 	if countsPadding < 0 {
@@ -122,8 +108,25 @@ func (m Model) renderHeader() string {
 	}
 	line3 := BorderStyle.Render("│") + " " + countsLine + strings.Repeat(" ", countsPadding) + " " + BorderStyle.Render("│")
 
-	// Line 4: Input URLs (clickable links)
-	line4 := ""
+	// Line 4: Times (displayed wall and compute times, with better styling)
+	wallTime := utils.HumanizeTime(float64(m.displayedWallTimeMs) / 1000)
+	computeTime := utils.HumanizeTime(float64(m.displayedComputeMs) / 1000)
+	wallStr := numStyle.Render(wallTime)
+	computeStr := numStyle.Render(computeTime)
+
+	timesLine := HeaderCountStyle.Render("Wall Time: ") + wallStr +
+		HeaderCountStyle.Render("    Compute Time: ") + computeStr
+
+	timesText := fmt.Sprintf("Wall Time: %s    Compute Time: %s", wallTime, computeTime)
+	timesWidth := lipgloss.Width(timesText)
+	timesPadding := totalWidth - timesWidth - 4
+	if timesPadding < 0 {
+		timesPadding = 0
+	}
+	line4Times := BorderStyle.Render("│") + " " + timesLine + strings.Repeat(" ", timesPadding) + " " + BorderStyle.Render("│")
+
+	// Line 5: Input URLs (clickable links)
+	lineURLs := ""
 	for _, inputURL := range m.inputURLs {
 		// Truncate if too long
 		urlText := inputURL
@@ -138,11 +141,11 @@ func (m Model) renderHeader() string {
 		if urlPadding < 0 {
 			urlPadding = 0
 		}
-		line4 += "\n" + BorderStyle.Render("│") + " " + linkedURL + strings.Repeat(" ", urlPadding) + " " + BorderStyle.Render("│")
+		lineURLs += "\n" + BorderStyle.Render("│") + " " + linkedURL + strings.Repeat(" ", urlPadding) + " " + BorderStyle.Render("│")
 	}
 
-	// Line 5: Time range info
-	line5 := ""
+	// Line 6: Time range info (start/end times of visible items)
+	lineTimeRange := ""
 	if !m.chartStart.IsZero() && !m.chartEnd.IsZero() {
 		startTime := m.chartStart.Format("15:04:05")
 		endTime := m.chartEnd.Format("15:04:05")
@@ -151,16 +154,23 @@ func (m Model) renderHeader() string {
 			durationSecs = 0
 		}
 		duration := utils.HumanizeTime(durationSecs)
-		timeText := fmt.Sprintf("Start: %s • Duration: %s • End: %s", startTime, duration, endTime)
+		timeText := fmt.Sprintf("Start: %s    Duration: %s    End: %s", startTime, duration, endTime)
 		timeWidth := lipgloss.Width(timeText)
 		timePadding := totalWidth - timeWidth - 4
 		if timePadding < 0 {
 			timePadding = 0
 		}
-		line5 = "\n" + BorderStyle.Render("│") + " " + HeaderCountStyle.Render(timeText) + strings.Repeat(" ", timePadding) + " " + BorderStyle.Render("│")
+		// Style the time values in blue for better readability
+		startStr := numStyle.Render(startTime)
+		durationStr := numStyle.Render(duration)
+		endStr := numStyle.Render(endTime)
+		styledTimeRange := HeaderCountStyle.Render("Start: ") + startStr +
+			HeaderCountStyle.Render("    Duration: ") + durationStr +
+			HeaderCountStyle.Render("    End: ") + endStr
+		lineTimeRange = "\n" + BorderStyle.Render("│") + " " + styledTimeRange + strings.Repeat(" ", timePadding) + " " + BorderStyle.Render("│")
 	}
 
-	return topBorder + "\n" + line1 + "\n" + line2 + "\n" + line3 + line4 + line5
+	return topBorder + "\n" + line1 + "\n" + line2 + "\n" + line3 + "\n" + line4Times + lineURLs + lineTimeRange
 }
 
 // renderItem renders a single tree item with timeline bar

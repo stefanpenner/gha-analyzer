@@ -51,11 +51,16 @@ type Model struct {
 	chartStart    time.Time // calculated from non-hidden items
 	chartEnd      time.Time // calculated from non-hidden items
 	keys          KeyMap
-	// Statistics
+	// Statistics (full dataset)
 	summary     analyzer.Summary
 	wallTimeMs  int64
 	computeMs   int64
 	stepCount   int
+	// Displayed statistics (only visible items)
+	displayedSummary   analyzer.Summary
+	displayedWallTimeMs int64
+	displayedComputeMs  int64
+	displayedStepCount  int
 	// Input URLs from CLI
 	inputURLs []string
 	// Modal state
@@ -116,6 +121,12 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 		m.wallTimeMs = 0
 	}
 	m.computeMs, m.stepCount = calculateComputeAndSteps(spans)
+
+	// Initialize displayed stats to match full stats
+	m.displayedSummary = m.summary
+	m.displayedWallTimeMs = m.wallTimeMs
+	m.displayedComputeMs = m.computeMs
+	m.displayedStepCount = m.stepCount
 
 	// Build tree from spans
 	m.roots = analyzer.BuildTreeFromSpans(spans, globalStart, globalEnd)
@@ -972,9 +983,14 @@ func (m *Model) toggleDescendants(items []*TreeItem, hidden bool) {
 	}
 }
 
-// recalculateChartBounds recalculates the chart time window based on visible items
+// recalculateChartBounds recalculates the chart time window and stats based on visible items
 func (m *Model) recalculateChartBounds() {
 	var earliest, latest time.Time
+	var totalRuns, successfulRuns int
+	var totalJobs, failedJobs int
+	var stepCount int
+	var computeMs int64
+	workflowsSeen := make(map[string]bool)
 
 	var checkItems func(items []*TreeItem)
 	checkItems = func(items []*TreeItem) {
@@ -982,6 +998,8 @@ func (m *Model) recalculateChartBounds() {
 			if m.hiddenState[item.ID] {
 				continue
 			}
+
+			// Time bounds
 			if !item.StartTime.IsZero() {
 				if earliest.IsZero() || item.StartTime.Before(earliest) {
 					earliest = item.StartTime
@@ -992,14 +1010,56 @@ func (m *Model) recalculateChartBounds() {
 					latest = item.EndTime
 				}
 			}
+
+			// Stats by item type
+			switch item.ItemType {
+			case ItemTypeWorkflow:
+				if !workflowsSeen[item.Name] {
+					workflowsSeen[item.Name] = true
+					totalRuns++
+					if item.Conclusion == "success" {
+						successfulRuns++
+					}
+				}
+			case ItemTypeJob:
+				totalJobs++
+				if item.Conclusion == "failure" {
+					failedJobs++
+				}
+				// Compute time is sum of job durations
+				if !item.StartTime.IsZero() && !item.EndTime.IsZero() {
+					duration := item.EndTime.Sub(item.StartTime).Milliseconds()
+					if duration > 0 {
+						computeMs += duration
+					}
+				}
+			case ItemTypeStep:
+				stepCount++
+			}
+
 			checkItems(item.Children)
 		}
 	}
 	checkItems(m.treeItems)
 
-	// If all items are hidden, use global bounds
+	// If all items are hidden, use global bounds and full stats
 	if earliest.IsZero() {
 		earliest = m.globalStart
+		m.displayedSummary = m.summary
+		m.displayedWallTimeMs = m.wallTimeMs
+		m.displayedComputeMs = m.computeMs
+		m.displayedStepCount = m.stepCount
+	} else {
+		// Update displayed stats
+		m.displayedSummary = analyzer.Summary{
+			TotalRuns:      totalRuns,
+			SuccessfulRuns: successfulRuns,
+			TotalJobs:      totalJobs,
+			FailedJobs:     failedJobs,
+			MaxConcurrency: m.summary.MaxConcurrency, // Keep original concurrency
+		}
+		m.displayedStepCount = stepCount
+		m.displayedComputeMs = computeMs
 	}
 	if latest.IsZero() {
 		latest = m.globalEnd
@@ -1007,6 +1067,12 @@ func (m *Model) recalculateChartBounds() {
 
 	m.chartStart = earliest
 	m.chartEnd = latest
+
+	// Wall time is chart duration
+	m.displayedWallTimeMs = latest.Sub(earliest).Milliseconds()
+	if m.displayedWallTimeMs < 0 {
+		m.displayedWallTimeMs = 0
+	}
 }
 
 // IsHidden returns whether an item is hidden from the chart
