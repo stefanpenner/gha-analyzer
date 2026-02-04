@@ -234,14 +234,15 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	}
 
 	// Render timeline bar (empty if hidden, unstyled if selected for consistent background)
+	// URL is passed to render functions so only the bar/marker characters are clickable
 	var timelineBar string
 	if isHidden {
 		timelineBar = strings.Repeat(" ", timelineW)
 	} else if isSelected {
 		// Render without colors so selection background shows through
-		timelineBar = RenderTimelineBarPlain(item, m.chartStart, m.chartEnd, timelineW)
+		timelineBar = RenderTimelineBarPlain(item, m.chartStart, m.chartEnd, timelineW, item.URL)
 	} else {
-		timelineBar = RenderTimelineBar(item, m.chartStart, m.chartEnd, timelineW)
+		timelineBar = RenderTimelineBar(item, m.chartStart, m.chartEnd, timelineW, item.URL)
 	}
 
 	// Combine with styled borders (borders always gray)

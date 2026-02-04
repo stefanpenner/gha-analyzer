@@ -1,14 +1,24 @@
 package results
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
+// hyperlinkNoUnderline wraps text in OSC 8 hyperlink with underline disabled.
+func timelineHyperlink(url, text string) string {
+	if url == "" {
+		return text
+	}
+	// \x1b[24m disables underline
+	return fmt.Sprintf("\x1b]8;;%s\x07\x1b[24m%s\x1b[24m\x1b]8;;\x07", url, text)
+}
+
 // RenderTimelineBar renders a timeline bar for a tree item
-func RenderTimelineBar(item TreeItem, globalStart, globalEnd time.Time, width int) string {
+func RenderTimelineBar(item TreeItem, globalStart, globalEnd time.Time, width int, url string) string {
 	if globalEnd.Before(globalStart) || globalEnd.Equal(globalStart) || width <= 0 {
 		return strings.Repeat(" ", width)
 	}
@@ -53,7 +63,9 @@ func RenderTimelineBar(item TreeItem, globalStart, globalEnd time.Time, width in
 
 		leftPad := strings.Repeat(" ", startPos)
 		rightPad := strings.Repeat(" ", maxInt(0, width-startPos-markerWidth))
-		return leftPad + style.Render(markerChar) + rightPad
+		// Wrap only the marker in hyperlink
+		styledMarker := style.Render(markerChar)
+		return leftPad + timelineHyperlink(url, styledMarker) + rightPad
 	}
 
 	startOffset := itemStart.Sub(globalStart)
@@ -92,11 +104,13 @@ func RenderTimelineBar(item TreeItem, globalStart, globalEnd time.Time, width in
 	bar := strings.Repeat(barChar, barLength)
 	rightPad := strings.Repeat(" ", width-startPos-barLength)
 
-	return leftPad + style.Render(bar) + rightPad
+	// Wrap only the bar in hyperlink
+	styledBar := style.Render(bar)
+	return leftPad + timelineHyperlink(url, styledBar) + rightPad
 }
 
 // RenderTimelineBarPlain renders a timeline bar without colors (for selected items)
-func RenderTimelineBarPlain(item TreeItem, globalStart, globalEnd time.Time, width int) string {
+func RenderTimelineBarPlain(item TreeItem, globalStart, globalEnd time.Time, width int, url string) string {
 	if globalEnd.Before(globalStart) || globalEnd.Equal(globalStart) || width <= 0 {
 		return strings.Repeat(" ", width)
 	}
@@ -135,7 +149,8 @@ func RenderTimelineBarPlain(item TreeItem, globalStart, globalEnd time.Time, wid
 
 		leftPad := strings.Repeat(" ", startPos)
 		rightPad := strings.Repeat(" ", maxInt(0, width-startPos-markerWidth))
-		return leftPad + markerChar + rightPad
+		// Wrap only the marker in hyperlink
+		return leftPad + timelineHyperlink(url, markerChar) + rightPad
 	}
 
 	startOffset := itemStart.Sub(globalStart)
@@ -168,7 +183,8 @@ func RenderTimelineBarPlain(item TreeItem, globalStart, globalEnd time.Time, wid
 	bar := strings.Repeat(barChar, barLength)
 	rightPad := strings.Repeat(" ", width-startPos-barLength)
 
-	return leftPad + bar + rightPad
+	// Wrap only the bar in hyperlink
+	return leftPad + timelineHyperlink(url, bar) + rightPad
 }
 
 // getBarStyle returns the bar character and style based on item status
