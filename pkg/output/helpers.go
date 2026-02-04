@@ -29,3 +29,10 @@ func sortGroupNames(groupNames []string, less func(a, b string) bool) {
 		return less(groupNames[i], groupNames[j])
 	})
 }
+
+func requiredEmoji(isRequired bool) string {
+	if isRequired {
+		return " 🔒"
+	}
+	return " 📋"
+}

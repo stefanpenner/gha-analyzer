@@ -43,7 +43,7 @@ func OutputCombinedResultsMarkdown(w io.Writer, urlResults []analyzer.URLResult,
 		fmt.Fprintln(w, "| --- | --- | --- |")
 		for _, job := range pending {
 			fmt.Fprintf(w, "| %s | %s | %s |\n",
-				markdownLink(job.URL, job.Name),
+				markdownLink(job.URL, job.Name+requiredEmoji(job.IsRequired)),
 				job.Status,
 				job.SourceName,
 			)
@@ -111,7 +111,7 @@ func OutputCombinedResultsMarkdown(w io.Writer, urlResults []analyzer.URLResult,
 			fmt.Fprintf(w, "### %s\n", markdownLink(result.DisplayURL, result.DisplayName))
 			for _, job := range jobs {
 				duration := float64(job.EndTime-job.StartTime) / 1000
-				jobText := fmt.Sprintf("%s — %s", utils.HumanizeTime(duration), job.Name)
+				jobText := fmt.Sprintf("%s — %s%s", utils.HumanizeTime(duration), job.Name, requiredEmoji(job.IsRequired))
 				if job.URL != "" {
 					jobText = markdownLink(job.URL, jobText)
 				}
