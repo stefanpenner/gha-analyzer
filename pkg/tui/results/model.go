@@ -129,8 +129,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Left):
 			m.collapseOrGoToParent()
 
-		case key.Matches(msg, m.keys.Right), key.Matches(msg, m.keys.Enter), key.Matches(msg, m.keys.Space):
+		case key.Matches(msg, m.keys.Right), key.Matches(msg, m.keys.Enter):
 			m.expandOrToggle()
+
+		case key.Matches(msg, m.keys.Space):
+			m.toggleChartVisibility()
 
 		case key.Matches(msg, m.keys.Open):
 			m.openCurrentItem()
@@ -140,9 +143,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.CollapseAll):
 			m.collapseAll()
-
-		case key.Matches(msg, m.keys.ToggleChart):
-			m.toggleChartVisibility()
 		}
 
 	case tea.WindowSizeMsg:

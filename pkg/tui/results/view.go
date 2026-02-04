@@ -158,15 +158,15 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 
 	// Get icon based on item type
 	icon := getItemIcon(item)
-	iconWidth := lipgloss.Width(icon)
+	iconWidth := GetCharWidth(icon)
 
 	// Get status indicator
 	statusIcon := getStatusIcon(item)
-	statusWidth := lipgloss.Width(statusIcon)
+	statusWidth := GetCharWidth(statusIcon)
 
 	// Get badges
 	badges := getBadges(item)
-	badgesWidth := lipgloss.Width(badges)
+	badgesWidth := getBadgesWidth(badges)
 
 	// Build the name part with duration
 	name := item.DisplayName
@@ -309,6 +309,16 @@ func getBadges(item TreeItem) string {
 		badges += " 🔥"
 	}
 	return badges
+}
+
+// getBadgesWidth calculates the width of badges using fixed emoji widths
+func getBadgesWidth(badges string) int {
+	width := 0
+	for _, r := range badges {
+		s := string(r)
+		width += GetCharWidth(s)
+	}
+	return width
 }
 
 // renderFooter renders the help footer

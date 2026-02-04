@@ -13,7 +13,6 @@ type KeyMap struct {
 	Open        key.Binding
 	ExpandAll   key.Binding
 	CollapseAll key.Binding
-	ToggleChart key.Binding
 	Quit        key.Binding
 }
 
@@ -42,7 +41,7 @@ func DefaultKeyMap() KeyMap {
 		),
 		Space: key.NewBinding(
 			key.WithKeys(" "),
-			key.WithHelp("space", "toggle"),
+			key.WithHelp("space", "toggle chart"),
 		),
 		Open: key.NewBinding(
 			key.WithKeys("o"),
@@ -56,10 +55,6 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("c"),
 			key.WithHelp("c", "collapse all"),
 		),
-		ToggleChart: key.NewBinding(
-			key.WithKeys("v"),
-			key.WithHelp("v", "toggle chart"),
-		),
 		Quit: key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q", "quit"),
@@ -69,5 +64,5 @@ func DefaultKeyMap() KeyMap {
 
 // ShortHelp returns a short help string for the footer
 func (k KeyMap) ShortHelp() string {
-	return "↑↓ navigate • ←→ expand/collapse • v toggle chart • o open • e/c all • q quit"
+	return "↑↓ navigate • ←→ expand/collapse • space toggle chart • o open • e/c all • q quit"
 }

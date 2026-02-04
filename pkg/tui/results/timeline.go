@@ -8,13 +8,81 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// hyperlinkNoUnderline wraps text in OSC 8 hyperlink with underline disabled.
+// timelineHyperlink wraps text in OSC 8 hyperlink with underline disabled.
 func timelineHyperlink(url, text string) string {
 	if url == "" {
 		return text
 	}
 	// \x1b[24m disables underline
 	return fmt.Sprintf("\x1b]8;;%s\x07\x1b[24m%s\x1b[24m\x1b]8;;\x07", url, text)
+}
+
+// renderMarker renders a marker character with proper padding, handling width consistently.
+// Returns left padding + styled marker + right padding, totaling exactly 'width' visual characters.
+func renderMarker(markerChar string, style lipgloss.Style, startPos, width int, url string, applyStyle bool) string {
+	// Use a fixed width for known markers to avoid terminal inconsistencies
+	markerWidth := getMarkerWidth(markerChar)
+
+	// Clamp position
+	if startPos < 0 {
+		startPos = 0
+	}
+	if startPos > width-markerWidth {
+		startPos = width - markerWidth
+	}
+	if startPos < 0 {
+		startPos = 0
+	}
+
+	leftPadCount := startPos
+	rightPadCount := width - startPos - markerWidth
+	if rightPadCount < 0 {
+		rightPadCount = 0
+	}
+
+	// Build the content (styled marker with hyperlink)
+	var styledMarker string
+	if applyStyle {
+		styledMarker = style.Render(markerChar)
+	} else {
+		styledMarker = markerChar
+	}
+	content := timelineHyperlink(url, styledMarker)
+
+	// Build result with exact padding
+	result := strings.Repeat(" ", leftPadCount) + content + strings.Repeat(" ", rightPadCount)
+
+	// Validate and fix total width - measure only visible characters
+	actualWidth := leftPadCount + markerWidth + rightPadCount
+	if actualWidth < width {
+		// Add missing spaces at end
+		result += strings.Repeat(" ", width-actualWidth)
+	}
+
+	return result
+}
+
+// GetCharWidth returns the visual width of a character/emoji.
+// Uses fixed values for known characters to ensure consistency across renders.
+// This is exported so view.go can use it too.
+func GetCharWidth(char string) int {
+	switch char {
+	case "💬", "📋", "⚙️", "❌":
+		return 2
+	case "◆", "✓", "✗", "▲", "|", "↳", "◷", "○", "▼", "▶", " ":
+		return 1
+	case "◆ ", "▲ ", "• ":
+		return 2
+	case "🔒", "🔥":
+		return 2
+	default:
+		return lipgloss.Width(char)
+	}
+}
+
+// getMarkerWidth returns the visual width of a marker character.
+func getMarkerWidth(char string) int {
+	return GetCharWidth(char)
 }
 
 // RenderTimelineBar renders a timeline bar for a tree item
@@ -47,25 +115,11 @@ func RenderTimelineBar(item TreeItem, globalStart, globalEnd time.Time, width in
 			markerChar = "|"
 		}
 
-		// Get the display width of the marker character
-		markerWidth := lipgloss.Width(markerChar)
-
 		// Calculate position for the marker
 		startOffset := itemStart.Sub(globalStart)
 		startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
-		if startPos < 0 {
-			startPos = 0
-		}
-		// Ensure marker doesn't overflow (account for marker width)
-		if startPos > width-markerWidth {
-			startPos = width - markerWidth
-		}
 
-		leftPad := strings.Repeat(" ", startPos)
-		rightPad := strings.Repeat(" ", maxInt(0, width-startPos-markerWidth))
-		// Wrap only the marker in hyperlink
-		styledMarker := style.Render(markerChar)
-		return leftPad + timelineHyperlink(url, styledMarker) + rightPad
+		return renderMarker(markerChar, style, startPos, width, url, true)
 	}
 
 	startOffset := itemStart.Sub(globalStart)
@@ -132,25 +186,15 @@ func RenderTimelineBarPlain(item TreeItem, globalStart, globalEnd time.Time, wid
 	// Handle 0-duration items
 	isZeroDuration := itemEnd.Before(itemStart) || itemEnd.Equal(itemStart)
 	if isZeroDuration {
-		markerChar, _ := getBarStyle(item)
+		markerChar, style := getBarStyle(item)
 		if item.ItemType != ItemTypeMarker {
 			markerChar = "|"
 		}
-		markerWidth := lipgloss.Width(markerChar)
 
 		startOffset := itemStart.Sub(globalStart)
 		startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
-		if startPos < 0 {
-			startPos = 0
-		}
-		if startPos > width-markerWidth {
-			startPos = width - markerWidth
-		}
 
-		leftPad := strings.Repeat(" ", startPos)
-		rightPad := strings.Repeat(" ", maxInt(0, width-startPos-markerWidth))
-		// Wrap only the marker in hyperlink
-		return leftPad + timelineHyperlink(url, markerChar) + rightPad
+		return renderMarker(markerChar, style, startPos, width, url, false)
 	}
 
 	startOffset := itemStart.Sub(globalStart)
