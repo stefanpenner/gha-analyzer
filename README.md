@@ -2,7 +2,7 @@
 
 Analyze GitHub Actions performance and visualize workflow timelines directly in your terminal or [Perfetto UI](https://ui.perfetto.dev).
 
-![Terminal Waterfall](docs/terminal-waterfall.png)
+![TUI Screenshot](docs/tui-screenshot.jpeg)
 
 ## Install
 
