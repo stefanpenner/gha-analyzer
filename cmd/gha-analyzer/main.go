@@ -17,6 +17,7 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/ingest/polling"
 	"github.com/stefanpenner/gha-analyzer/pkg/output"
 	"github.com/stefanpenner/gha-analyzer/pkg/tui"
+	tuiresults "github.com/stefanpenner/gha-analyzer/pkg/tui/results"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -44,6 +45,7 @@ func main() {
 	openInPerfetto := false
 	openInOTel := false
 	otelEndpoint := ""
+	tuiMode := false
 	var window time.Duration
 
 	filtered := []string{}
@@ -79,6 +81,10 @@ func main() {
 		}
 		if arg == "--otel" {
 			otelEndpoint = "localhost:4318"
+			continue
+		}
+		if arg == "--tui" {
+			tuiMode = true
 			continue
 		}
 		filtered = append(filtered, arg)
@@ -171,6 +177,17 @@ func main() {
 		printError(err, "processing spans failed")
 	}
 
+	// If TUI mode is enabled, launch interactive TUI
+	if tuiMode {
+		globalStartTime := time.UnixMilli(globalEarliest)
+		globalEndTime := time.UnixMilli(globalLatest)
+		if err := tuiresults.Run(spans, globalStartTime, globalEndTime); err != nil {
+			fmt.Fprintf(os.Stderr, "%sError: TUI failed: %v%s\n", colorRed, err, colorReset)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Restore rich CLI report
 	combined := analyzer.CalculateCombinedMetrics(results, sumRuns(results), collectStarts(results), collectEnds(results))
 	var allTraceEvents []analyzer.TraceEvent
@@ -218,6 +235,7 @@ func printUsage() {
 	fmt.Println("\nUsage:")
 	fmt.Println("  gha-analyzer <github_url1> [github_url2...] [token] [flags]")
 	fmt.Println("\nFlags:")
+	fmt.Println("  --tui                     Launch interactive TUI with expandable workflow tree")
 	fmt.Println("  --perfetto=<file.json>    Save trace for Perfetto.dev analysis")
 	fmt.Println("  --open-in-perfetto        Automatically open the generated trace in Perfetto UI")
 	fmt.Println("  --otel[=<endpoint>]       Export traces to OTel collector (default: localhost:4318)")
@@ -229,4 +247,5 @@ func printUsage() {
 	fmt.Println("\nExamples:")
 	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123")
 	fmt.Println("  gha-analyzer https://github.com/owner/repo/commit/sha --perfetto=trace.json")
+	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123 --tui")
 }

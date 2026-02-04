@@ -27,7 +27,7 @@ type CommitAggregate struct {
 
 func OutputCombinedResults(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime, globalLatestTime int64, perfettoFile string, openInPerfetto bool, spans []trace.ReadOnlySpan) error {
 	fmt.Fprintf(w, "\n%s\n", strings.Repeat("=", 80))
-	fmt.Fprintf(w, "📊 %s\n", utils.MakeClickableLink("https://ui.perfetto.dev", "GitHub Actions Performance Report - Multi-URL Analysis"))
+	fmt.Fprintf(w, "📊 %s\n", utils.MakeClickableLink("https://ui.perfetto.dev", "GitHub Actions Performance Report"))
 	fmt.Fprintf(w, "%s\n", strings.Repeat("=", 80))
 
 	section(w, "Summary")
@@ -200,7 +200,7 @@ func OutputCombinedResults(w io.Writer, urlResults []analyzer.URLResult, combine
 		}
 	}
 
-	section(w, "Pipeline Timelines (OTel-native)")
+	section(w, "Pipeline Timelines")
 	RenderOTelTimeline(w, spans, time.UnixMilli(globalEarliestTime), time.UnixMilli(globalLatestTime))
 
 	if perfettoFile != "" {
