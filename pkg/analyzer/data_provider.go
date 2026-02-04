@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 )
@@ -69,7 +70,7 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 			return nil, err
 		}
 		if prData.Head.Ref == "" || prData.Head.SHA == "" {
-			return nil, fmt.Errorf("Invalid PR response - missing head or base information")
+			return nil, errors.New("invalid PR response - missing head or base information")
 		}
 		headSHA = prData.Head.SHA
 		branchName = prData.Head.Ref

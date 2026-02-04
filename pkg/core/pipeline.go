@@ -2,9 +2,9 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
+	"github.com/cockroachdb/errors"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -39,7 +39,7 @@ func (p *Pipeline) Process(ctx context.Context, spans []trace.ReadOnlySpan) erro
 		go func(e Exporter) {
 			defer wg.Done()
 			if err := e.Export(ctx, spans); err != nil {
-				errs <- fmt.Errorf("exporter error: %w", err)
+				errs <- errors.Wrap(err, "exporter error")
 			}
 		}(exporter)
 	}

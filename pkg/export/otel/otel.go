@@ -2,8 +2,8 @@ package otel
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/cockroachdb/errors"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -21,7 +21,7 @@ func NewExporter(ctx context.Context, endpoint string) (*Exporter, error) {
 		otlptracehttp.WithEndpoint(endpoint),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create OTLP exporter: %w", err)
+		return nil, errors.Wrap(err, "failed to create OTLP exporter")
 	}
 
 	return &Exporter{exporter: exporter}, nil

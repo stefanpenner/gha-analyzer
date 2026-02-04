@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh run view:*)",
+      "Bash(git:*)",
+      "Bash(gh*)",
+      "Bash(tree:*)",
+      "Bash(wc:*)",
+      "Bash(go:*)",
+      "Bash(go run:*)",
+      "Bash(./gha-analyzer:*)",
+      "Bash(GITHUB_TOKEN=\"\" ./gha-analyzer:*)"
+    ]
+  }
+}

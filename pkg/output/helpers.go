@@ -34,5 +34,5 @@ func requiredEmoji(isRequired bool) string {
 	if isRequired {
 		return " 🔒"
 	}
-	return " 📋"
+	return ""
 }

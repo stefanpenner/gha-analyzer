@@ -163,8 +163,8 @@ func TestRequiredEmoji(t *testing.T) {
 		assert.Equal(t, " 🔒", requiredEmoji(true))
 	})
 
-	t.Run("Returns clipboard emoji for optional checks", func(t *testing.T) {
-		assert.Equal(t, " 📋", requiredEmoji(false))
+	t.Run("Returns empty string for optional checks", func(t *testing.T) {
+		assert.Equal(t, "", requiredEmoji(false))
 	})
 }
 
@@ -199,7 +199,7 @@ func TestJobSpanRequiredEmoji(t *testing.T) {
 		assert.NotContains(t, output, "📋")
 	})
 
-	t.Run("Shows clipboard emoji for optional job", func(t *testing.T) {
+	t.Run("Shows no emoji for optional job", func(t *testing.T) {
 		span := createJobSpan("optional-check", false)
 
 		var buf bytes.Buffer
@@ -207,7 +207,7 @@ func TestJobSpanRequiredEmoji(t *testing.T) {
 
 		output := buf.String()
 		assert.Contains(t, output, "optional-check")
-		assert.Contains(t, output, "📋")
+		assert.NotContains(t, output, "📋")
 		assert.NotContains(t, output, "🔒")
 	})
 }

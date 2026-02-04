@@ -7,8 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/core"
+	"github.com/cockroachdb/errors"
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/gha-analyzer/pkg/core"
 	otelexport "github.com/stefanpenner/gha-analyzer/pkg/export/otel"
 	"github.com/stefanpenner/gha-analyzer/pkg/export/perfetto"
 	"github.com/stefanpenner/gha-analyzer/pkg/export/terminal"
@@ -21,13 +22,30 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
+// ANSI color codes
+const (
+	colorRed   = "\033[31m"
+	colorReset = "\033[0m"
+)
+
+func printError(err error, context string) {
+	// Use cockroachdb/errors to get a clean, user-friendly message
+	msg := errors.FlattenDetails(err)
+	fmt.Fprintf(os.Stderr, "%sError: %s: %s%s\n", colorRed, context, msg, colorReset)
+}
+
+func printErrorMsg(message string) {
+	fmt.Fprintf(os.Stderr, "%sError: %s%s\n", colorRed, message, colorReset)
+}
+
 func main() {
 	args := os.Args[1:]
 	perfettoFile := ""
 	openInPerfetto := false
 	openInOTel := false
+	otelEndpoint := ""
 	var window time.Duration
-	
+
 	filtered := []string{}
 	for _, arg := range args {
 		if arg == "help" || arg == "--help" || arg == "-h" {
@@ -41,7 +59,7 @@ func main() {
 		if strings.HasPrefix(arg, "--window=") {
 			d, err := time.ParseDuration(strings.TrimPrefix(arg, "--window="))
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error: Invalid window duration %s: %v\n", arg, err)
+				printError(err, fmt.Sprintf("invalid window duration %s", arg))
 				os.Exit(1)
 			}
 			window = d
@@ -53,6 +71,14 @@ func main() {
 		}
 		if arg == "--open-in-otel" {
 			openInOTel = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--otel=") {
+			otelEndpoint = strings.TrimPrefix(arg, "--otel=")
+			continue
+		}
+		if arg == "--otel" {
+			otelEndpoint = "localhost:4318"
 			continue
 		}
 		filtered = append(filtered, arg)
@@ -72,7 +98,7 @@ func main() {
 	}
 
 	if token == "" {
-		fmt.Fprintln(os.Stderr, "Error: GITHUB_TOKEN environment variable or token argument is required")
+		printErrorMsg("GITHUB_TOKEN environment variable or token argument is required")
 		printUsage()
 		os.Exit(1)
 	}
@@ -101,9 +127,11 @@ func main() {
 		exporters = append(exporters, perfetto.NewExporter(os.Stderr, perfettoFile, openInPerfetto))
 	}
 
-	otelExporter, err := otelexport.NewExporter(ctx, "localhost:4318") // Using 4318 for HTTP
-	if err == nil {
-		exporters = append(exporters, otelExporter)
+	if otelEndpoint != "" {
+		otelExporter, err := otelexport.NewExporter(ctx, otelEndpoint)
+		if err == nil {
+			exporters = append(exporters, otelExporter)
+		}
 	}
 
 	pipeline := core.NewPipeline(exporters...)
@@ -122,7 +150,7 @@ func main() {
 	progress.Wait()
 
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: Ingestion failed: %v\n", err)
+		printError(err, "ingestion failed")
 		os.Exit(1)
 	}
 
@@ -131,7 +159,7 @@ func main() {
 	spans := collector.Spans()
 
 	if err := pipeline.Process(ctx, spans); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: Processing spans failed: %v\n", err)
+		printError(err, "processing spans failed")
 	}
 
 	// Restore rich CLI report
@@ -143,7 +171,7 @@ func main() {
 	output.OutputCombinedResults(os.Stderr, results, combined, allTraceEvents, globalEarliest, globalLatest, perfettoFile, openInPerfetto, spans)
 
 	if err := pipeline.Finish(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: Finalizing pipeline failed: %v\n", err)
+		printError(err, "finalizing pipeline failed")
 	}
 
 	if openInOTel {
@@ -183,6 +211,7 @@ func printUsage() {
 	fmt.Println("\nFlags:")
 	fmt.Println("  --perfetto=<file.json>    Save trace for Perfetto.dev analysis")
 	fmt.Println("  --open-in-perfetto        Automatically open the generated trace in Perfetto UI")
+	fmt.Println("  --otel[=<endpoint>]       Export traces to OTel collector (default: localhost:4318)")
 	fmt.Println("  --open-in-otel            Automatically open the OTel Desktop Viewer")
 	fmt.Println("  --window=<duration>       Only show events within <duration> of merge/latest activity (e.g. 24h, 2h)")
 	fmt.Println("  help, --help, -h          Show this help message")

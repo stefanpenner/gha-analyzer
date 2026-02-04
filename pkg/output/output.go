@@ -26,12 +26,6 @@ type CommitAggregate struct {
 }
 
 func OutputCombinedResults(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime, globalLatestTime int64, perfettoFile string, openInPerfetto bool, spans []trace.ReadOnlySpan) error {
-	if perfettoFile != "" {
-		fmt.Fprintf(w, "\nGenerated %d trace events • Open in Perfetto.dev for analysis\n", len(traceEvents))
-	} else {
-		fmt.Fprintf(w, "\nGenerated %d trace events • Use --perfetto=<filename> to save trace for Perfetto.dev analysis\n", len(traceEvents))
-	}
-
 	fmt.Fprintf(w, "\n%s\n", strings.Repeat("=", 80))
 	fmt.Fprintf(w, "📊 %s\n", utils.MakeClickableLink("https://ui.perfetto.dev", "GitHub Actions Performance Report - Multi-URL Analysis"))
 	fmt.Fprintf(w, "%s\n", strings.Repeat("=", 80))

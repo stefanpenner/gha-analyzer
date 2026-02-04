@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/sdk/trace"
@@ -306,10 +307,10 @@ func openTraceInPerfetto(w io.Writer, traceFile string) error {
 		fmt.Fprintln(w, "\n🚀 Opening trace in Perfetto UI...")
 		fmt.Fprintln(w, "📥 Downloading open_trace_in_ui from Perfetto...")
 		if err := exec.Command("curl", "-L", "-o", scriptPath, scriptURL).Run(); err != nil {
-			return fmt.Errorf("failed to download %s: %w", scriptName, err)
+			return errors.Wrapf(err, "failed to download %s", scriptName)
 		}
 		if err := exec.Command("chmod", "+x", scriptPath).Run(); err != nil {
-			return fmt.Errorf("failed to make %s executable: %w", scriptName, err)
+			return errors.Wrapf(err, "failed to make %s executable", scriptName)
 		}
 	} else {
 		fmt.Fprintf(w, "\n📁 Using existing script: %s\n", scriptPath)
@@ -321,7 +322,7 @@ func openTraceInPerfetto(w io.Writer, traceFile string) error {
 	cmd.Stdout = w
 	cmd.Stderr = w
 	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(w, "❌ Failed to open trace in Perfetto: %v\n", err)
+		fmt.Fprintf(w, "❌ Failed to open trace in Perfetto\n")
 		fmt.Fprintln(w, "💡 You can manually open the trace at: https://ui.perfetto.dev")
 		fmt.Fprintf(w, "   Then click \"Open trace file\" and select: %s\n", traceFile)
 		return nil
