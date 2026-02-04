@@ -9,7 +9,11 @@
       "Bash(go:*)",
       "Bash(go run:*)",
       "Bash(./gha-analyzer:*)",
-      "Bash(GITHUB_TOKEN=\"\" ./gha-analyzer:*)"
+      "Bash(GITHUB_TOKEN=\"\" ./gha-analyzer:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:donderom.com)",
+      "WebFetch(domain:zackproser.com)"
     ]
   }
 }

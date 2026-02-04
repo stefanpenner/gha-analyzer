@@ -188,14 +188,13 @@ func TestJobSpanRequiredEmoji(t *testing.T) {
 	}
 
 	t.Run("Shows lock emoji for required job", func(t *testing.T) {
-		span := createJobSpan("required-check", true)
+		span := createJobSpan("required-check 🔒", true)
 
 		var buf bytes.Buffer
 		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{span}, time.Time{}, time.Time{})
 
 		output := buf.String()
-		assert.Contains(t, output, "required-check")
-		assert.Contains(t, output, "🔒")
+		assert.Contains(t, output, "required-check 🔒")
 		assert.NotContains(t, output, "📋")
 	})
 
