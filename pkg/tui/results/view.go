@@ -384,7 +384,7 @@ func getItemIcon(item TreeItem) string {
 		case "approved":
 			return "▲ " // width 1 + 1 space = 2
 		case "comment", "commented":
-			return "💬" // width 2
+			return "● " // width 1 + 1 space = 2
 		case "changes_requested":
 			return "❌" // width 2
 		default:
@@ -532,6 +532,30 @@ func placeModalCentered(modal string, width, height int) string {
 	}
 
 	return result.String()
+}
+
+// renderHelpModal renders the help modal with all key bindings
+func (m Model) renderHelpModal() string {
+	var b strings.Builder
+
+	// Title
+	b.WriteString(ModalTitleStyle.Render("Keyboard Shortcuts"))
+	b.WriteString("\n\n")
+
+	// Key bindings
+	keyStyle := lipgloss.NewStyle().Foreground(ColorBlue).Width(12)
+	descStyle := lipgloss.NewStyle().Foreground(ColorWhite)
+
+	for _, binding := range m.keys.FullHelp() {
+		b.WriteString(keyStyle.Render(binding[0]))
+		b.WriteString(descStyle.Render(binding[1]))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(FooterStyle.Render("Press Esc or ? to close"))
+
+	return ModalStyle.Render(b.String())
 }
 
 // renderDetailModal renders the detail modal for an item

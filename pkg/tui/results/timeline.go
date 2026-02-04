@@ -67,11 +67,11 @@ func renderMarker(markerChar string, style lipgloss.Style, startPos, width int, 
 // This is exported so view.go can use it too.
 func GetCharWidth(char string) int {
 	switch char {
-	case "💬", "📋", "⚙️", "❌":
+	case "📋", "⚙️", "❌":
 		return 2
-	case "◆", "✓", "✗", "▲", "|", "↳", "◷", "○", "▼", "▶", " ":
+	case "◆", "✓", "✗", "▲", "|", "↳", "◷", "○", "▼", "▶", " ", "●":
 		return 1
-	case "◆ ", "▲ ", "• ":
+	case "◆ ", "▲ ", "• ", "● ":
 		return 2
 	case "🔒", "🔥":
 		return 2
@@ -255,7 +255,7 @@ func getBarStyle(item TreeItem) (string, lipgloss.Style) {
 		case "approved":
 			return "✓", BarSuccessStyle
 		case "comment", "commented", "COMMENTED":
-			return "💬", BarPendingStyle
+			return "●", BarPendingStyle
 		case "changes_requested":
 			return "✗", BarFailureStyle
 		default:

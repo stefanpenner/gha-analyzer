@@ -65,6 +65,7 @@ type Model struct {
 	inputURLs []string
 	// Modal state
 	showDetailModal bool
+	showHelpModal   bool
 	modalItem       *TreeItem
 	modalScroll     int
 	// Reload state
@@ -244,7 +245,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Handle modal state first
+		// Handle help modal first
+		if m.showHelpModal {
+			switch msg.String() {
+			case "esc", "enter", "?", "q":
+				m.showHelpModal = false
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// Handle detail modal
 		if m.showDetailModal {
 			switch msg.String() {
 			case "esc", "enter", "i", "q":
@@ -365,6 +376,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.openPerfettoFunc != nil {
 				m.openPerfettoFunc()
 			}
+
+		case key.Matches(msg, m.keys.Help):
+			m.showHelpModal = true
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
@@ -616,6 +631,11 @@ func (m Model) View() string {
 	b.WriteString(m.renderFooter())
 
 	// Overlay modal if showing
+	if m.showHelpModal {
+		modal := m.renderHelpModal()
+		return placeModalCentered(modal, width, height)
+	}
+
 	if m.showDetailModal {
 		modal, maxScroll := m.renderDetailModal(height-4, width-10)
 		// Clamp scroll to valid range
