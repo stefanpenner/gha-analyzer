@@ -406,8 +406,12 @@ func processJob(ctx context.Context, job githubapi.Job, jobIndex int, run github
 
 	// Determine if this job is a required status check
 	isRequired := isJobRequired(job.Name, run.Name, requiredContexts)
+	requiredSuffix := ""
+	if isRequired {
+		requiredSuffix = " 🔒"
+	}
 
-	ctx, span := analyzerTracer.Start(ctx, job.Name,
+	ctx, span := analyzerTracer.Start(ctx, job.Name+requiredSuffix,
 		trace.WithTimestamp(jobStart),
 		trace.WithAttributes(
 			attribute.String("type", "job"),
@@ -490,16 +494,16 @@ func processJob(ctx context.Context, job githubapi.Job, jobIndex int, run github
 		IsRequired: isRequired,
 	})
 
-	jobLabel := fmt.Sprintf("%s %s", jobIcon, job.Name)
+	jobLabel := fmt.Sprintf("%s %s%s", jobIcon, job.Name, requiredSuffix)
 	if job.Conclusion == "failure" {
-		jobLabel = fmt.Sprintf("%s ❌", job.Name)
+		jobLabel = fmt.Sprintf("%s%s ❌", job.Name, requiredSuffix)
 	}
 	AddThreadMetadata(traceEvents, processID, jobThreadID, jobLabel, intPtr(jobIndex+10))
 
 	normalizedJobStart := (jobStartTs - earliestTime) * 1000
 	normalizedJobEnd := (jobEndTs - earliestTime) * 1000
 	*traceEvents = append(*traceEvents, TraceEvent{
-		Name: fmt.Sprintf("Job: %s [%d]", job.Name, urlIndex+1),
+		Name: fmt.Sprintf("Job: %s%s [%d]", job.Name, requiredSuffix, urlIndex+1),
 		Ph:   "X",
 		Ts:   normalizedJobStart,
 		Dur:  normalizedJobEnd - normalizedJobStart,
