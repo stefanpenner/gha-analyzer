@@ -19,6 +19,7 @@ type KeyMap struct {
 	ExpandAll   key.Binding
 	CollapseAll key.Binding
 	Perfetto    key.Binding
+	Help        key.Binding
 	Quit        key.Binding
 }
 
@@ -85,6 +86,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("p"),
 			key.WithHelp("p", "perfetto"),
 		),
+		Help: key.NewBinding(
+			key.WithKeys("?"),
+			key.WithHelp("?", "help"),
+		),
 		Quit: key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q", "quit"),
@@ -94,5 +99,28 @@ func DefaultKeyMap() KeyMap {
 
 // ShortHelp returns a short help string for the footer
 func (k KeyMap) ShortHelp() string {
-	return "↑↓ nav • space toggle • f focus • ←→ expand/collapse • o open • i info • p perfetto • r reload • q quit"
+	return "↑↓ nav • ←→ expand/collapse • space toggle • o open • ? help • q quit"
+}
+
+// FullHelp returns all key bindings for the help modal
+func (k KeyMap) FullHelp() [][]string {
+	return [][]string{
+		{"↑/k", "Move up"},
+		{"↓/j", "Move down"},
+		{"shift+↑/K", "Select up"},
+		{"shift+↓/J", "Select down"},
+		{"←/h", "Collapse / go to parent"},
+		{"→/l", "Expand"},
+		{"enter", "Toggle expand"},
+		{"space", "Toggle chart visibility"},
+		{"o", "Open in browser"},
+		{"i", "Item info"},
+		{"f", "Focus on selection"},
+		{"e", "Expand all"},
+		{"c", "Collapse all"},
+		{"r", "Reload data"},
+		{"p", "Open in Perfetto"},
+		{"?", "Show this help"},
+		{"q", "Quit"},
+	}
 }

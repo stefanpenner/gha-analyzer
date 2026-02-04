@@ -38,27 +38,62 @@ func colorForRate(rate float64) lipgloss.Style {
 	}
 }
 
+// padRight pads a string to the given width (using plain text width calculation)
+func padRight(styled, plain string, width int) string {
+	plainWidth := lipgloss.Width(plain)
+	if plainWidth >= width {
+		return styled
+	}
+	return styled + strings.Repeat(" ", width-plainWidth)
+}
+
 // renderHeader renders the title bar with statistics
 func (m Model) renderHeader() string {
-	totalWidth := m.width - horizontalPad*2 // account for left/right padding
+	width := m.width
+	if width < 40 {
+		width = 40
+	}
+	totalWidth := width - horizontalPad*2
 	if totalWidth < 1 {
 		totalWidth = 80
 	}
+	contentWidth := totalWidth - 4 // minus "│ " and " │"
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
 
-	// Build borders (all in gray, rounded corners)
+	// Styles
+	numStyle := lipgloss.NewStyle().Foreground(ColorBlue)
+	sep := HeaderCountStyle.Render(" • ")
+
+	// Build borders
 	topBorder := BorderStyle.Render("╭" + strings.Repeat("─", max(0, totalWidth-2)) + "╮")
 
-	// Line 1: Title
-	titleText := "GitHub Actions Analyzer"
-	title := HeaderStyle.Render(titleText)
-	titleWidth := lipgloss.Width(titleText)
-	titlePadding := totalWidth - titleWidth - 4
-	if titlePadding < 0 {
-		titlePadding = 0
+	// Helper to build a line with left content and optional right content
+	buildLine := func(left, leftPlain, right, rightPlain string) string {
+		leftWidth := lipgloss.Width(leftPlain)
+		rightWidth := lipgloss.Width(rightPlain)
+		middlePad := contentWidth - leftWidth - rightWidth
+		if middlePad < 1 {
+			middlePad = 1
+		}
+		return BorderStyle.Render("│") + " " + left + strings.Repeat(" ", middlePad) + right + " " + BorderStyle.Render("│")
 	}
-	line1 := BorderStyle.Render("│") + " " + title + strings.Repeat(" ", titlePadding) + " " + BorderStyle.Render("│")
 
-	// Line 2: Success rates (using displayed stats)
+	// Helper to build a simple left-aligned line
+	buildLeftLine := func(content, plain string) string {
+		w := lipgloss.Width(plain)
+		pad := contentWidth - w
+		if pad < 0 {
+			pad = 0
+		}
+		return BorderStyle.Render("│") + " " + content + strings.Repeat(" ", pad) + " " + BorderStyle.Render("│")
+	}
+
+	// Line 1: Title
+	line1 := buildLeftLine(HeaderStyle.Render("GitHub Actions Analyzer"), "GitHub Actions Analyzer")
+
+	// Calculate rates
 	successRate := float64(0)
 	if m.displayedSummary.TotalRuns > 0 {
 		successRate = float64(m.displayedSummary.SuccessfulRuns) / float64(m.displayedSummary.TotalRuns) * 100
@@ -68,114 +103,125 @@ func (m Model) renderHeader() string {
 		jobSuccessRate = float64(m.displayedSummary.TotalJobs-m.displayedSummary.FailedJobs) / float64(m.displayedSummary.TotalJobs) * 100
 	}
 
-	// Build stats line with colored percentages
-	workflowRateStr := colorForRate(successRate).Render(fmt.Sprintf("%.0f%%", successRate))
-	jobRateStr := colorForRate(jobSuccessRate).Render(fmt.Sprintf("%.0f%%", jobSuccessRate))
-	numStyle := lipgloss.NewStyle().Foreground(ColorBlue)
-	concurrencyStr := numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.MaxConcurrency))
+	// Line 2: Success rates (left) + Counts (right)
+	// Left side: "Workflows: 100% • Jobs: 100%"
+	leftStyled := HeaderCountStyle.Render("Workflows: ") + colorForRate(successRate).Render(fmt.Sprintf("%.0f%%", successRate)) +
+		sep + HeaderCountStyle.Render("Jobs: ") + colorForRate(jobSuccessRate).Render(fmt.Sprintf("%.0f%%", jobSuccessRate))
+	leftPlain := fmt.Sprintf("Workflows: %.0f%% • Jobs: %.0f%%", successRate, jobSuccessRate)
 
-	statsLine := HeaderCountStyle.Render("Success: ") + workflowRateStr +
-		HeaderCountStyle.Render(" workflows, ") + jobRateStr +
-		HeaderCountStyle.Render(" jobs") +
-		HeaderCountStyle.Render("    Peak Concurrency: ") + concurrencyStr
+	// Right side: "1 runs • 3 jobs • 21 steps"
+	rightStyled := numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.TotalRuns)) + HeaderCountStyle.Render(" runs") +
+		sep + numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.TotalJobs)) + HeaderCountStyle.Render(" jobs") +
+		sep + numStyle.Render(fmt.Sprintf("%d", m.displayedStepCount)) + HeaderCountStyle.Render(" steps")
+	rightPlain := fmt.Sprintf("%d runs • %d jobs • %d steps", m.displayedSummary.TotalRuns, m.displayedSummary.TotalJobs, m.displayedStepCount)
 
-	// Calculate width for padding (use plain text version)
-	statsText := fmt.Sprintf("Success: %.0f%% workflows, %.0f%% jobs    Peak Concurrency: %d",
-		successRate, jobSuccessRate, m.displayedSummary.MaxConcurrency)
-	statsWidth := lipgloss.Width(statsText)
-	statsPadding := totalWidth - statsWidth - 4
-	if statsPadding < 0 {
-		statsPadding = 0
-	}
-	line2 := BorderStyle.Render("│") + " " + statsLine + strings.Repeat(" ", statsPadding) + " " + BorderStyle.Render("│")
+	line2 := buildLine(leftStyled, leftPlain, rightStyled, rightPlain)
 
-	// Line 3: Counts (using displayed stats)
-	runsStr := numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.TotalRuns))
-	jobsStr := numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.TotalJobs))
-	stepsStr := numStyle.Render(fmt.Sprintf("%d", m.displayedStepCount))
-
-	countsLine := runsStr + HeaderCountStyle.Render(" runs    ") +
-		jobsStr + HeaderCountStyle.Render(" jobs    ") +
-		stepsStr + HeaderCountStyle.Render(" steps")
-
-	// Calculate width for padding
-	countsText := fmt.Sprintf("%d runs    %d jobs    %d steps",
-		m.displayedSummary.TotalRuns, m.displayedSummary.TotalJobs, m.displayedStepCount)
-	countsWidth := lipgloss.Width(countsText)
-	countsPadding := totalWidth - countsWidth - 4
-	if countsPadding < 0 {
-		countsPadding = 0
-	}
-	line3 := BorderStyle.Render("│") + " " + countsLine + strings.Repeat(" ", countsPadding) + " " + BorderStyle.Render("│")
-
-	// Line 4: Times (displayed wall and compute times, with better styling)
+	// Line 3: Times (left) + Concurrency (right)
 	wallTime := utils.HumanizeTime(float64(m.displayedWallTimeMs) / 1000)
 	computeTime := utils.HumanizeTime(float64(m.displayedComputeMs) / 1000)
-	wallStr := numStyle.Render(wallTime)
-	computeStr := numStyle.Render(computeTime)
 
-	timesLine := HeaderCountStyle.Render("Wall Time: ") + wallStr +
-		HeaderCountStyle.Render("    Compute Time: ") + computeStr
+	leftStyled3 := HeaderCountStyle.Render("Wall: ") + numStyle.Render(wallTime) +
+		sep + HeaderCountStyle.Render("Compute: ") + numStyle.Render(computeTime)
+	leftPlain3 := fmt.Sprintf("Wall: %s • Compute: %s", wallTime, computeTime)
 
-	timesText := fmt.Sprintf("Wall Time: %s    Compute Time: %s", wallTime, computeTime)
-	timesWidth := lipgloss.Width(timesText)
-	timesPadding := totalWidth - timesWidth - 4
-	if timesPadding < 0 {
-		timesPadding = 0
-	}
-	line4Times := BorderStyle.Render("│") + " " + timesLine + strings.Repeat(" ", timesPadding) + " " + BorderStyle.Render("│")
+	rightStyled3 := HeaderCountStyle.Render("Concurrency: ") + numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.MaxConcurrency))
+	rightPlain3 := fmt.Sprintf("Concurrency: %d", m.displayedSummary.MaxConcurrency)
 
-	// Line 5: Input URLs (clickable links)
-	lineURLs := ""
+	line3 := buildLine(leftStyled3, leftPlain3, rightStyled3, rightPlain3)
+
+	// Line 4: URL
+	lineURL := ""
 	for _, inputURL := range m.inputURLs {
-		// Truncate if too long
 		urlText := inputURL
-		maxURLWidth := totalWidth - 6
+		maxURLWidth := contentWidth
 		if lipgloss.Width(urlText) > maxURLWidth {
 			urlText = urlText[:maxURLWidth-3] + "..."
 		}
-		// Make it a clickable hyperlink
 		linkedURL := hyperlink(inputURL, urlText)
-		urlWidth := lipgloss.Width(urlText)
-		urlPadding := totalWidth - urlWidth - 4
-		if urlPadding < 0 {
-			urlPadding = 0
-		}
-		lineURLs += "\n" + BorderStyle.Render("│") + " " + linkedURL + strings.Repeat(" ", urlPadding) + " " + BorderStyle.Render("│")
+		lineURL += "\n" + buildLeftLine(linkedURL, urlText)
 	}
 
-	// Line 6: Time range info (start/end times of visible items)
-	lineTimeRange := ""
-	if !m.chartStart.IsZero() && !m.chartEnd.IsZero() {
-		startTime := m.chartStart.Format("15:04:05")
-		endTime := m.chartEnd.Format("15:04:05")
-		durationSecs := m.chartEnd.Sub(m.chartStart).Seconds()
-		if durationSecs < 0 {
-			durationSecs = 0
-		}
-		duration := utils.HumanizeTime(durationSecs)
-		timeText := fmt.Sprintf("Start: %s    Duration: %s    End: %s", startTime, duration, endTime)
-		timeWidth := lipgloss.Width(timeText)
-		timePadding := totalWidth - timeWidth - 4
-		if timePadding < 0 {
-			timePadding = 0
-		}
-		// Style the time values in blue for better readability
-		startStr := numStyle.Render(startTime)
-		durationStr := numStyle.Render(duration)
-		endStr := numStyle.Render(endTime)
-		styledTimeRange := HeaderCountStyle.Render("Start: ") + startStr +
-			HeaderCountStyle.Render("    Duration: ") + durationStr +
-			HeaderCountStyle.Render("    End: ") + endStr
-		lineTimeRange = "\n" + BorderStyle.Render("│") + " " + styledTimeRange + strings.Repeat(" ", timePadding) + " " + BorderStyle.Render("│")
+	return topBorder + "\n" + line1 + "\n" + line2 + "\n" + line3 + lineURL
+}
+
+// renderTimeAxis renders the time axis row that sits above the timeline
+// It shows start time aligned with left edge, duration centered, end time at right edge
+func (m Model) renderTimeAxis() string {
+	width := m.width
+	if width < 40 {
+		width = 40
+	}
+	totalWidth := width - horizontalPad*2
+	if totalWidth < 1 {
+		totalWidth = 80
 	}
 
-	return topBorder + "\n" + line1 + "\n" + line2 + "\n" + line3 + "\n" + line4Times + lineURLs + lineTimeRange
+	// Match the structure of item rows: │ tree │ timeline │
+	treeW := treeWidth
+	availableW := totalWidth - 3 // 3 border chars
+	timelineW := availableW - treeW
+	if timelineW < 10 {
+		timelineW = 10
+	}
+
+	// Tree part is empty (just padding to align with timeline)
+	treePart := strings.Repeat(" ", treeW)
+
+	// Build time axis for the timeline area
+	if m.chartStart.IsZero() || m.chartEnd.IsZero() {
+		// No time data, just return empty row
+		return BorderStyle.Render("│") + treePart + SeparatorStyle.Render("│") + strings.Repeat(" ", timelineW) + BorderStyle.Render("│")
+	}
+
+	startTime := m.chartStart.Format("15:04:05")
+	endTime := m.chartEnd.Format("15:04:05")
+	durationSecs := m.chartEnd.Sub(m.chartStart).Seconds()
+	if durationSecs < 0 {
+		durationSecs = 0
+	}
+	duration := utils.HumanizeTime(durationSecs)
+
+	// Style the values
+	numStyle := lipgloss.NewStyle().Foreground(ColorBlue)
+	startStyled := numStyle.Render(startTime)
+	durStyled := numStyle.Render(duration)
+	endStyled := numStyle.Render(endTime)
+
+	startW := lipgloss.Width(startTime)
+	durW := lipgloss.Width(duration)
+	endW := lipgloss.Width(endTime)
+
+	// Calculate gaps: start...duration...end to fill timelineW
+	// We want duration roughly centered
+	totalTextW := startW + durW + endW
+	remainingSpace := timelineW - totalTextW
+	if remainingSpace < 2 {
+		remainingSpace = 2
+	}
+
+	// Put duration in center, start at left, end at right
+	leftGap := (timelineW - durW) / 2 - startW
+	if leftGap < 1 {
+		leftGap = 1
+	}
+	rightGap := timelineW - startW - leftGap - durW - endW
+	if rightGap < 1 {
+		rightGap = 1
+	}
+
+	timelineContent := startStyled + strings.Repeat("─", leftGap) + durStyled + strings.Repeat("─", rightGap) + endStyled
+
+	return BorderStyle.Render("│") + treePart + SeparatorStyle.Render("│") + timelineContent + BorderStyle.Render("│")
 }
 
 // renderItem renders a single tree item with timeline bar
 func (m Model) renderItem(item TreeItem, isSelected bool) string {
-	totalWidth := m.width - horizontalPad*2 // account for left/right padding
+	width := m.width
+	if width < 40 {
+		width = 40
+	}
+	totalWidth := width - horizontalPad*2 // account for left/right padding
 	if totalWidth < 1 {
 		totalWidth = 80
 	}
@@ -338,7 +384,7 @@ func getItemIcon(item TreeItem) string {
 		case "approved":
 			return "▲ " // width 1 + 1 space = 2
 		case "comment", "commented":
-			return "💬" // width 2
+			return "● " // width 1 + 1 space = 2
 		case "changes_requested":
 			return "❌" // width 2
 		default:
@@ -392,7 +438,11 @@ func getBadgesWidth(badges string) int {
 
 // renderFooter renders the help footer
 func (m Model) renderFooter() string {
-	totalWidth := m.width - horizontalPad*2 // account for left/right padding
+	width := m.width
+	if width < 40 {
+		width = 40
+	}
+	totalWidth := width - horizontalPad*2 // account for left/right padding
 	if totalWidth < 1 {
 		totalWidth = 80
 	}
@@ -482,6 +532,30 @@ func placeModalCentered(modal string, width, height int) string {
 	}
 
 	return result.String()
+}
+
+// renderHelpModal renders the help modal with all key bindings
+func (m Model) renderHelpModal() string {
+	var b strings.Builder
+
+	// Title
+	b.WriteString(ModalTitleStyle.Render("Keyboard Shortcuts"))
+	b.WriteString("\n\n")
+
+	// Key bindings
+	keyStyle := lipgloss.NewStyle().Foreground(ColorBlue).Width(12)
+	descStyle := lipgloss.NewStyle().Foreground(ColorWhite)
+
+	for _, binding := range m.keys.FullHelp() {
+		b.WriteString(keyStyle.Render(binding[0]))
+		b.WriteString(descStyle.Render(binding[1]))
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\n")
+	b.WriteString(FooterStyle.Render("Press Esc or ? to close"))
+
+	return ModalStyle.Render(b.String())
 }
 
 // renderDetailModal renders the detail modal for an item

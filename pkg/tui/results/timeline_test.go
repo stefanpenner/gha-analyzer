@@ -31,6 +31,7 @@ func TestGetCharWidth(t *testing.T) {
 		{"↳", 1},
 		{"◷", 1},
 		{"○", 1},
+		{"●", 1},
 		{"▼", 1},
 		{"▶", 1},
 		{" ", 1},
@@ -38,6 +39,7 @@ func TestGetCharWidth(t *testing.T) {
 		{"◆ ", 2},
 		{"▲ ", 2},
 		{"• ", 2},
+		{"● ", 2},
 	}
 
 	for _, tc := range cases {
@@ -65,9 +67,9 @@ func TestGetBarStyle(t *testing.T) {
 		// Marker styles
 		{"marker merged", TreeItem{ItemType: ItemTypeMarker, EventType: "merged"}, "◆"},
 		{"marker approved", TreeItem{ItemType: ItemTypeMarker, EventType: "approved"}, "✓"},
-		{"marker comment", TreeItem{ItemType: ItemTypeMarker, EventType: "comment"}, "○"},
-		{"marker commented", TreeItem{ItemType: ItemTypeMarker, EventType: "commented"}, "○"},
-		{"marker COMMENTED", TreeItem{ItemType: ItemTypeMarker, EventType: "COMMENTED"}, "○"},
+		{"marker comment", TreeItem{ItemType: ItemTypeMarker, EventType: "comment"}, "●"},
+		{"marker commented", TreeItem{ItemType: ItemTypeMarker, EventType: "commented"}, "●"},
+		{"marker COMMENTED", TreeItem{ItemType: ItemTypeMarker, EventType: "COMMENTED"}, "●"},
 		{"marker changes_requested", TreeItem{ItemType: ItemTypeMarker, EventType: "changes_requested"}, "✗"},
 		{"marker unknown", TreeItem{ItemType: ItemTypeMarker, EventType: "unknown"}, "▲"},
 

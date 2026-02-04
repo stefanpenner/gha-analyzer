@@ -65,6 +65,7 @@ type Model struct {
 	inputURLs []string
 	// Modal state
 	showDetailModal bool
+	showHelpModal   bool
 	modalItem       *TreeItem
 	modalScroll     int
 	// Reload state
@@ -244,7 +245,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Handle modal state first
+		// Handle help modal first
+		if m.showHelpModal {
+			switch msg.String() {
+			case "esc", "enter", "?", "q":
+				m.showHelpModal = false
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// Handle detail modal
 		if m.showDetailModal {
 			switch msg.String() {
 			case "esc", "enter", "i", "q":
@@ -365,6 +376,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.openPerfettoFunc != nil {
 				m.openPerfettoFunc()
 			}
+
+		case key.Matches(msg, m.keys.Help):
+			m.showHelpModal = true
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
@@ -451,18 +466,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View implements tea.Model
 func (m Model) View() string {
+	// Enforce minimum dimensions to prevent crashes
+	width := m.width
+	height := m.height
+	if width < 40 {
+		width = 40
+	}
+	if height < 10 {
+		height = 10
+	}
+
 	// Show loading overlay if reloading
 	if m.isLoading {
 		loadingText := m.renderLoadingView()
-		return placeModalCentered(ModalStyle.Render(loadingText), m.width, m.height)
+		return placeModalCentered(ModalStyle.Render(loadingText), width, height)
 	}
 
 	var b strings.Builder
 
 	// Calculate available height for items
-	headerLines := 8 // header box (6 lines) + 1 newline + 1 blank line
+	headerLines := 9 // header box (6 lines) + 1 newline + time axis + 1 blank line
 	footerLines := 3 // blank line + help line + bottom border
-	availableHeight := m.height - headerLines - footerLines
+	availableHeight := height - headerLines - footerLines
 	if availableHeight < 1 {
 		availableHeight = 10
 	}
@@ -475,8 +500,12 @@ func (m Model) View() string {
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n")
 
-	// Blank line between header and content (just outer borders, no middle separator)
-	totalWidth := m.width - horizontalPad*2
+	// Time axis row (shows start time, duration, end time aligned with timeline)
+	b.WriteString(m.renderTimeAxis())
+	b.WriteString("\n")
+
+	// Blank line between time axis and content (just outer borders, no middle separator)
+	totalWidth := width - horizontalPad*2
 	if totalWidth < 1 {
 		totalWidth = 80
 	}
@@ -558,13 +587,13 @@ func (m Model) View() string {
 	// Pad if needed (with separator matching item rows)
 	renderedItems := endIdx - startIdx
 	for i := renderedItems; i < availableHeight; i++ {
-		totalWidth := m.width - horizontalPad*2 // account for left/right padding
-		if totalWidth < 1 {
-			totalWidth = 80
+		padTotalWidth := width - horizontalPad*2 // account for left/right padding
+		if padTotalWidth < 1 {
+			padTotalWidth = 80
 		}
 		// Match the structure: │ tree │ timeline │
 		treeW := 55 // treeWidth constant
-		availableW := totalWidth - 3
+		availableW := padTotalWidth - 3
 		timelineW := availableW - treeW
 		if timelineW < 10 {
 			timelineW = 10
@@ -588,12 +617,12 @@ func (m Model) View() string {
 
 	// Blank line between content and footer (with borders)
 	{
-		totalWidth := m.width - horizontalPad*2
-		if totalWidth < 1 {
-			totalWidth = 80
+		footerTotalWidth := width - horizontalPad*2
+		if footerTotalWidth < 1 {
+			footerTotalWidth = 80
 		}
-		contentWidth := totalWidth - 2
-		blankLine := BorderStyle.Render("│") + strings.Repeat(" ", contentWidth) + BorderStyle.Render("│")
+		footerContentWidth := footerTotalWidth - 2
+		blankLine := BorderStyle.Render("│") + strings.Repeat(" ", footerContentWidth) + BorderStyle.Render("│")
 		b.WriteString(blankLine)
 		b.WriteString("\n")
 	}
@@ -602,13 +631,18 @@ func (m Model) View() string {
 	b.WriteString(m.renderFooter())
 
 	// Overlay modal if showing
+	if m.showHelpModal {
+		modal := m.renderHelpModal()
+		return placeModalCentered(modal, width, height)
+	}
+
 	if m.showDetailModal {
-		modal, maxScroll := m.renderDetailModal(m.height-4, m.width-10)
+		modal, maxScroll := m.renderDetailModal(height-4, width-10)
 		// Clamp scroll to valid range
 		if m.modalScroll > maxScroll {
 			m.modalScroll = maxScroll
 		}
-		return placeModalCentered(modal, m.width, m.height)
+		return placeModalCentered(modal, width, height)
 	}
 
 	// Add horizontal padding to each line

@@ -2,36 +2,35 @@ package results
 
 import "github.com/charmbracelet/lipgloss"
 
-// Color palette - inspired by Claude Code UI
+// Color palette
 var (
-	ColorGreen      = lipgloss.Color("#4EC970") // bright green for success/additions
-	ColorMagenta    = lipgloss.Color("#E05299") // magenta for failures/deletions
-	ColorBlue       = lipgloss.Color("#5C8DFF") // soft blue for pending/info
-	ColorYellow     = lipgloss.Color("#E5C07B") // yellow for warnings
-	ColorGray       = lipgloss.Color("#6B6B6B") // muted gray for secondary
-	ColorGrayMuted  = lipgloss.Color("#555555") // more muted gray for footer
-	ColorGrayLight  = lipgloss.Color("#8B8B8B") // lighter gray for borders
-	ColorGrayDim    = lipgloss.Color("#3B3B3B") // dim gray for backgrounds
-	ColorWhite      = lipgloss.Color("#FFFFFF") // white for primary text
-	ColorOffWhite   = lipgloss.Color("#D4D4D4") // off-white for content
+	ColorPurple   = lipgloss.Color("#7D56F4")
+	ColorGreen    = lipgloss.Color("#25A065")
+	ColorBlue     = lipgloss.Color("#4285F4")
+	ColorRed      = lipgloss.Color("#E05252")
+	ColorYellow   = lipgloss.Color("#E5C07B")
+	ColorGray     = lipgloss.Color("#626262")
+	ColorGrayDim  = lipgloss.Color("#404040")
+	ColorWhite    = lipgloss.Color("#FFFFFF")
+	ColorOffWhite = lipgloss.Color("#D0D0D0")
+	ColorMagenta  = lipgloss.Color("#C678DD")
 )
 
 // Header styles
 var (
 	HeaderStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(ColorWhite)
+			Foreground(ColorPurple)
 
 	HeaderCountStyle = lipgloss.NewStyle().
-				Foreground(ColorOffWhite)
+				Foreground(ColorGray)
 
 	FooterStyle = lipgloss.NewStyle().
-			Foreground(ColorGrayMuted)
+			Foreground(ColorGray)
 
 	BorderStyle = lipgloss.NewStyle().
-			Foreground(ColorGrayLight)
+			Foreground(ColorGray)
 
-	// Subtle separator between tree and timeline columns
 	SeparatorStyle = lipgloss.NewStyle().
 			Foreground(ColorGrayDim)
 )
@@ -41,27 +40,25 @@ var (
 	SelectedStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(ColorWhite).
-			Background(ColorGrayDim)
+			Background(lipgloss.Color("#3D3D3D"))
 
 	// HiddenSelectedStyle combines hidden (gray text) with selection background
 	HiddenSelectedStyle = lipgloss.NewStyle().
 				Foreground(ColorGray).
-				Background(ColorGrayDim)
+				Background(lipgloss.Color("#3D3D3D"))
 
-	NormalStyle = lipgloss.NewStyle().
-			Foreground(ColorOffWhite)
+	NormalStyle = lipgloss.NewStyle()
 
 	HiddenStyle = lipgloss.NewStyle().
 			Foreground(ColorGray)
 
 	WorkflowStyle = lipgloss.NewStyle().
-			Foreground(ColorOffWhite)
+			Foreground(ColorPurple)
 
 	GroupStyle = lipgloss.NewStyle().
 			Foreground(ColorBlue)
 
-	JobStyle = lipgloss.NewStyle().
-			Foreground(ColorOffWhite)
+	JobStyle = lipgloss.NewStyle()
 )
 
 // Status styles
@@ -70,7 +67,7 @@ var (
 			Foreground(ColorGreen)
 
 	FailureStyle = lipgloss.NewStyle().
-			Foreground(ColorMagenta)
+			Foreground(ColorRed)
 
 	PendingStyle = lipgloss.NewStyle().
 			Foreground(ColorBlue)
@@ -85,7 +82,7 @@ var (
 			Foreground(ColorGreen)
 
 	BarFailureStyle = lipgloss.NewStyle().
-			Foreground(ColorMagenta)
+			Foreground(ColorRed)
 
 	BarFailureNonBlockingStyle = lipgloss.NewStyle().
 					Foreground(ColorYellow)
@@ -110,17 +107,17 @@ var (
 var (
 	ModalStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorGrayLight).
+			BorderForeground(ColorPurple).
 			Padding(1, 2)
 
 	ModalTitleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(ColorWhite)
+			Foreground(ColorPurple)
 
 	ModalLabelStyle = lipgloss.NewStyle().
 			Foreground(ColorGray).
 			Width(14)
 
 	ModalValueStyle = lipgloss.NewStyle().
-			Foreground(ColorOffWhite)
+			Foreground(ColorWhite)
 )
