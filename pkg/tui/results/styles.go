@@ -4,13 +4,17 @@ import "github.com/charmbracelet/lipgloss"
 
 // Color palette
 var (
-	ColorPurple = lipgloss.Color("#7D56F4")
-	ColorGreen  = lipgloss.Color("#25A065")
-	ColorBlue   = lipgloss.Color("#4285F4")
-	ColorRed    = lipgloss.Color("#E05252")
-	ColorYellow = lipgloss.Color("#E5C07B")
-	ColorGray   = lipgloss.Color("#626262")
-	ColorWhite  = lipgloss.Color("#FFFFFF")
+	ColorPurple     = lipgloss.Color("#7D56F4")
+	ColorPurpleDim  = lipgloss.Color("#5A3FC2")
+	ColorGreen      = lipgloss.Color("#25A065")
+	ColorBlue       = lipgloss.Color("#4285F4")
+	ColorRed        = lipgloss.Color("#E05252")
+	ColorYellow     = lipgloss.Color("#E5C07B")
+	ColorGray       = lipgloss.Color("#626262")
+	ColorGrayLight  = lipgloss.Color("#888888")
+	ColorGrayDim    = lipgloss.Color("#444444")
+	ColorWhite      = lipgloss.Color("#FFFFFF")
+	ColorOffWhite   = lipgloss.Color("#E0E0E0")
 )
 
 // Header styles
@@ -20,13 +24,13 @@ var (
 			Foreground(ColorPurple)
 
 	HeaderCountStyle = lipgloss.NewStyle().
-				Foreground(ColorGray)
+				Foreground(ColorOffWhite)
 
 	FooterStyle = lipgloss.NewStyle().
-			Foreground(ColorGray)
+			Foreground(ColorGrayLight)
 
 	BorderStyle = lipgloss.NewStyle().
-			Foreground(ColorGray)
+			Foreground(ColorGrayDim)
 )
 
 // Tree item styles
@@ -34,25 +38,27 @@ var (
 	SelectedStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(ColorWhite).
-			Background(lipgloss.Color("#3D3D3D"))
+			Background(ColorPurpleDim)
 
 	// HiddenSelectedStyle combines hidden (gray text) with selection background
 	HiddenSelectedStyle = lipgloss.NewStyle().
-				Foreground(ColorGray).
-				Background(lipgloss.Color("#3D3D3D"))
+				Foreground(ColorGrayLight).
+				Background(ColorPurpleDim)
 
-	NormalStyle = lipgloss.NewStyle()
+	NormalStyle = lipgloss.NewStyle().
+			Foreground(ColorOffWhite)
 
 	HiddenStyle = lipgloss.NewStyle().
 			Foreground(ColorGray)
 
 	WorkflowStyle = lipgloss.NewStyle().
-			Foreground(ColorPurple)
+			Foreground(ColorOffWhite)
 
 	GroupStyle = lipgloss.NewStyle().
 			Foreground(ColorBlue)
 
-	JobStyle = lipgloss.NewStyle()
+	JobStyle = lipgloss.NewStyle().
+			Foreground(ColorOffWhite)
 )
 
 // Status styles
@@ -101,7 +107,7 @@ var (
 var (
 	ModalStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorPurple).
+			BorderForeground(ColorGrayLight).
 			Padding(1, 2)
 
 	ModalTitleStyle = lipgloss.NewStyle().
@@ -109,9 +115,9 @@ var (
 			Foreground(ColorPurple)
 
 	ModalLabelStyle = lipgloss.NewStyle().
-			Foreground(ColorGray).
+			Foreground(ColorGrayLight).
 			Width(14)
 
 	ModalValueStyle = lipgloss.NewStyle().
-			Foreground(ColorWhite)
+			Foreground(ColorOffWhite)
 )

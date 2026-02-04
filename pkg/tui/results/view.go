@@ -631,7 +631,7 @@ func addScrollbarToModal(modal string, scroll, maxScroll, visibleCount, totalLin
 	thumbEnd := thumbStart + thumbSize
 
 	// Scrollbar style (same color as modal border)
-	scrollStyle := lipgloss.NewStyle().Foreground(ColorPurple)
+	scrollStyle := lipgloss.NewStyle().Foreground(ColorGrayLight)
 	thumbChar := scrollStyle.Render("┃")
 	trackChar := scrollStyle.Render("│")
 

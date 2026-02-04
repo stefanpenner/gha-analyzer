@@ -247,7 +247,7 @@ func getBarStyle(item TreeItem) (string, lipgloss.Style) {
 		}
 	}
 
-	// Markers use point markers
+	// Markers use point markers (single-width chars for consistent timeline rendering)
 	if item.ItemType == ItemTypeMarker {
 		switch item.EventType {
 		case "merged":
@@ -255,7 +255,7 @@ func getBarStyle(item TreeItem) (string, lipgloss.Style) {
 		case "approved":
 			return "✓", BarSuccessStyle
 		case "comment", "commented", "COMMENTED":
-			return "💬", BarPendingStyle
+			return "○", BarPendingStyle // Use ○ instead of 💬 for consistent width
 		case "changes_requested":
 			return "✗", BarFailureStyle
 		default:
