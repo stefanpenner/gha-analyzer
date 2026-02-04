@@ -9,6 +9,7 @@ var (
 	ColorBlue       = lipgloss.Color("#5C8DFF") // soft blue for pending/info
 	ColorYellow     = lipgloss.Color("#E5C07B") // yellow for warnings
 	ColorGray       = lipgloss.Color("#6B6B6B") // muted gray for secondary
+	ColorGrayMuted  = lipgloss.Color("#555555") // more muted gray for footer
 	ColorGrayLight  = lipgloss.Color("#8B8B8B") // lighter gray for borders
 	ColorGrayDim    = lipgloss.Color("#3B3B3B") // dim gray for backgrounds
 	ColorWhite      = lipgloss.Color("#FFFFFF") // white for primary text
@@ -25,7 +26,7 @@ var (
 				Foreground(ColorOffWhite)
 
 	FooterStyle = lipgloss.NewStyle().
-			Foreground(ColorGray)
+			Foreground(ColorGrayMuted)
 
 	BorderStyle = lipgloss.NewStyle().
 			Foreground(ColorGrayLight)

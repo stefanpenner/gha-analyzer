@@ -346,6 +346,79 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, tea.ClearScreen
+
+	case tea.MouseMsg:
+		// Ignore mouse while loading
+		if m.isLoading {
+			return m, nil
+		}
+
+		// Handle mouse in modal
+		if m.showDetailModal {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				if m.modalScroll > 0 {
+					m.modalScroll--
+				}
+			case tea.MouseButtonWheelDown:
+				m.modalScroll++
+			case tea.MouseButtonLeft:
+				if msg.Action == tea.MouseActionRelease {
+					// Click outside modal area could close it (optional)
+				}
+			}
+			return m, nil
+		}
+
+		// Handle mouse in main view
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			// Scroll up
+			m.selectionStart = -1
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case tea.MouseButtonWheelDown:
+			// Scroll down
+			m.selectionStart = -1
+			if m.cursor < len(m.visibleItems)-1 {
+				m.cursor++
+			}
+		case tea.MouseButtonLeft:
+			if msg.Action == tea.MouseActionRelease {
+				// Calculate which row was clicked
+				headerLines := 8
+				clickedRow := msg.Y - headerLines
+
+				// Calculate scroll offset
+				availableHeight := m.height - headerLines - 4
+				if availableHeight < 1 {
+					availableHeight = 10
+				}
+
+				startIdx := 0
+				if len(m.visibleItems) > availableHeight {
+					halfHeight := availableHeight / 2
+					startIdx = m.cursor - halfHeight
+					if startIdx < 0 {
+						startIdx = 0
+					}
+					if startIdx+availableHeight > len(m.visibleItems) {
+						startIdx = len(m.visibleItems) - availableHeight
+						if startIdx < 0 {
+							startIdx = 0
+						}
+					}
+				}
+
+				// Convert click position to item index
+				itemIdx := startIdx + clickedRow
+				if itemIdx >= 0 && itemIdx < len(m.visibleItems) {
+					m.selectionStart = -1
+					m.cursor = itemIdx
+				}
+			}
+		}
 	}
 
 	return m, nil
@@ -363,7 +436,7 @@ func (m Model) View() string {
 
 	// Calculate available height for items
 	headerLines := 8 // header box (6 lines) + 1 newline + 1 blank line
-	footerLines := 4 // help line + bottom border + margin below
+	footerLines := 3 // blank line + help line + bottom border
 	availableHeight := m.height - headerLines - footerLines
 	if availableHeight < 1 {
 		availableHeight = 10
@@ -486,6 +559,18 @@ func (m Model) View() string {
 		}
 		b.WriteString("\n")
 		rowIdx++
+	}
+
+	// Blank line between content and footer (with borders)
+	{
+		totalWidth := m.width - horizontalPad*2
+		if totalWidth < 1 {
+			totalWidth = 80
+		}
+		contentWidth := totalWidth - 2
+		blankLine := BorderStyle.Render("│") + strings.Repeat(" ", contentWidth) + BorderStyle.Render("│")
+		b.WriteString(blankLine)
+		b.WriteString("\n")
 	}
 
 	// Footer
@@ -918,7 +1003,7 @@ func (m *Model) IsHidden(id string) bool {
 // Run starts the TUI
 func Run(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc) error {
 	m := NewModel(spans, globalStart, globalEnd, inputURLs, reloadFunc)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	finalModel, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("tea.Program.Run failed: %w", err)
