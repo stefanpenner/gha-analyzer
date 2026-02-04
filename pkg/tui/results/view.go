@@ -24,6 +24,20 @@ func hyperlink(url, text string) string {
 	return fmt.Sprintf("\x1b]8;;%s\x07%s\x1b]8;;\x07", url, text)
 }
 
+// colorForRate returns a style based on the success rate value
+func colorForRate(rate float64) lipgloss.Style {
+	switch {
+	case rate >= 100:
+		return lipgloss.NewStyle().Foreground(ColorGreen)
+	case rate >= 80:
+		return lipgloss.NewStyle().Foreground(ColorOffWhite) // normal
+	case rate >= 50:
+		return lipgloss.NewStyle().Foreground(ColorYellow)
+	default:
+		return lipgloss.NewStyle().Foreground(ColorMagenta)
+	}
+}
+
 // renderHeader renders the title bar with statistics
 func (m Model) renderHeader() string {
 	totalWidth := m.width - horizontalPad*2 // account for left/right padding
@@ -52,7 +66,7 @@ func (m Model) renderHeader() string {
 	}
 	line1 := BorderStyle.Render("│") + " " + title + strings.Repeat(" ", titlePadding) + " " + BorderStyle.Render("│")
 
-	// Line 2: Success rate and concurrency
+	// Line 2: Success rate and concurrency (with colored percentages)
 	successRate := float64(0)
 	if m.summary.TotalRuns > 0 {
 		successRate = float64(m.summary.SuccessfulRuns) / float64(m.summary.TotalRuns) * 100
@@ -61,6 +75,17 @@ func (m Model) renderHeader() string {
 	if m.summary.TotalJobs > 0 {
 		jobSuccessRate = float64(m.summary.TotalJobs-m.summary.FailedJobs) / float64(m.summary.TotalJobs) * 100
 	}
+
+	// Build stats line with colored percentages
+	workflowRateStr := colorForRate(successRate).Render(fmt.Sprintf("%.0f%%", successRate))
+	jobRateStr := colorForRate(jobSuccessRate).Render(fmt.Sprintf("%.0f%%", jobSuccessRate))
+	concurrencyStr := HeaderCountStyle.Render(fmt.Sprintf("%d", m.summary.MaxConcurrency))
+
+	statsLine := HeaderCountStyle.Render("Success: ") + workflowRateStr +
+		HeaderCountStyle.Render(" workflows, ") + jobRateStr +
+		HeaderCountStyle.Render(" jobs • Peak Concurrency: ") + concurrencyStr
+
+	// Calculate width for padding (use plain text version)
 	statsText := fmt.Sprintf("Success: %.0f%% workflows, %.0f%% jobs • Peak Concurrency: %d",
 		successRate, jobSuccessRate, m.summary.MaxConcurrency)
 	statsWidth := lipgloss.Width(statsText)
@@ -68,11 +93,26 @@ func (m Model) renderHeader() string {
 	if statsPadding < 0 {
 		statsPadding = 0
 	}
-	line2 := BorderStyle.Render("│") + " " + HeaderCountStyle.Render(statsText) + strings.Repeat(" ", statsPadding) + " " + BorderStyle.Render("│")
+	line2 := BorderStyle.Render("│") + " " + statsLine + strings.Repeat(" ", statsPadding) + " " + BorderStyle.Render("│")
 
-	// Line 3: Counts and times
+	// Line 3: Counts and times (with subtle coloring)
 	wallTime := utils.HumanizeTime(float64(m.wallTimeMs) / 1000)
 	computeTime := utils.HumanizeTime(float64(m.computeMs) / 1000)
+
+	// Style numbers in subtle blue, labels in off-white, times in muted gray
+	numStyle := lipgloss.NewStyle().Foreground(ColorBlue)
+	runsStr := numStyle.Render(fmt.Sprintf("%d", m.summary.TotalRuns))
+	jobsStr := numStyle.Render(fmt.Sprintf("%d", m.summary.TotalJobs))
+	stepsStr := numStyle.Render(fmt.Sprintf("%d", m.stepCount))
+	wallStr := FooterStyle.Render(wallTime)
+	computeStr := FooterStyle.Render(computeTime)
+
+	countsLine := runsStr + HeaderCountStyle.Render(" runs • ") +
+		jobsStr + HeaderCountStyle.Render(" jobs • ") +
+		stepsStr + HeaderCountStyle.Render(" steps • wall: ") +
+		wallStr + HeaderCountStyle.Render(" • compute: ") + computeStr
+
+	// Calculate width for padding (use plain text version)
 	countsText := fmt.Sprintf("%d runs • %d jobs • %d steps • wall: %s • compute: %s",
 		m.summary.TotalRuns, m.summary.TotalJobs, m.stepCount, wallTime, computeTime)
 	countsWidth := lipgloss.Width(countsText)
@@ -80,7 +120,7 @@ func (m Model) renderHeader() string {
 	if countsPadding < 0 {
 		countsPadding = 0
 	}
-	line3 := BorderStyle.Render("│") + " " + HeaderCountStyle.Render(countsText) + strings.Repeat(" ", countsPadding) + " " + BorderStyle.Render("│")
+	line3 := BorderStyle.Render("│") + " " + countsLine + strings.Repeat(" ", countsPadding) + " " + BorderStyle.Render("│")
 
 	// Line 4: Input URLs (clickable links)
 	line4 := ""
