@@ -51,11 +51,16 @@ type Model struct {
 	chartStart    time.Time // calculated from non-hidden items
 	chartEnd      time.Time // calculated from non-hidden items
 	keys          KeyMap
-	// Statistics
+	// Statistics (full dataset)
 	summary     analyzer.Summary
 	wallTimeMs  int64
 	computeMs   int64
 	stepCount   int
+	// Displayed statistics (only visible items)
+	displayedSummary   analyzer.Summary
+	displayedWallTimeMs int64
+	displayedComputeMs  int64
+	displayedStepCount  int
 	// Input URLs from CLI
 	inputURLs []string
 	// Modal state
@@ -74,36 +79,54 @@ type Model struct {
 	// Focus state
 	isFocused           bool
 	preFocusHiddenState map[string]bool
+	// Spans for export
+	spans []trace.ReadOnlySpan
+	// Perfetto open function
+	openPerfettoFunc func()
 }
 
 // ReloadFunc is the function signature for reloading data
 type ReloadFunc func(reporter LoadingReporter) ([]trace.ReadOnlySpan, time.Time, time.Time, error)
 
+// OpenPerfettoFunc is the function signature for opening Perfetto
+type OpenPerfettoFunc func()
+
 // NewModel creates a new TUI model from OTel spans
-func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc) Model {
+func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc, openPerfettoFunc OpenPerfettoFunc) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 
 	m := Model{
-		expandedState:  make(map[string]bool),
-		hiddenState:    make(map[string]bool),
-		globalStart:    globalStart,
-		globalEnd:      globalEnd,
-		chartStart:     globalStart,
-		chartEnd:       globalEnd,
-		keys:           DefaultKeyMap(),
-		width:          80,
-		height:         24,
-		inputURLs:      inputURLs,
-		selectionStart: -1, // no range selection initially
-		reloadFunc:     reloadFunc,
-		spinner:        s,
+		expandedState:    make(map[string]bool),
+		hiddenState:      make(map[string]bool),
+		globalStart:      globalStart,
+		globalEnd:        globalEnd,
+		chartStart:       globalStart,
+		chartEnd:         globalEnd,
+		keys:             DefaultKeyMap(),
+		width:            80,
+		height:           24,
+		inputURLs:        inputURLs,
+		selectionStart:   -1, // no range selection initially
+		reloadFunc:       reloadFunc,
+		openPerfettoFunc: openPerfettoFunc,
+		spinner:          s,
+		spans:            spans,
 	}
 
 	// Calculate summary statistics
 	m.summary = analyzer.CalculateSummary(spans)
 	m.wallTimeMs = globalEnd.Sub(globalStart).Milliseconds()
+	if m.wallTimeMs < 0 {
+		m.wallTimeMs = 0
+	}
 	m.computeMs, m.stepCount = calculateComputeAndSteps(spans)
+
+	// Initialize displayed stats to match full stats
+	m.displayedSummary = m.summary
+	m.displayedWallTimeMs = m.wallTimeMs
+	m.displayedComputeMs = m.computeMs
+	m.displayedStepCount = m.stepCount
 
 	// Build tree from spans
 	m.roots = analyzer.BuildTreeFromSpans(spans, globalStart, globalEnd)
@@ -178,6 +201,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chartEnd = msg.globalEnd
 		m.summary = analyzer.CalculateSummary(msg.spans)
 		m.wallTimeMs = msg.globalEnd.Sub(msg.globalStart).Milliseconds()
+		if m.wallTimeMs < 0 {
+			m.wallTimeMs = 0
+		}
 		m.computeMs, m.stepCount = calculateComputeAndSteps(msg.spans)
 		m.roots = analyzer.BuildTreeFromSpans(msg.spans, msg.globalStart, msg.globalEnd)
 		m.expandedState = make(map[string]bool)
@@ -334,12 +360,90 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.CollapseAll):
 			m.collapseAll()
+
+		case key.Matches(msg, m.keys.Perfetto):
+			if m.openPerfettoFunc != nil {
+				m.openPerfettoFunc()
+			}
 		}
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, tea.ClearScreen
+
+	case tea.MouseMsg:
+		// Ignore mouse while loading
+		if m.isLoading {
+			return m, nil
+		}
+
+		// Handle mouse in modal
+		if m.showDetailModal {
+			switch msg.Button {
+			case tea.MouseButtonWheelUp:
+				if m.modalScroll > 0 {
+					m.modalScroll--
+				}
+			case tea.MouseButtonWheelDown:
+				m.modalScroll++
+			case tea.MouseButtonLeft:
+				if msg.Action == tea.MouseActionRelease {
+					// Click outside modal area could close it (optional)
+				}
+			}
+			return m, nil
+		}
+
+		// Handle mouse in main view
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			// Scroll up
+			m.selectionStart = -1
+			if m.cursor > 0 {
+				m.cursor--
+			}
+		case tea.MouseButtonWheelDown:
+			// Scroll down
+			m.selectionStart = -1
+			if m.cursor < len(m.visibleItems)-1 {
+				m.cursor++
+			}
+		case tea.MouseButtonLeft:
+			if msg.Action == tea.MouseActionRelease {
+				// Calculate which row was clicked
+				headerLines := 8
+				clickedRow := msg.Y - headerLines
+
+				// Calculate scroll offset
+				availableHeight := m.height - headerLines - 4
+				if availableHeight < 1 {
+					availableHeight = 10
+				}
+
+				startIdx := 0
+				if len(m.visibleItems) > availableHeight {
+					halfHeight := availableHeight / 2
+					startIdx = m.cursor - halfHeight
+					if startIdx < 0 {
+						startIdx = 0
+					}
+					if startIdx+availableHeight > len(m.visibleItems) {
+						startIdx = len(m.visibleItems) - availableHeight
+						if startIdx < 0 {
+							startIdx = 0
+						}
+					}
+				}
+
+				// Convert click position to item index
+				itemIdx := startIdx + clickedRow
+				if itemIdx >= 0 && itemIdx < len(m.visibleItems) {
+					m.selectionStart = -1
+					m.cursor = itemIdx
+				}
+			}
+		}
 	}
 
 	return m, nil
@@ -347,30 +451,59 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View implements tea.Model
 func (m Model) View() string {
+	// Enforce minimum dimensions to prevent crashes
+	width := m.width
+	height := m.height
+	if width < 40 {
+		width = 40
+	}
+	if height < 10 {
+		height = 10
+	}
+
 	// Show loading overlay if reloading
 	if m.isLoading {
 		loadingText := m.renderLoadingView()
-		return placeModalCentered(ModalStyle.Render(loadingText), m.width, m.height)
+		return placeModalCentered(ModalStyle.Render(loadingText), width, height)
 	}
 
 	var b strings.Builder
+
+	// Calculate available height for items
+	headerLines := 9 // header box (6 lines) + 1 newline + time axis + 1 blank line
+	footerLines := 3 // blank line + help line + bottom border
+	availableHeight := height - headerLines - footerLines
+	if availableHeight < 1 {
+		availableHeight = 10
+	}
+
+	// Determine if scrolling is needed
+	totalItems := len(m.visibleItems)
+	needsScroll := totalItems > availableHeight
 
 	// Header (includes time range info)
 	b.WriteString(m.renderHeader())
 	b.WriteString("\n")
 
-	// Calculate available height for items
-	headerLines := 8 // header box (up to 7 lines + margin)
-	footerLines := 3
-	availableHeight := m.height - headerLines - footerLines
-	if availableHeight < 1 {
-		availableHeight = 10
+	// Time axis row (shows start time, duration, end time aligned with timeline)
+	b.WriteString(m.renderTimeAxis())
+	b.WriteString("\n")
+
+	// Blank line between time axis and content (just outer borders, no middle separator)
+	totalWidth := width - horizontalPad*2
+	if totalWidth < 1 {
+		totalWidth = 80
 	}
+	contentWidth := totalWidth - 2 // space between left and right borders
+	blankLine := BorderStyle.Render("│") + strings.Repeat(" ", contentWidth) + BorderStyle.Render("│")
+	b.WriteString(blankLine)
+	b.WriteString("\n")
 
 	// Determine scroll window
 	startIdx := 0
-	endIdx := len(m.visibleItems)
-	if len(m.visibleItems) > availableHeight {
+	endIdx := totalItems
+
+	if needsScroll {
 		// Center cursor in view
 		halfHeight := availableHeight / 2
 		startIdx = m.cursor - halfHeight
@@ -378,8 +511,8 @@ func (m Model) View() string {
 			startIdx = 0
 		}
 		endIdx = startIdx + availableHeight
-		if endIdx > len(m.visibleItems) {
-			endIdx = len(m.visibleItems)
+		if endIdx > totalItems {
+			endIdx = totalItems
 			startIdx = endIdx - availableHeight
 			if startIdx < 0 {
 				startIdx = 0
@@ -387,29 +520,96 @@ func (m Model) View() string {
 		}
 	}
 
-	// Render visible items
+	// Calculate scrollbar dimensions (80% height, centered)
+	trackHeight := availableHeight * 80 / 100
+	if trackHeight < 3 {
+		trackHeight = min(3, availableHeight)
+	}
+	trackTopPad := (availableHeight - trackHeight) / 2
+	trackBottomPad := availableHeight - trackHeight - trackTopPad
+
+	// Calculate thumb position within track
+	thumbSize := 1
+	thumbStart := 0
+	if needsScroll && trackHeight > 0 {
+		thumbSize = max(1, trackHeight*availableHeight/totalItems)
+		if thumbSize > trackHeight {
+			thumbSize = trackHeight
+		}
+		maxScroll := totalItems - availableHeight
+		if maxScroll > 0 {
+			thumbStart = startIdx * (trackHeight - thumbSize) / maxScroll
+		}
+	}
+	thumbEnd := thumbStart + thumbSize
+
+	// Scrollbar characters (use subtle separator color)
+	scrollThumb := SeparatorStyle.Render("┃")
+	scrollTrack := SeparatorStyle.Render("│")
+
+	// Render visible items with scrollbar
+	rowIdx := 0
 	for i := startIdx; i < endIdx; i++ {
 		item := m.visibleItems[i]
 		isSelected := m.isInSelection(i)
 		b.WriteString(m.renderItem(item, isSelected))
+
+		// Add scrollbar character
+		if needsScroll {
+			trackIdx := rowIdx - trackTopPad
+			if rowIdx < trackTopPad || rowIdx >= availableHeight-trackBottomPad {
+				b.WriteString(" ")
+			} else if trackIdx >= thumbStart && trackIdx < thumbEnd {
+				b.WriteString(scrollThumb)
+			} else {
+				b.WriteString(scrollTrack)
+			}
+		}
 		b.WriteString("\n")
+		rowIdx++
 	}
 
 	// Pad if needed (with separator matching item rows)
 	renderedItems := endIdx - startIdx
 	for i := renderedItems; i < availableHeight; i++ {
-		totalWidth := m.width
-		if totalWidth < 1 {
-			totalWidth = 80
+		padTotalWidth := width - horizontalPad*2 // account for left/right padding
+		if padTotalWidth < 1 {
+			padTotalWidth = 80
 		}
 		// Match the structure: │ tree │ timeline │
 		treeW := 55 // treeWidth constant
-		availableW := totalWidth - 3
+		availableW := padTotalWidth - 3
 		timelineW := availableW - treeW
 		if timelineW < 10 {
 			timelineW = 10
 		}
-		b.WriteString(BorderStyle.Render("│") + strings.Repeat(" ", treeW) + BorderStyle.Render("│") + strings.Repeat(" ", timelineW) + BorderStyle.Render("│") + "\n")
+		b.WriteString(BorderStyle.Render("│") + strings.Repeat(" ", treeW) + SeparatorStyle.Render("│") + strings.Repeat(" ", timelineW) + BorderStyle.Render("│"))
+
+		// Add scrollbar character for empty rows
+		if needsScroll {
+			trackIdx := rowIdx - trackTopPad
+			if rowIdx < trackTopPad || rowIdx >= availableHeight-trackBottomPad {
+				b.WriteString(" ")
+			} else if trackIdx >= thumbStart && trackIdx < thumbEnd {
+				b.WriteString(scrollThumb)
+			} else {
+				b.WriteString(scrollTrack)
+			}
+		}
+		b.WriteString("\n")
+		rowIdx++
+	}
+
+	// Blank line between content and footer (with borders)
+	{
+		footerTotalWidth := width - horizontalPad*2
+		if footerTotalWidth < 1 {
+			footerTotalWidth = 80
+		}
+		footerContentWidth := footerTotalWidth - 2
+		blankLine := BorderStyle.Render("│") + strings.Repeat(" ", footerContentWidth) + BorderStyle.Render("│")
+		b.WriteString(blankLine)
+		b.WriteString("\n")
 	}
 
 	// Footer
@@ -417,15 +617,31 @@ func (m Model) View() string {
 
 	// Overlay modal if showing
 	if m.showDetailModal {
-		modal, maxScroll := m.renderDetailModal(m.height-4, m.width-10)
+		modal, maxScroll := m.renderDetailModal(height-4, width-10)
 		// Clamp scroll to valid range
 		if m.modalScroll > maxScroll {
 			m.modalScroll = maxScroll
 		}
-		return placeModalCentered(modal, m.width, m.height)
+		return placeModalCentered(modal, width, height)
 	}
 
-	return b.String()
+	// Add horizontal padding to each line
+	return addHorizontalPadding(b.String(), horizontalPad)
+}
+
+// addHorizontalPadding adds left padding to each line
+func addHorizontalPadding(content string, pad int) string {
+	lines := strings.Split(content, "\n")
+	padStr := strings.Repeat(" ", pad)
+	var result strings.Builder
+	for i, line := range lines {
+		result.WriteString(padStr)
+		result.WriteString(line)
+		if i < len(lines)-1 {
+			result.WriteString("\n")
+		}
+	}
+	return result.String()
 }
 
 // rebuildItems rebuilds the flattened item list based on expanded state
@@ -781,9 +997,14 @@ func (m *Model) toggleDescendants(items []*TreeItem, hidden bool) {
 	}
 }
 
-// recalculateChartBounds recalculates the chart time window based on visible items
+// recalculateChartBounds recalculates the chart time window and stats based on visible items
 func (m *Model) recalculateChartBounds() {
 	var earliest, latest time.Time
+	var totalRuns, successfulRuns int
+	var totalJobs, failedJobs int
+	var stepCount int
+	var computeMs int64
+	workflowsSeen := make(map[string]bool)
 
 	var checkItems func(items []*TreeItem)
 	checkItems = func(items []*TreeItem) {
@@ -791,6 +1012,8 @@ func (m *Model) recalculateChartBounds() {
 			if m.hiddenState[item.ID] {
 				continue
 			}
+
+			// Time bounds
 			if !item.StartTime.IsZero() {
 				if earliest.IsZero() || item.StartTime.Before(earliest) {
 					earliest = item.StartTime
@@ -801,14 +1024,56 @@ func (m *Model) recalculateChartBounds() {
 					latest = item.EndTime
 				}
 			}
+
+			// Stats by item type
+			switch item.ItemType {
+			case ItemTypeWorkflow:
+				if !workflowsSeen[item.Name] {
+					workflowsSeen[item.Name] = true
+					totalRuns++
+					if item.Conclusion == "success" {
+						successfulRuns++
+					}
+				}
+			case ItemTypeJob:
+				totalJobs++
+				if item.Conclusion == "failure" {
+					failedJobs++
+				}
+				// Compute time is sum of job durations
+				if !item.StartTime.IsZero() && !item.EndTime.IsZero() {
+					duration := item.EndTime.Sub(item.StartTime).Milliseconds()
+					if duration > 0 {
+						computeMs += duration
+					}
+				}
+			case ItemTypeStep:
+				stepCount++
+			}
+
 			checkItems(item.Children)
 		}
 	}
 	checkItems(m.treeItems)
 
-	// If all items are hidden, use global bounds
+	// If all items are hidden, use global bounds and full stats
 	if earliest.IsZero() {
 		earliest = m.globalStart
+		m.displayedSummary = m.summary
+		m.displayedWallTimeMs = m.wallTimeMs
+		m.displayedComputeMs = m.computeMs
+		m.displayedStepCount = m.stepCount
+	} else {
+		// Update displayed stats
+		m.displayedSummary = analyzer.Summary{
+			TotalRuns:      totalRuns,
+			SuccessfulRuns: successfulRuns,
+			TotalJobs:      totalJobs,
+			FailedJobs:     failedJobs,
+			MaxConcurrency: m.summary.MaxConcurrency, // Keep original concurrency
+		}
+		m.displayedStepCount = stepCount
+		m.displayedComputeMs = computeMs
 	}
 	if latest.IsZero() {
 		latest = m.globalEnd
@@ -816,6 +1081,12 @@ func (m *Model) recalculateChartBounds() {
 
 	m.chartStart = earliest
 	m.chartEnd = latest
+
+	// Wall time is chart duration
+	m.displayedWallTimeMs = latest.Sub(earliest).Milliseconds()
+	if m.displayedWallTimeMs < 0 {
+		m.displayedWallTimeMs = 0
+	}
 }
 
 // IsHidden returns whether an item is hidden from the chart
@@ -824,9 +1095,9 @@ func (m *Model) IsHidden(id string) bool {
 }
 
 // Run starts the TUI
-func Run(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc) error {
-	m := NewModel(spans, globalStart, globalEnd, inputURLs, reloadFunc)
-	p := tea.NewProgram(m, tea.WithAltScreen())
+func Run(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc, openPerfettoFunc OpenPerfettoFunc) error {
+	m := NewModel(spans, globalStart, globalEnd, inputURLs, reloadFunc, openPerfettoFunc)
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	finalModel, err := p.Run()
 	if err != nil {
 		return fmt.Errorf("tea.Program.Run failed: %w", err)

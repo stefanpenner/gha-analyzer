@@ -4,13 +4,16 @@ import "github.com/charmbracelet/lipgloss"
 
 // Color palette
 var (
-	ColorPurple = lipgloss.Color("#7D56F4")
-	ColorGreen  = lipgloss.Color("#25A065")
-	ColorBlue   = lipgloss.Color("#4285F4")
-	ColorRed    = lipgloss.Color("#E05252")
-	ColorYellow = lipgloss.Color("#E5C07B")
-	ColorGray   = lipgloss.Color("#626262")
-	ColorWhite  = lipgloss.Color("#FFFFFF")
+	ColorPurple   = lipgloss.Color("#7D56F4")
+	ColorGreen    = lipgloss.Color("#25A065")
+	ColorBlue     = lipgloss.Color("#4285F4")
+	ColorRed      = lipgloss.Color("#E05252")
+	ColorYellow   = lipgloss.Color("#E5C07B")
+	ColorGray     = lipgloss.Color("#626262")
+	ColorGrayDim  = lipgloss.Color("#404040")
+	ColorWhite    = lipgloss.Color("#FFFFFF")
+	ColorOffWhite = lipgloss.Color("#D0D0D0")
+	ColorMagenta  = lipgloss.Color("#C678DD")
 )
 
 // Header styles
@@ -27,6 +30,9 @@ var (
 
 	BorderStyle = lipgloss.NewStyle().
 			Foreground(ColorGray)
+
+	SeparatorStyle = lipgloss.NewStyle().
+			Foreground(ColorGrayDim)
 )
 
 // Tree item styles
