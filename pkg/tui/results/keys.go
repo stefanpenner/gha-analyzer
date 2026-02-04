@@ -6,6 +6,8 @@ import "github.com/charmbracelet/bubbles/key"
 type KeyMap struct {
 	Up          key.Binding
 	Down        key.Binding
+	ShiftUp     key.Binding
+	ShiftDown   key.Binding
 	Left        key.Binding
 	Right       key.Binding
 	Enter       key.Binding
@@ -26,6 +28,14 @@ func DefaultKeyMap() KeyMap {
 		Down: key.NewBinding(
 			key.WithKeys("down", "j"),
 			key.WithHelp("↓/j", "down"),
+		),
+		ShiftUp: key.NewBinding(
+			key.WithKeys("shift+up", "K"),
+			key.WithHelp("shift+↑", "select up"),
+		),
+		ShiftDown: key.NewBinding(
+			key.WithKeys("shift+down", "J"),
+			key.WithHelp("shift+↓", "select down"),
 		),
 		Left: key.NewBinding(
 			key.WithKeys("left", "h"),
@@ -64,5 +74,5 @@ func DefaultKeyMap() KeyMap {
 
 // ShortHelp returns a short help string for the footer
 func (k KeyMap) ShortHelp() string {
-	return "↑↓ navigate • ←→ expand/collapse • space toggle chart • o open • e/c all • q quit"
+	return "↑↓ nav • shift+↑↓ select • space toggle • ←→ expand/collapse • o open • e/c all • q quit"
 }

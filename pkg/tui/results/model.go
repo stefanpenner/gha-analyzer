@@ -20,6 +20,7 @@ type Model struct {
 	expandedState map[string]bool
 	hiddenState   map[string]bool // items hidden from chart
 	cursor        int
+	selectionStart int // start of multi-selection range (-1 if no range)
 	width         int
 	height        int
 	globalStart   time.Time
@@ -39,16 +40,17 @@ type Model struct {
 // NewModel creates a new TUI model from OTel spans
 func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string) Model {
 	m := Model{
-		expandedState: make(map[string]bool),
-		hiddenState:   make(map[string]bool),
-		globalStart:   globalStart,
-		globalEnd:     globalEnd,
-		chartStart:    globalStart,
-		chartEnd:      globalEnd,
-		keys:          DefaultKeyMap(),
-		width:         80,
-		height:        24,
-		inputURLs:     inputURLs,
+		expandedState:  make(map[string]bool),
+		hiddenState:    make(map[string]bool),
+		globalStart:    globalStart,
+		globalEnd:      globalEnd,
+		chartStart:     globalStart,
+		chartEnd:       globalEnd,
+		keys:           DefaultKeyMap(),
+		width:          80,
+		height:         24,
+		inputURLs:      inputURLs,
+		selectionStart: -1, // no range selection initially
 	}
 
 	// Calculate summary statistics
@@ -117,23 +119,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 
 		case key.Matches(msg, m.keys.Up):
+			m.selectionStart = -1 // clear selection
 			if m.cursor > 0 {
 				m.cursor--
 			}
 
 		case key.Matches(msg, m.keys.Down):
+			m.selectionStart = -1 // clear selection
+			if m.cursor < len(m.visibleItems)-1 {
+				m.cursor++
+			}
+
+		case key.Matches(msg, m.keys.ShiftUp):
+			// Start or extend selection upward
+			if m.selectionStart == -1 {
+				m.selectionStart = m.cursor
+			}
+			if m.cursor > 0 {
+				m.cursor--
+			}
+
+		case key.Matches(msg, m.keys.ShiftDown):
+			// Start or extend selection downward
+			if m.selectionStart == -1 {
+				m.selectionStart = m.cursor
+			}
 			if m.cursor < len(m.visibleItems)-1 {
 				m.cursor++
 			}
 
 		case key.Matches(msg, m.keys.Left):
+			m.selectionStart = -1 // clear selection
 			m.collapseOrGoToParent()
 
 		case key.Matches(msg, m.keys.Right), key.Matches(msg, m.keys.Enter):
+			m.selectionStart = -1 // clear selection
 			m.expandOrToggle()
 
 		case key.Matches(msg, m.keys.Space):
 			m.toggleChartVisibility()
+			// Keep selection so user can toggle again or see what was selected
 
 		case key.Matches(msg, m.keys.Open):
 			m.openCurrentItem()
@@ -193,7 +218,7 @@ func (m Model) View() string {
 	// Render visible items
 	for i := startIdx; i < endIdx; i++ {
 		item := m.visibleItems[i]
-		isSelected := i == m.cursor
+		isSelected := m.isInSelection(i)
 		b.WriteString(m.renderItem(item, isSelected))
 		b.WriteString("\n")
 	}
@@ -309,29 +334,74 @@ func (m *Model) collapseAll() {
 	m.rebuildItems()
 }
 
-// toggleChartVisibility toggles the current item's visibility in the chart
+// getSelectionRange returns the start and end indices of the current selection
+func (m *Model) getSelectionRange() (start, end int) {
+	if m.selectionStart == -1 {
+		return m.cursor, m.cursor
+	}
+	if m.selectionStart < m.cursor {
+		return m.selectionStart, m.cursor
+	}
+	return m.cursor, m.selectionStart
+}
+
+// isInSelection returns true if the given index is within the current selection
+func (m *Model) isInSelection(idx int) bool {
+	start, end := m.getSelectionRange()
+	return idx >= start && idx <= end
+}
+
+// toggleChartVisibility toggles visibility for all items in the selection range
 func (m *Model) toggleChartVisibility() {
-	if m.cursor >= len(m.visibleItems) {
+	start, end := m.getSelectionRange()
+	if start >= len(m.visibleItems) {
 		return
 	}
+	if end >= len(m.visibleItems) {
+		end = len(m.visibleItems) - 1
+	}
 
-	item := m.visibleItems[m.cursor]
-	m.hiddenState[item.ID] = !m.hiddenState[item.ID]
+	// Determine target state from first item in selection
+	firstItem := m.visibleItems[start]
+	targetHidden := !m.hiddenState[firstItem.ID]
 
-	// Also toggle all children
-	m.toggleChildrenVisibility(item.ID, m.hiddenState[item.ID])
+	// Toggle all items in selection range
+	for i := start; i <= end; i++ {
+		item := m.visibleItems[i]
+		m.hiddenState[item.ID] = targetHidden
+		// Also toggle all children of this item
+		m.toggleChildrenVisibility(item.ID, targetHidden)
+	}
 
 	// Recalculate chart bounds
 	m.recalculateChartBounds()
 }
 
-// toggleChildrenVisibility recursively sets visibility for all children
+// toggleChildrenVisibility recursively sets visibility for all descendants in the tree
 func (m *Model) toggleChildrenVisibility(parentID string, hidden bool) {
-	for _, item := range m.visibleItems {
-		if item.ParentID == parentID {
-			m.hiddenState[item.ID] = hidden
-			m.toggleChildrenVisibility(item.ID, hidden)
+	// Find the item in the tree and toggle all its descendants
+	var findAndToggle func(items []*TreeItem) bool
+	findAndToggle = func(items []*TreeItem) bool {
+		for _, item := range items {
+			if item.ID == parentID {
+				// Found the parent, toggle all its children
+				m.toggleDescendants(item.Children, hidden)
+				return true
+			}
+			if findAndToggle(item.Children) {
+				return true
+			}
 		}
+		return false
+	}
+	findAndToggle(m.treeItems)
+}
+
+// toggleDescendants recursively sets visibility for items and all their descendants
+func (m *Model) toggleDescendants(items []*TreeItem, hidden bool) {
+	for _, item := range items {
+		m.hiddenState[item.ID] = hidden
+		m.toggleDescendants(item.Children, hidden)
 	}
 }
 
