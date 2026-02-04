@@ -43,9 +43,9 @@ jobs:
         path: |
           ~/go/pkg/mod
           ~/.cache/go-build
-        key: v1-go-${{ runner.os }}-${{ hashFiles('**/go.sum') }}
+        key: v1-go-${{ hashFiles('**/go.sum') }}
         restore-keys: |
-          v1-go-${{ runner.os }}-
+          v1-go-
 
     - name: Install dependencies
       run: go mod download
