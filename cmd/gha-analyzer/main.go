@@ -80,7 +80,7 @@ func main() {
 	openInPerfetto := false
 	openInOTel := false
 	otelEndpoint := ""
-	tuiMode := true // TUI is now default
+	tuiMode := isTerminal() // TUI only enabled if running in a terminal
 	clearCache := false
 	var window time.Duration
 
@@ -377,6 +377,7 @@ func printUsage() {
 	fmt.Println("\nUsage:")
 	fmt.Println("  gha-analyzer <github_url1> [github_url2...] [token] [flags]")
 	fmt.Println("\nFlags:")
+	fmt.Println("  --tui                     Force interactive TUI mode (default when terminal is available)")
 	fmt.Println("  --no-tui                  Disable interactive TUI, use CLI output instead")
 	fmt.Println("  --perfetto=<file.json>    Save trace for Perfetto.dev analysis")
 	fmt.Println("  --open-in-perfetto        Automatically open the generated trace in Perfetto UI")
@@ -392,4 +393,14 @@ func printUsage() {
 	fmt.Println("  gha-analyzer https://github.com/owner/repo/commit/sha --perfetto=trace.json")
 	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123 --no-tui")
 	fmt.Println("  gha-analyzer --clear-cache")
+}
+
+// isTerminal checks if stdout and stderr are connected to a terminal
+func isTerminal() bool {
+	// Check if stdout is a terminal using file mode
+	info, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
 }
