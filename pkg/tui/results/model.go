@@ -6,11 +6,20 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
+
+// ReloadResultMsg is sent when reload completes
+type ReloadResultMsg struct {
+	spans       []trace.ReadOnlySpan
+	globalStart time.Time
+	globalEnd   time.Time
+	err         error
+}
 
 // Model represents the TUI state
 type Model struct {
@@ -35,10 +44,27 @@ type Model struct {
 	stepCount   int
 	// Input URLs from CLI
 	inputURLs []string
+	// Modal state
+	showDetailModal bool
+	modalItem       *TreeItem
+	modalScroll     int
+	// Reload state
+	isLoading  bool
+	reloadFunc func() ([]trace.ReadOnlySpan, time.Time, time.Time, error)
+	spinner    spinner.Model
+	// Focus state
+	isFocused          bool
+	preFocusHiddenState map[string]bool
 }
 
+// ReloadFunc is the function signature for reloading data
+type ReloadFunc func() ([]trace.ReadOnlySpan, time.Time, time.Time, error)
+
 // NewModel creates a new TUI model from OTel spans
-func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string) Model {
+func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc) Model {
+	s := spinner.New()
+	s.Spinner = spinner.Dot
+
 	m := Model{
 		expandedState:  make(map[string]bool),
 		hiddenState:    make(map[string]bool),
@@ -51,6 +77,8 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 		height:         24,
 		inputURLs:      inputURLs,
 		selectionStart: -1, // no range selection initially
+		reloadFunc:     reloadFunc,
+		spinner:        s,
 	}
 
 	// Calculate summary statistics
@@ -113,10 +141,108 @@ func (m Model) Init() tea.Cmd {
 // Update implements tea.Model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case ReloadResultMsg:
+		m.isLoading = false
+		if msg.err != nil {
+			// TODO: show error in UI
+			return m, nil
+		}
+		// Update model with new data
+		m.globalStart = msg.globalStart
+		m.globalEnd = msg.globalEnd
+		m.chartStart = msg.globalStart
+		m.chartEnd = msg.globalEnd
+		m.summary = analyzer.CalculateSummary(msg.spans)
+		m.wallTimeMs = msg.globalEnd.Sub(msg.globalStart).Milliseconds()
+		m.computeMs, m.stepCount = calculateComputeAndSteps(msg.spans)
+		m.roots = analyzer.BuildTreeFromSpans(msg.spans, msg.globalStart, msg.globalEnd)
+		m.expandedState = make(map[string]bool)
+		m.hiddenState = make(map[string]bool)
+		m.expandAllToDepth(0)
+		m.rebuildItems()
+		m.cursor = 0
+		m.selectionStart = -1
+		return m, nil
+
+	case spinner.TickMsg:
+		if m.isLoading {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
 	case tea.KeyMsg:
+		// Ignore keys while loading (except quit)
+		if m.isLoading {
+			if key.Matches(msg, m.keys.Quit) {
+				return m, tea.Quit
+			}
+			return m, nil
+		}
+
+		// Handle modal state first
+		if m.showDetailModal {
+			switch msg.String() {
+			case "esc", "enter", "i", "q":
+				m.showDetailModal = false
+				m.modalItem = nil
+				m.modalScroll = 0
+				return m, nil
+			case "up", "k":
+				if m.modalScroll > 0 {
+					m.modalScroll--
+				}
+				return m, nil
+			case "down", "j":
+				m.modalScroll++
+				return m, nil
+			case "left", "h":
+				// Navigate to previous item
+				if m.cursor > 0 {
+					m.cursor--
+					m.modalScroll = 0
+					item := m.visibleItems[m.cursor]
+					m.modalItem = &item
+				}
+				return m, nil
+			case "right", "l":
+				// Navigate to next item
+				if m.cursor < len(m.visibleItems)-1 {
+					m.cursor++
+					m.modalScroll = 0
+					item := m.visibleItems[m.cursor]
+					m.modalItem = &item
+				}
+				return m, nil
+			case "r":
+				// Close modal and trigger reload
+				m.showDetailModal = false
+				m.modalItem = nil
+				m.modalScroll = 0
+				if m.reloadFunc != nil {
+					m.isLoading = true
+					return m, tea.Batch(m.spinner.Tick, m.doReload())
+				}
+				return m, nil
+			}
+			return m, nil
+		}
+
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
+
+		case key.Matches(msg, m.keys.Info):
+			m.openDetailModal()
+			return m, nil
+
+		case key.Matches(msg, m.keys.Reload):
+			if m.reloadFunc != nil {
+				m.isLoading = true
+				return m, tea.Batch(m.spinner.Tick, m.doReload())
+			}
+			return m, nil
 
 		case key.Matches(msg, m.keys.Up):
 			m.selectionStart = -1 // clear selection
@@ -163,6 +289,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Open):
 			m.openCurrentItem()
 
+		case key.Matches(msg, m.keys.Focus):
+			m.toggleFocus()
+
 		case key.Matches(msg, m.keys.ExpandAll):
 			m.expandAll()
 
@@ -181,6 +310,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // View implements tea.Model
 func (m Model) View() string {
+	// Show loading overlay if reloading
+	if m.isLoading {
+		loadingText := m.spinner.View() + " Reloading data..."
+		return placeModalCentered(ModalStyle.Render(loadingText), m.width, m.height)
+	}
+
 	var b strings.Builder
 
 	// Header (includes time range info)
@@ -242,6 +377,16 @@ func (m Model) View() string {
 
 	// Footer
 	b.WriteString(m.renderFooter())
+
+	// Overlay modal if showing
+	if m.showDetailModal {
+		modal, maxScroll := m.renderDetailModal(m.height-4, m.width-10)
+		// Clamp scroll to valid range
+		if m.modalScroll > maxScroll {
+			m.modalScroll = maxScroll
+		}
+		return placeModalCentered(modal, m.width, m.height)
+	}
 
 	return b.String()
 }
@@ -311,6 +456,31 @@ func (m *Model) openCurrentItem() {
 	}
 }
 
+// openDetailModal opens the detail modal for the current item
+func (m *Model) openDetailModal() {
+	if m.cursor >= len(m.visibleItems) {
+		return
+	}
+
+	item := m.visibleItems[m.cursor]
+	m.modalItem = &item
+	m.showDetailModal = true
+	m.modalScroll = 0
+}
+
+// doReload returns a command that performs the reload
+func (m *Model) doReload() tea.Cmd {
+	return func() tea.Msg {
+		spans, start, end, err := m.reloadFunc()
+		return ReloadResultMsg{
+			spans:       spans,
+			globalStart: start,
+			globalEnd:   end,
+			err:         err,
+		}
+	}
+}
+
 // expandAll expands all items
 func (m *Model) expandAll() {
 	var expandNodes func(nodes []*TreeItem)
@@ -332,6 +502,79 @@ func (m *Model) collapseAll() {
 		m.expandedState[id] = false
 	}
 	m.rebuildItems()
+}
+
+// toggleFocus focuses on the current selection, hiding everything else
+func (m *Model) toggleFocus() {
+	if m.isFocused {
+		// Unfocus: restore the previous hidden state
+		m.hiddenState = m.preFocusHiddenState
+		m.preFocusHiddenState = nil
+		m.isFocused = false
+	} else {
+		// Focus: save current hidden state and hide everything except selection
+		m.preFocusHiddenState = make(map[string]bool)
+		for k, v := range m.hiddenState {
+			m.preFocusHiddenState[k] = v
+		}
+
+		// Get selected items
+		start, end := m.getSelectionRange()
+		selectedIDs := make(map[string]bool)
+		for i := start; i <= end && i < len(m.visibleItems); i++ {
+			item := m.visibleItems[i]
+			selectedIDs[item.ID] = true
+			// Also include all ancestors (parents) to keep context
+			m.collectAncestorIDs(item.ParentID, selectedIDs)
+			// Also include all descendants
+			m.collectDescendantIDs(item.ID, selectedIDs)
+		}
+
+		// Hide everything except selected items and their ancestors/descendants
+		var hideAll func(items []*TreeItem)
+		hideAll = func(items []*TreeItem) {
+			for _, item := range items {
+				if !selectedIDs[item.ID] {
+					m.hiddenState[item.ID] = true
+				} else {
+					m.hiddenState[item.ID] = false
+				}
+				hideAll(item.Children)
+			}
+		}
+		hideAll(m.treeItems)
+		m.isFocused = true
+	}
+	m.recalculateChartBounds()
+}
+
+// collectAncestorIDs adds all ancestor IDs to the set
+func (m *Model) collectAncestorIDs(parentID string, ids map[string]bool) {
+	if parentID == "" {
+		return
+	}
+	ids[parentID] = true
+	// Find the parent item to get its parent
+	for _, item := range m.visibleItems {
+		if item.ID == parentID {
+			m.collectAncestorIDs(item.ParentID, ids)
+			return
+		}
+	}
+}
+
+// collectDescendantIDs adds all descendant IDs to the set
+func (m *Model) collectDescendantIDs(parentID string, ids map[string]bool) {
+	var collect func(items []*TreeItem)
+	collect = func(items []*TreeItem) {
+		for _, item := range items {
+			if item.ParentID == parentID || ids[item.ParentID] {
+				ids[item.ID] = true
+			}
+			collect(item.Children)
+		}
+	}
+	collect(m.treeItems)
 }
 
 // getSelectionRange returns the start and end indices of the current selection
@@ -448,8 +691,8 @@ func (m *Model) IsHidden(id string) bool {
 }
 
 // Run starts the TUI
-func Run(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string) error {
-	m := NewModel(spans, globalStart, globalEnd, inputURLs)
+func Run(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc) error {
+	m := NewModel(spans, globalStart, globalEnd, inputURLs, reloadFunc)
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	finalModel, err := p.Run()
 	if err != nil {

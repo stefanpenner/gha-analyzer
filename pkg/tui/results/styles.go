@@ -96,3 +96,22 @@ var (
 	DurationStyle = lipgloss.NewStyle().
 			Foreground(ColorGray)
 )
+
+// Modal styles
+var (
+	ModalStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(ColorPurple).
+			Padding(1, 2)
+
+	ModalTitleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ColorPurple)
+
+	ModalLabelStyle = lipgloss.NewStyle().
+			Foreground(ColorGray).
+			Width(14)
+
+	ModalValueStyle = lipgloss.NewStyle().
+			Foreground(ColorWhite)
+)

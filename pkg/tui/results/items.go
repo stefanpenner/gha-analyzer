@@ -18,6 +18,22 @@ const (
 	ItemTypeMarker
 )
 
+// String returns a human-readable string for the ItemType
+func (t ItemType) String() string {
+	switch t {
+	case ItemTypeWorkflow:
+		return "Workflow"
+	case ItemTypeJob:
+		return "Job"
+	case ItemTypeStep:
+		return "Step"
+	case ItemTypeMarker:
+		return "Marker"
+	default:
+		return "Unknown"
+	}
+}
+
 // TreeItem represents a single item in the tree view
 type TreeItem struct {
 	ID           string

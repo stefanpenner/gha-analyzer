@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,15 +21,29 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-var tracer = otel.Tracer("githubapi")
+// getTracer returns the current tracer from the global provider.
+// This must be called at runtime (not package init) to pick up the correct provider.
+func getTracer() trace.Tracer {
+	return otel.Tracer("githubapi")
+}
 
 type Context struct {
 	GitHubToken string
 	CacheDir    string
 }
 
+// DefaultCacheDir returns the OS-appropriate cache directory for gha-analyzer.
+func DefaultCacheDir() string {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		// Fallback to current directory
+		return ".gha-cache"
+	}
+	return filepath.Join(cacheDir, "gha-analyzer")
+}
+
 func NewContext(token string) Context {
-	return Context{GitHubToken: token, CacheDir: ".gha-cache"}
+	return Context{GitHubToken: token, CacheDir: DefaultCacheDir()}
 }
 
 type Client struct {
@@ -487,7 +503,7 @@ func extractSSOURL(header string) string {
 }
 
 func (c *Client) FetchWorkflowRuns(ctx context.Context, baseURL, headSHA string, branch, event string) ([]WorkflowRun, error) {
-	ctx, span := tracer.Start(ctx, "FetchWorkflowRuns", trace.WithAttributes(
+	ctx, span := getTracer().Start(ctx, "FetchWorkflowRuns", trace.WithAttributes(
 		attribute.String("github.baseURL", baseURL),
 		attribute.String("github.headSHA", headSHA),
 		attribute.String("github.branch", branch),
@@ -509,7 +525,7 @@ func (c *Client) FetchWorkflowRuns(ctx context.Context, baseURL, headSHA string,
 }
 
 func (c *Client) FetchRepository(ctx context.Context, baseURL string) (*RepoMeta, error) {
-	ctx, span := tracer.Start(ctx, "FetchRepository", trace.WithAttributes(
+	ctx, span := getTracer().Start(ctx, "FetchRepository", trace.WithAttributes(
 		attribute.String("github.baseURL", baseURL),
 	))
 	defer span.End()
@@ -526,7 +542,7 @@ func (c *Client) FetchRepository(ctx context.Context, baseURL string) (*RepoMeta
 }
 
 func (c *Client) FetchCommitAssociatedPRs(ctx context.Context, owner, repo, sha string) ([]PullAssociated, error) {
-	ctx, span := tracer.Start(ctx, "FetchCommitAssociatedPRs", trace.WithAttributes(
+	ctx, span := getTracer().Start(ctx, "FetchCommitAssociatedPRs", trace.WithAttributes(
 		attribute.String("github.owner", owner),
 		attribute.String("github.repo", repo),
 		attribute.String("github.sha", sha),
@@ -546,7 +562,7 @@ func (c *Client) FetchCommitAssociatedPRs(ctx context.Context, owner, repo, sha 
 }
 
 func (c *Client) FetchCommit(ctx context.Context, baseURL, sha string) (*CommitResponse, error) {
-	ctx, span := tracer.Start(ctx, "FetchCommit", trace.WithAttributes(
+	ctx, span := getTracer().Start(ctx, "FetchCommit", trace.WithAttributes(
 		attribute.String("github.baseURL", baseURL),
 		attribute.String("github.sha", sha),
 	))
@@ -565,7 +581,7 @@ func (c *Client) FetchCommit(ctx context.Context, baseURL, sha string) (*CommitR
 }
 
 func (c *Client) FetchPullRequest(ctx context.Context, baseURL, identifier string) (*PullRequest, error) {
-	ctx, span := tracer.Start(ctx, "FetchPullRequest", trace.WithAttributes(
+	ctx, span := getTracer().Start(ctx, "FetchPullRequest", trace.WithAttributes(
 		attribute.String("github.baseURL", baseURL),
 		attribute.String("github.identifier", identifier),
 	))
@@ -584,7 +600,7 @@ func (c *Client) FetchPullRequest(ctx context.Context, baseURL, identifier strin
 }
 
 func (c *Client) FetchPRReviews(ctx context.Context, owner, repo, prNumber string) ([]Review, error) {
-	ctx, span := tracer.Start(ctx, "FetchPRReviews", trace.WithAttributes(
+	ctx, span := getTracer().Start(ctx, "FetchPRReviews", trace.WithAttributes(
 		attribute.String("github.owner", owner),
 		attribute.String("github.repo", repo),
 		attribute.String("github.prNumber", prNumber),
@@ -596,7 +612,7 @@ func (c *Client) FetchPRReviews(ctx context.Context, owner, repo, prNumber strin
 }
 
 func (c *Client) FetchPRComments(ctx context.Context, owner, repo, prNumber string) ([]Review, error) {
-	ctx, span := tracer.Start(ctx, "FetchPRComments", trace.WithAttributes(
+	ctx, span := getTracer().Start(ctx, "FetchPRComments", trace.WithAttributes(
 		attribute.String("github.owner", owner),
 		attribute.String("github.repo", repo),
 		attribute.String("github.prNumber", prNumber),
@@ -609,7 +625,7 @@ func (c *Client) FetchPRComments(ctx context.Context, owner, repo, prNumber stri
 }
 
 func (c *Client) FetchJobsPaginated(ctx context.Context, urlValue string) ([]Job, error) {
-	ctx, span := tracer.Start(ctx, "FetchJobsPaginated", trace.WithAttributes(
+	ctx, span := getTracer().Start(ctx, "FetchJobsPaginated", trace.WithAttributes(
 		attribute.String("github.url", urlValue),
 	))
 	defer span.End()
@@ -632,7 +648,7 @@ func (c *Client) FetchJobsPaginated(ctx context.Context, urlValue string) ([]Job
 }
 
 func fetchWorkflowRunsPaginated(ctx context.Context, c *Client, urlValue string) ([]WorkflowRun, error) {
-	ctx, span := tracer.Start(ctx, "fetchWorkflowRunsPaginated", trace.WithAttributes(
+	ctx, span := getTracer().Start(ctx, "fetchWorkflowRunsPaginated", trace.WithAttributes(
 		attribute.String("github.url", urlValue),
 	))
 	defer span.End()
@@ -655,7 +671,7 @@ func fetchWorkflowRunsPaginated(ctx context.Context, c *Client, urlValue string)
 }
 
 func fetchReviewsPaginated(ctx context.Context, c *Client, urlValue string) ([]Review, error) {
-	ctx, span := tracer.Start(ctx, "fetchReviewsPaginated", trace.WithAttributes(
+	ctx, span := getTracer().Start(ctx, "fetchReviewsPaginated", trace.WithAttributes(
 		attribute.String("github.url", urlValue),
 	))
 	defer span.End()
@@ -678,7 +694,7 @@ func fetchReviewsPaginated(ctx context.Context, c *Client, urlValue string) ([]R
 }
 
 func fetchCommentsPaginated(ctx context.Context, c *Client, urlValue string) ([]Review, error) {
-	ctx, span := tracer.Start(ctx, "fetchCommentsPaginated", trace.WithAttributes(
+	ctx, span := getTracer().Start(ctx, "fetchCommentsPaginated", trace.WithAttributes(
 		attribute.String("github.url", urlValue),
 	))
 	defer span.End()
@@ -735,7 +751,7 @@ func parseNextLink(linkHeader string) string {
 }
 
 func (c *Client) FetchBranchProtection(ctx context.Context, owner, repo, branch string) (*BranchProtection, error) {
-	ctx, span := tracer.Start(ctx, "FetchBranchProtection", trace.WithAttributes(
+	ctx, span := getTracer().Start(ctx, "FetchBranchProtection", trace.WithAttributes(
 		attribute.String("github.owner", owner),
 		attribute.String("github.repo", repo),
 		attribute.String("github.branch", branch),

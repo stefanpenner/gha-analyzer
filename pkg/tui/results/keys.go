@@ -13,6 +13,9 @@ type KeyMap struct {
 	Enter       key.Binding
 	Space       key.Binding
 	Open        key.Binding
+	Info        key.Binding
+	Focus       key.Binding
+	Reload      key.Binding
 	ExpandAll   key.Binding
 	CollapseAll key.Binding
 	Quit        key.Binding
@@ -57,6 +60,18 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("o"),
 			key.WithHelp("o", "open"),
 		),
+		Info: key.NewBinding(
+			key.WithKeys("i"),
+			key.WithHelp("i", "info"),
+		),
+		Focus: key.NewBinding(
+			key.WithKeys("f"),
+			key.WithHelp("f", "focus"),
+		),
+		Reload: key.NewBinding(
+			key.WithKeys("r"),
+			key.WithHelp("r", "reload"),
+		),
 		ExpandAll: key.NewBinding(
 			key.WithKeys("e"),
 			key.WithHelp("e", "expand all"),
@@ -74,5 +89,5 @@ func DefaultKeyMap() KeyMap {
 
 // ShortHelp returns a short help string for the footer
 func (k KeyMap) ShortHelp() string {
-	return "↑↓ nav • shift+↑↓ select • space toggle • ←→ expand/collapse • o open • e/c all • q quit"
+	return "↑↓ nav • shift+↑↓ select • space toggle • f focus • ←→ expand/collapse • e/c all • o open • i info • r reload • q quit"
 }

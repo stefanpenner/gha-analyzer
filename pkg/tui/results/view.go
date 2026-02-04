@@ -367,3 +367,233 @@ func max(a, b int) int {
 	}
 	return b
 }
+
+// placeModalCentered renders the modal centered on a dim background
+func placeModalCentered(modal string, width, height int) string {
+	modalLines := strings.Split(modal, "\n")
+
+	// Get modal dimensions
+	modalHeight := len(modalLines)
+	modalWidth := 0
+	for _, line := range modalLines {
+		w := lipgloss.Width(line)
+		if w > modalWidth {
+			modalWidth = w
+		}
+	}
+
+	// Calculate vertical padding to center
+	topPadding := (height - modalHeight) / 2
+	if topPadding < 0 {
+		topPadding = 0
+	}
+
+	// Calculate horizontal padding to center
+	leftPadding := (width - modalWidth) / 2
+	if leftPadding < 0 {
+		leftPadding = 0
+	}
+
+	// Build the output
+	var result strings.Builder
+
+	// Add top padding lines
+	for i := 0; i < topPadding; i++ {
+		result.WriteString(strings.Repeat(" ", width))
+		result.WriteString("\n")
+	}
+
+	// Add modal lines with horizontal centering
+	for _, line := range modalLines {
+		lineWidth := lipgloss.Width(line)
+		rightPadding := width - leftPadding - lineWidth
+		if rightPadding < 0 {
+			rightPadding = 0
+		}
+		result.WriteString(strings.Repeat(" ", leftPadding))
+		result.WriteString(line)
+		result.WriteString(strings.Repeat(" ", rightPadding))
+		result.WriteString("\n")
+	}
+
+	// Add bottom padding to fill the screen
+	linesWritten := topPadding + modalHeight
+	for i := linesWritten; i < height; i++ {
+		result.WriteString(strings.Repeat(" ", width))
+		result.WriteString("\n")
+	}
+
+	return result.String()
+}
+
+// renderDetailModal renders the detail modal for an item
+// Returns the rendered modal and the maximum scroll value
+func (m Model) renderDetailModal(maxHeight, maxWidth int) (string, int) {
+	if m.modalItem == nil {
+		return "", 0
+	}
+
+	item := m.modalItem
+	var lines []string
+
+	// Helper to add a row
+	addRow := func(label, value string) {
+		lines = append(lines, ModalLabelStyle.Render(label)+ModalValueStyle.Render(value))
+	}
+
+	// Title
+	lines = append(lines, ModalTitleStyle.Render("Item Details"))
+	lines = append(lines, "")
+
+	// Core Fields
+	lines = append(lines, ModalTitleStyle.Render("── Core ──"))
+	addRow("Name:", item.DisplayName)
+	addRow("ID:", item.ID)
+	if item.ParentID != "" {
+		addRow("Parent ID:", item.ParentID)
+	}
+	addRow("Type:", item.ItemType.String())
+	lines = append(lines, "")
+
+	// Timing
+	lines = append(lines, ModalTitleStyle.Render("── Timing ──"))
+	if !item.StartTime.IsZero() {
+		addRow("Start Time:", item.StartTime.Format("2006-01-02 15:04:05"))
+	}
+	if !item.EndTime.IsZero() {
+		addRow("End Time:", item.EndTime.Format("2006-01-02 15:04:05"))
+	}
+	if !item.StartTime.IsZero() && !item.EndTime.IsZero() {
+		duration := item.EndTime.Sub(item.StartTime).Seconds()
+		addRow("Duration:", utils.HumanizeTime(duration))
+	}
+	lines = append(lines, "")
+
+	// Status
+	lines = append(lines, ModalTitleStyle.Render("── Status ──"))
+	if item.Status != "" {
+		addRow("Status:", item.Status)
+	}
+	if item.Conclusion != "" {
+		addRow("Conclusion:", item.Conclusion)
+	}
+	if item.IsRequired {
+		addRow("Is Required:", "Yes")
+	} else {
+		addRow("Is Required:", "No")
+	}
+	if item.IsBottleneck {
+		addRow("Is Bottleneck:", "Yes")
+	} else {
+		addRow("Is Bottleneck:", "No")
+	}
+	lines = append(lines, "")
+
+	// Links
+	if item.URL != "" {
+		lines = append(lines, ModalTitleStyle.Render("── Links ──"))
+		linkedURL := hyperlink(item.URL, item.URL)
+		lines = append(lines, ModalLabelStyle.Render("URL:")+linkedURL)
+		lines = append(lines, "")
+	}
+
+	// Marker-specific fields
+	if item.ItemType == ItemTypeMarker {
+		lines = append(lines, ModalTitleStyle.Render("── Marker ──"))
+		if item.User != "" {
+			addRow("User:", item.User)
+		}
+		if item.EventType != "" {
+			addRow("Event Type:", item.EventType)
+		}
+		lines = append(lines, "")
+	}
+
+	// Tree Info
+	lines = append(lines, ModalTitleStyle.Render("── Tree ──"))
+	addRow("Depth:", fmt.Sprintf("%d", item.Depth))
+	addRow("Has Children:", fmt.Sprintf("%v", item.HasChildren))
+	if item.HasChildren {
+		addRow("Child Count:", fmt.Sprintf("%d", len(item.Children)))
+	}
+
+	// Calculate available height for content (account for border and padding)
+	// ModalStyle has Padding(1, 2) = 1 top, 1 bottom, 2 left, 2 right
+	// Plus 2 for the border itself
+	contentMaxHeight := maxHeight - 4 // 2 for border, 2 for padding
+
+	// Reserve 2 lines for footer
+	contentMaxHeight -= 2
+
+	if contentMaxHeight < 5 {
+		contentMaxHeight = 5
+	}
+
+	// Calculate max scroll
+	totalLines := len(lines)
+	maxScroll := totalLines - contentMaxHeight
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+
+	// Apply scroll
+	scroll := m.modalScroll
+	if scroll > maxScroll {
+		scroll = maxScroll
+	}
+
+	// Get visible lines
+	endIdx := scroll + contentMaxHeight
+	if endIdx > totalLines {
+		endIdx = totalLines
+	}
+	visibleLines := lines[scroll:endIdx]
+
+	// Build content with scrollbar if needed
+	var b strings.Builder
+	showScrollbar := maxScroll > 0
+	visibleCount := len(visibleLines)
+
+	// Calculate thumb position for scrollbar
+	var thumbStart, thumbEnd int
+	if showScrollbar && visibleCount > 0 {
+		// Thumb size is proportional to visible/total ratio
+		thumbSize := max(1, (visibleCount*visibleCount+totalLines-1)/totalLines)
+		if thumbSize > visibleCount {
+			thumbSize = visibleCount
+		}
+		// Thumb position based on scroll position
+		scrollRange := totalLines - visibleCount
+		if scrollRange > 0 {
+			thumbStart = (scroll * (visibleCount - thumbSize)) / scrollRange
+		}
+		thumbEnd = thumbStart + thumbSize
+	}
+
+	for i, line := range visibleLines {
+		b.WriteString(line)
+		if showScrollbar {
+			// Render scrollbar: ▓ for thumb, ░ for track
+			if i >= thumbStart && i < thumbEnd {
+				b.WriteString("  ▓")
+			} else {
+				b.WriteString("  ░")
+			}
+		}
+		b.WriteString("\n")
+	}
+
+	// Footer hint with scroll indicator
+	b.WriteString("\n")
+	if maxScroll > 0 {
+		scrollInfo := fmt.Sprintf("[%d/%d] ", scroll+1, maxScroll+1)
+		b.WriteString(FooterStyle.Render(scrollInfo + "↑↓ scroll • ←→ prev/next • Esc close"))
+	} else {
+		b.WriteString(FooterStyle.Render("←→ prev/next • Esc/i close"))
+	}
+
+	// Apply max width constraint to the style
+	modalStyle := ModalStyle.MaxWidth(maxWidth)
+	content := b.String()
+	return modalStyle.Render(content), maxScroll
+}

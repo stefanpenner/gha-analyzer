@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/gha-analyzer/pkg/core"
 	otelexport "github.com/stefanpenner/gha-analyzer/pkg/export/otel"
@@ -30,9 +29,8 @@ const (
 )
 
 func printError(err error, context string) {
-	// Use cockroachdb/errors to get a clean, user-friendly message
-	msg := errors.FlattenDetails(err)
-	fmt.Fprintf(os.Stderr, "%sError: %s: %s%s\n", colorRed, context, msg, colorReset)
+	// Print the full error message, not just flattened
+	fmt.Fprintf(os.Stderr, "%sError: %s: %v%s\n", colorRed, context, err, colorReset)
 }
 
 func printErrorMsg(message string) {
@@ -45,7 +43,8 @@ func main() {
 	openInPerfetto := false
 	openInOTel := false
 	otelEndpoint := ""
-	tuiMode := false
+	tuiMode := true // TUI is now default
+	clearCache := false
 	var window time.Duration
 
 	filtered := []string{}
@@ -87,9 +86,30 @@ func main() {
 			tuiMode = true
 			continue
 		}
+		if arg == "--no-tui" || arg == "--notui" {
+			tuiMode = false
+			continue
+		}
+		if arg == "--clear-cache" {
+			clearCache = true
+			continue
+		}
 		filtered = append(filtered, arg)
 	}
 	args = filtered
+
+	// Handle --clear-cache flag
+	if clearCache {
+		cacheDir := githubapi.DefaultCacheDir()
+		if err := os.RemoveAll(cacheDir); err != nil {
+			printError(err, "failed to clear cache")
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "Cache cleared: %s\n", cacheDir)
+		if len(args) == 0 {
+			os.Exit(0)
+		}
+	}
 
 	// Auto-generate perfetto file if --open-in-perfetto is used without --perfetto
 	if openInPerfetto && perfettoFile == "" {
@@ -181,7 +201,44 @@ func main() {
 	if tuiMode {
 		globalStartTime := time.UnixMilli(globalEarliest)
 		globalEndTime := time.UnixMilli(globalLatest)
-		if err := tuiresults.Run(spans, globalStartTime, globalEndTime, args); err != nil {
+
+		// Create reload function that clears cache and refetches data
+		reloadFunc := func() ([]sdktrace.ReadOnlySpan, time.Time, time.Time, error) {
+			// Clear cache
+			if err := os.RemoveAll(githubapi.DefaultCacheDir()); err != nil {
+				return nil, time.Time{}, time.Time{}, fmt.Errorf("failed to clear cache: %w", err)
+			}
+
+			// Create new collector and tracer provider for reload
+			reloadCollector := core.NewSpanCollector()
+			reloadRes, _ := otelexport.GetResource(ctx)
+			reloadTP := sdktrace.NewTracerProvider(
+				sdktrace.WithSyncer(reloadCollector), // Use Syncer instead of Batcher for immediate export
+				sdktrace.WithResource(reloadRes),
+				sdktrace.WithIDGenerator(githubapi.GHIDGenerator{}),
+			)
+			otel.SetTracerProvider(reloadTP)
+
+			// Re-run ingestion
+			reloadClient := githubapi.NewClient(githubapi.NewContext(token))
+			reloadIngestor := polling.NewPollingIngestor(reloadClient, args, nil, analyzer.AnalyzeOptions{
+				Window: window,
+			})
+			_, reloadEarliest, reloadLatest, err := reloadIngestor.Ingest(ctx)
+			if err != nil {
+				reloadTP.Shutdown(ctx)
+				return nil, time.Time{}, time.Time{}, err
+			}
+
+			// Force flush and collect spans before shutdown
+			reloadTP.ForceFlush(ctx)
+			reloadSpans := reloadCollector.Spans()
+			reloadTP.Shutdown(ctx)
+
+			return reloadSpans, time.UnixMilli(reloadEarliest), time.UnixMilli(reloadLatest), nil
+		}
+
+		if err := tuiresults.Run(spans, globalStartTime, globalEndTime, args, reloadFunc); err != nil {
 			fmt.Fprintf(os.Stderr, "%sError: TUI failed: %v%s\n", colorRed, err, colorReset)
 			os.Exit(1)
 		}
@@ -235,17 +292,19 @@ func printUsage() {
 	fmt.Println("\nUsage:")
 	fmt.Println("  gha-analyzer <github_url1> [github_url2...] [token] [flags]")
 	fmt.Println("\nFlags:")
-	fmt.Println("  --tui                     Launch interactive TUI with expandable workflow tree")
+	fmt.Println("  --no-tui                  Disable interactive TUI, use CLI output instead")
 	fmt.Println("  --perfetto=<file.json>    Save trace for Perfetto.dev analysis")
 	fmt.Println("  --open-in-perfetto        Automatically open the generated trace in Perfetto UI")
 	fmt.Println("  --otel[=<endpoint>]       Export traces to OTel collector (default: localhost:4318)")
 	fmt.Println("  --open-in-otel            Automatically open the OTel Desktop Viewer")
 	fmt.Println("  --window=<duration>       Only show events within <duration> of merge/latest activity (e.g. 24h, 2h)")
+	fmt.Println("  --clear-cache             Clear the HTTP cache (can be combined with other flags)")
 	fmt.Println("  help, --help, -h          Show this help message")
 	fmt.Println("\nEnvironment Variables:")
 	fmt.Println("  GITHUB_TOKEN              GitHub PAT (alternatively pass as argument)")
 	fmt.Println("\nExamples:")
 	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123")
 	fmt.Println("  gha-analyzer https://github.com/owner/repo/commit/sha --perfetto=trace.json")
-	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123 --tui")
+	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123 --no-tui")
+	fmt.Println("  gha-analyzer --clear-cache")
 }
