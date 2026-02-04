@@ -1036,6 +1036,10 @@ func (m *Model) recalculateChartBounds() {
 	var checkItems func(items []*TreeItem)
 	checkItems = func(items []*TreeItem) {
 		for _, item := range items {
+			// Always recurse into children first (they may be visible even if parent is hidden)
+			checkItems(item.Children)
+
+			// Skip hidden items for bounds/stats calculation
 			if m.hiddenState[item.ID] {
 				continue
 			}
@@ -1077,8 +1081,6 @@ func (m *Model) recalculateChartBounds() {
 			case ItemTypeStep:
 				stepCount++
 			}
-
-			checkItems(item.Children)
 		}
 	}
 	checkItems(m.treeItems)
