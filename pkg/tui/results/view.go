@@ -11,6 +11,7 @@ import (
 const (
 	treeWidth     = 55
 	timelineWidth = 30
+	horizontalPad = 2 // left/right padding for main view
 )
 
 // hyperlink wraps text in OSC 8 terminal hyperlink escape sequence.
@@ -25,7 +26,7 @@ func hyperlink(url, text string) string {
 
 // renderHeader renders the title bar with statistics
 func (m Model) renderHeader() string {
-	totalWidth := m.width
+	totalWidth := m.width - horizontalPad*2 // account for left/right padding
 	if totalWidth < 1 {
 		totalWidth = 80
 	}
@@ -40,8 +41,6 @@ func (m Model) renderHeader() string {
 
 	// Build borders (all in gray, rounded corners)
 	topBorder := BorderStyle.Render("╭" + strings.Repeat("─", max(0, totalWidth-2)) + "╮")
-	// Bottom border transitions to the main content with column separator
-	bottomBorder := BorderStyle.Render("├" + strings.Repeat("─", treeW) + "┬" + strings.Repeat("─", timelineW) + "┤")
 
 	// Line 1: Title
 	titleText := "GitHub Actions Analyzer"
@@ -107,7 +106,11 @@ func (m Model) renderHeader() string {
 	if !m.chartStart.IsZero() && !m.chartEnd.IsZero() {
 		startTime := m.chartStart.Format("15:04:05")
 		endTime := m.chartEnd.Format("15:04:05")
-		duration := utils.HumanizeTime(m.chartEnd.Sub(m.chartStart).Seconds())
+		durationSecs := m.chartEnd.Sub(m.chartStart).Seconds()
+		if durationSecs < 0 {
+			durationSecs = 0
+		}
+		duration := utils.HumanizeTime(durationSecs)
 		timeText := fmt.Sprintf("Start: %s • Duration: %s • End: %s", startTime, duration, endTime)
 		timeWidth := lipgloss.Width(timeText)
 		timePadding := totalWidth - timeWidth - 4
@@ -117,12 +120,12 @@ func (m Model) renderHeader() string {
 		line5 = "\n" + BorderStyle.Render("│") + " " + HeaderCountStyle.Render(timeText) + strings.Repeat(" ", timePadding) + " " + BorderStyle.Render("│")
 	}
 
-	return topBorder + "\n" + line1 + "\n" + line2 + "\n" + line3 + line4 + line5 + "\n" + bottomBorder
+	return topBorder + "\n" + line1 + "\n" + line2 + "\n" + line3 + line4 + line5
 }
 
 // renderItem renders a single tree item with timeline bar
 func (m Model) renderItem(item TreeItem, isSelected bool) string {
-	totalWidth := m.width
+	totalWidth := m.width - horizontalPad*2 // account for left/right padding
 	if totalWidth < 1 {
 		totalWidth = 80
 	}
@@ -168,20 +171,27 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	badges := getBadges(item)
 	badgesWidth := getBadgesWidth(badges)
 
-	// Build the name part with duration
+	// Build the name part
 	name := item.DisplayName
 	if item.User != "" && item.ItemType == ItemTypeMarker {
 		name = fmt.Sprintf("%s by %s", name, item.User)
 	}
-	// Add duration in parentheses
+
+	// Build duration string separately (styled in gray)
+	durationStr := ""
+	durationWidth := 0
 	if !item.StartTime.IsZero() && !item.EndTime.IsZero() {
 		duration := item.EndTime.Sub(item.StartTime).Seconds()
-		name = fmt.Sprintf("%s (%s)", name, utils.HumanizeTime(duration))
+		if duration < 0 {
+			duration = 0
+		}
+		durationStr = fmt.Sprintf(" (%s)", utils.HumanizeTime(duration))
+		durationWidth = lipgloss.Width(durationStr)
 	}
 
 	// Calculate available space for name
-	// Format: indent + expand + space + icon + space + name + badges + space + status
-	usedWidth := indentWidth + expandWidth + 1 + iconWidth + 1 + badgesWidth + 1 + statusWidth
+	// Format: indent + expand + space + icon + space + name + duration + badges + space + status
+	usedWidth := indentWidth + expandWidth + 1 + iconWidth + 1 + durationWidth + badgesWidth + 1 + statusWidth
 	maxNameWidth := treeW - usedWidth
 	if maxNameWidth < 5 {
 		maxNameWidth = 5
@@ -206,8 +216,8 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	}
 
 	// Calculate tree part width from known component widths (avoids issues with escape sequences)
-	// Format: indent + expand + space + icon + space + name + badges + space + status
-	treePartWidth := indentWidth + expandWidth + 1 + iconWidth + 1 + nameWidth + badgesWidth + 1 + statusWidth
+	// Format: indent + expand + space + icon + space + name + duration + badges + space + status
+	treePartWidth := indentWidth + expandWidth + 1 + iconWidth + 1 + nameWidth + durationWidth + badgesWidth + 1 + statusWidth
 
 	// Pad tree part to fixed width
 	treePadding := treeW - treePartWidth
@@ -221,8 +231,14 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	// Wrap name in hyperlink if URL is available (must be done after width calculation)
 	displayName := hyperlink(item.URL, name)
 
-	// Build tree part with hyperlinked name
-	treePart := fmt.Sprintf("%s%s %s %s%s %s", indent, expandIndicator, icon, displayName, badges, statusIcon)
+	// Style duration in gray (muted)
+	styledDuration := ""
+	if durationStr != "" {
+		styledDuration = FooterStyle.Render(durationStr)
+	}
+
+	// Build tree part with hyperlinked name and styled duration
+	treePart := fmt.Sprintf("%s%s %s %s%s%s %s", indent, expandIndicator, icon, displayName, styledDuration, badges, statusIcon)
 	treePart += strings.Repeat(" ", treePadding)
 
 	// Render timeline bar (empty if hidden, unstyled if selected for consistent background)
@@ -238,18 +254,21 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	}
 
 	// Combine with styled borders (borders always gray)
+	// Middle separator is subtle, outer borders are normal
+	midSep := SeparatorStyle.Render("│")
+
 	if isSelected && isHidden {
 		// Hidden and selected: gray text with selection background
-		return BorderStyle.Render("│") + HiddenSelectedStyle.Render(treePart) + BorderStyle.Render("│") + HiddenSelectedStyle.Render(timelineBar) + BorderStyle.Render("│")
+		return BorderStyle.Render("│") + HiddenSelectedStyle.Render(treePart) + midSep + HiddenSelectedStyle.Render(timelineBar) + BorderStyle.Render("│")
 	} else if isSelected {
 		// Selected but not hidden: white text with selection background
-		return BorderStyle.Render("│") + SelectedStyle.Render(treePart) + BorderStyle.Render("│") + SelectedStyle.Render(timelineBar) + BorderStyle.Render("│")
+		return BorderStyle.Render("│") + SelectedStyle.Render(treePart) + midSep + SelectedStyle.Render(timelineBar) + BorderStyle.Render("│")
 	} else if isHidden {
 		// Hidden but not selected: gray text, no background
-		return BorderStyle.Render("│") + HiddenStyle.Render(treePart) + BorderStyle.Render("│") + timelineBar + BorderStyle.Render("│")
+		return BorderStyle.Render("│") + HiddenStyle.Render(treePart) + midSep + timelineBar + BorderStyle.Render("│")
 	}
 	// Normal: no special styling
-	return BorderStyle.Render("│") + treePart + BorderStyle.Render("│") + timelineBar + BorderStyle.Render("│")
+	return BorderStyle.Render("│") + treePart + midSep + timelineBar + BorderStyle.Render("│")
 }
 
 // getItemIcon returns the icon for an item type
@@ -323,21 +342,10 @@ func getBadgesWidth(badges string) int {
 
 // renderFooter renders the help footer
 func (m Model) renderFooter() string {
-	totalWidth := m.width
+	totalWidth := m.width - horizontalPad*2 // account for left/right padding
 	if totalWidth < 1 {
 		totalWidth = 80
 	}
-
-	// Calculate widths to match item rows
-	treeW := treeWidth
-	availableW := totalWidth - 3
-	timelineW := availableW - treeW
-	if timelineW < 10 {
-		timelineW = 10
-	}
-
-	// Top border closes the column separator with ┴
-	topBorder := "├" + strings.Repeat("─", treeW) + "┴" + strings.Repeat("─", timelineW) + "┤"
 
 	help := m.keys.ShortHelp()
 	helpWidth := lipgloss.Width(help)
@@ -358,7 +366,7 @@ func (m Model) renderFooter() string {
 	// Bottom border is a simple continuous line with rounded corners
 	bottomBorder := BorderStyle.Render("╰" + strings.Repeat("─", max(0, totalWidth-2)) + "╯")
 
-	return BorderStyle.Render(topBorder) + "\n" + helpLine + "\n" + bottomBorder
+	return helpLine + "\n" + bottomBorder
 }
 
 func max(a, b int) int {
@@ -465,6 +473,9 @@ func (m Model) renderDetailModal(maxHeight, maxWidth int) (string, int) {
 	}
 	if !item.StartTime.IsZero() && !item.EndTime.IsZero() {
 		duration := item.EndTime.Sub(item.StartTime).Seconds()
+		if duration < 0 {
+			duration = 0
+		}
 		addRow("Duration:", utils.HumanizeTime(duration))
 	}
 	lines = append(lines, "")
@@ -630,8 +641,8 @@ func addScrollbarToModal(modal string, scroll, maxScroll, visibleCount, totalLin
 	}
 	thumbEnd := thumbStart + thumbSize
 
-	// Scrollbar style (same color as modal border)
-	scrollStyle := lipgloss.NewStyle().Foreground(ColorGrayLight)
+	// Scrollbar style (subtle, matches separator)
+	scrollStyle := lipgloss.NewStyle().Foreground(ColorGrayDim)
 	thumbChar := scrollStyle.Render("┃")
 	trackChar := scrollStyle.Render("│")
 

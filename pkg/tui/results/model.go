@@ -103,6 +103,9 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 	// Calculate summary statistics
 	m.summary = analyzer.CalculateSummary(spans)
 	m.wallTimeMs = globalEnd.Sub(globalStart).Milliseconds()
+	if m.wallTimeMs < 0 {
+		m.wallTimeMs = 0
+	}
 	m.computeMs, m.stepCount = calculateComputeAndSteps(spans)
 
 	// Build tree from spans
@@ -178,6 +181,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.chartEnd = msg.globalEnd
 		m.summary = analyzer.CalculateSummary(msg.spans)
 		m.wallTimeMs = msg.globalEnd.Sub(msg.globalStart).Milliseconds()
+		if m.wallTimeMs < 0 {
+			m.wallTimeMs = 0
+		}
 		m.computeMs, m.stepCount = calculateComputeAndSteps(msg.spans)
 		m.roots = analyzer.BuildTreeFromSpans(msg.spans, msg.globalStart, msg.globalEnd)
 		m.expandedState = make(map[string]bool)
@@ -355,22 +361,37 @@ func (m Model) View() string {
 
 	var b strings.Builder
 
-	// Header (includes time range info)
-	b.WriteString(m.renderHeader())
-	b.WriteString("\n")
-
 	// Calculate available height for items
-	headerLines := 8 // header box (up to 7 lines + margin)
-	footerLines := 3
+	headerLines := 8 // header box (6 lines) + 1 newline + 1 blank line
+	footerLines := 4 // help line + bottom border + margin below
 	availableHeight := m.height - headerLines - footerLines
 	if availableHeight < 1 {
 		availableHeight = 10
 	}
 
+	// Determine if scrolling is needed
+	totalItems := len(m.visibleItems)
+	needsScroll := totalItems > availableHeight
+
+	// Header (includes time range info)
+	b.WriteString(m.renderHeader())
+	b.WriteString("\n")
+
+	// Blank line between header and content (just outer borders, no middle separator)
+	totalWidth := m.width - horizontalPad*2
+	if totalWidth < 1 {
+		totalWidth = 80
+	}
+	contentWidth := totalWidth - 2 // space between left and right borders
+	blankLine := BorderStyle.Render("│") + strings.Repeat(" ", contentWidth) + BorderStyle.Render("│")
+	b.WriteString(blankLine)
+	b.WriteString("\n")
+
 	// Determine scroll window
 	startIdx := 0
-	endIdx := len(m.visibleItems)
-	if len(m.visibleItems) > availableHeight {
+	endIdx := totalItems
+
+	if needsScroll {
 		// Center cursor in view
 		halfHeight := availableHeight / 2
 		startIdx = m.cursor - halfHeight
@@ -378,8 +399,8 @@ func (m Model) View() string {
 			startIdx = 0
 		}
 		endIdx = startIdx + availableHeight
-		if endIdx > len(m.visibleItems) {
-			endIdx = len(m.visibleItems)
+		if endIdx > totalItems {
+			endIdx = totalItems
 			startIdx = endIdx - availableHeight
 			if startIdx < 0 {
 				startIdx = 0
@@ -387,18 +408,59 @@ func (m Model) View() string {
 		}
 	}
 
-	// Render visible items
+	// Calculate scrollbar dimensions (80% height, centered)
+	trackHeight := availableHeight * 80 / 100
+	if trackHeight < 3 {
+		trackHeight = min(3, availableHeight)
+	}
+	trackTopPad := (availableHeight - trackHeight) / 2
+	trackBottomPad := availableHeight - trackHeight - trackTopPad
+
+	// Calculate thumb position within track
+	thumbSize := 1
+	thumbStart := 0
+	if needsScroll && trackHeight > 0 {
+		thumbSize = max(1, trackHeight*availableHeight/totalItems)
+		if thumbSize > trackHeight {
+			thumbSize = trackHeight
+		}
+		maxScroll := totalItems - availableHeight
+		if maxScroll > 0 {
+			thumbStart = startIdx * (trackHeight - thumbSize) / maxScroll
+		}
+	}
+	thumbEnd := thumbStart + thumbSize
+
+	// Scrollbar characters (use subtle separator color)
+	scrollThumb := SeparatorStyle.Render("┃")
+	scrollTrack := SeparatorStyle.Render("│")
+
+	// Render visible items with scrollbar
+	rowIdx := 0
 	for i := startIdx; i < endIdx; i++ {
 		item := m.visibleItems[i]
 		isSelected := m.isInSelection(i)
 		b.WriteString(m.renderItem(item, isSelected))
+
+		// Add scrollbar character
+		if needsScroll {
+			trackIdx := rowIdx - trackTopPad
+			if rowIdx < trackTopPad || rowIdx >= availableHeight-trackBottomPad {
+				b.WriteString(" ")
+			} else if trackIdx >= thumbStart && trackIdx < thumbEnd {
+				b.WriteString(scrollThumb)
+			} else {
+				b.WriteString(scrollTrack)
+			}
+		}
 		b.WriteString("\n")
+		rowIdx++
 	}
 
 	// Pad if needed (with separator matching item rows)
 	renderedItems := endIdx - startIdx
 	for i := renderedItems; i < availableHeight; i++ {
-		totalWidth := m.width
+		totalWidth := m.width - horizontalPad*2 // account for left/right padding
 		if totalWidth < 1 {
 			totalWidth = 80
 		}
@@ -409,7 +471,21 @@ func (m Model) View() string {
 		if timelineW < 10 {
 			timelineW = 10
 		}
-		b.WriteString(BorderStyle.Render("│") + strings.Repeat(" ", treeW) + BorderStyle.Render("│") + strings.Repeat(" ", timelineW) + BorderStyle.Render("│") + "\n")
+		b.WriteString(BorderStyle.Render("│") + strings.Repeat(" ", treeW) + SeparatorStyle.Render("│") + strings.Repeat(" ", timelineW) + BorderStyle.Render("│"))
+
+		// Add scrollbar character for empty rows
+		if needsScroll {
+			trackIdx := rowIdx - trackTopPad
+			if rowIdx < trackTopPad || rowIdx >= availableHeight-trackBottomPad {
+				b.WriteString(" ")
+			} else if trackIdx >= thumbStart && trackIdx < thumbEnd {
+				b.WriteString(scrollThumb)
+			} else {
+				b.WriteString(scrollTrack)
+			}
+		}
+		b.WriteString("\n")
+		rowIdx++
 	}
 
 	// Footer
@@ -425,7 +501,23 @@ func (m Model) View() string {
 		return placeModalCentered(modal, m.width, m.height)
 	}
 
-	return b.String()
+	// Add horizontal padding to each line
+	return addHorizontalPadding(b.String(), horizontalPad)
+}
+
+// addHorizontalPadding adds left padding to each line
+func addHorizontalPadding(content string, pad int) string {
+	lines := strings.Split(content, "\n")
+	padStr := strings.Repeat(" ", pad)
+	var result strings.Builder
+	for i, line := range lines {
+		result.WriteString(padStr)
+		result.WriteString(line)
+		if i < len(lines)-1 {
+			result.WriteString("\n")
+		}
+	}
+	return result.String()
 }
 
 // rebuildItems rebuilds the flattened item list based on expanded state

@@ -2,34 +2,36 @@ package results
 
 import "github.com/charmbracelet/lipgloss"
 
-// Color palette
+// Color palette - inspired by Claude Code UI
 var (
-	ColorPurple     = lipgloss.Color("#7D56F4")
-	ColorPurpleDim  = lipgloss.Color("#5A3FC2")
-	ColorGreen      = lipgloss.Color("#25A065")
-	ColorBlue       = lipgloss.Color("#4285F4")
-	ColorRed        = lipgloss.Color("#E05252")
-	ColorYellow     = lipgloss.Color("#E5C07B")
-	ColorGray       = lipgloss.Color("#626262")
-	ColorGrayLight  = lipgloss.Color("#888888")
-	ColorGrayDim    = lipgloss.Color("#444444")
-	ColorWhite      = lipgloss.Color("#FFFFFF")
-	ColorOffWhite   = lipgloss.Color("#E0E0E0")
+	ColorGreen      = lipgloss.Color("#4EC970") // bright green for success/additions
+	ColorMagenta    = lipgloss.Color("#E05299") // magenta for failures/deletions
+	ColorBlue       = lipgloss.Color("#5C8DFF") // soft blue for pending/info
+	ColorYellow     = lipgloss.Color("#E5C07B") // yellow for warnings
+	ColorGray       = lipgloss.Color("#6B6B6B") // muted gray for secondary
+	ColorGrayLight  = lipgloss.Color("#8B8B8B") // lighter gray for borders
+	ColorGrayDim    = lipgloss.Color("#3B3B3B") // dim gray for backgrounds
+	ColorWhite      = lipgloss.Color("#FFFFFF") // white for primary text
+	ColorOffWhite   = lipgloss.Color("#D4D4D4") // off-white for content
 )
 
 // Header styles
 var (
 	HeaderStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(ColorPurple)
+			Foreground(ColorWhite)
 
 	HeaderCountStyle = lipgloss.NewStyle().
 				Foreground(ColorOffWhite)
 
 	FooterStyle = lipgloss.NewStyle().
-			Foreground(ColorGrayLight)
+			Foreground(ColorGray)
 
 	BorderStyle = lipgloss.NewStyle().
+			Foreground(ColorGrayLight)
+
+	// Subtle separator between tree and timeline columns
+	SeparatorStyle = lipgloss.NewStyle().
 			Foreground(ColorGrayDim)
 )
 
@@ -38,12 +40,12 @@ var (
 	SelectedStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(ColorWhite).
-			Background(ColorPurpleDim)
+			Background(ColorGrayDim)
 
 	// HiddenSelectedStyle combines hidden (gray text) with selection background
 	HiddenSelectedStyle = lipgloss.NewStyle().
-				Foreground(ColorGrayLight).
-				Background(ColorPurpleDim)
+				Foreground(ColorGray).
+				Background(ColorGrayDim)
 
 	NormalStyle = lipgloss.NewStyle().
 			Foreground(ColorOffWhite)
@@ -67,7 +69,7 @@ var (
 			Foreground(ColorGreen)
 
 	FailureStyle = lipgloss.NewStyle().
-			Foreground(ColorRed)
+			Foreground(ColorMagenta)
 
 	PendingStyle = lipgloss.NewStyle().
 			Foreground(ColorBlue)
@@ -82,7 +84,7 @@ var (
 			Foreground(ColorGreen)
 
 	BarFailureStyle = lipgloss.NewStyle().
-			Foreground(ColorRed)
+			Foreground(ColorMagenta)
 
 	BarFailureNonBlockingStyle = lipgloss.NewStyle().
 					Foreground(ColorYellow)
@@ -112,10 +114,10 @@ var (
 
 	ModalTitleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(ColorPurple)
+			Foreground(ColorWhite)
 
 	ModalLabelStyle = lipgloss.NewStyle().
-			Foreground(ColorGrayLight).
+			Foreground(ColorGray).
 			Width(14)
 
 	ModalValueStyle = lipgloss.NewStyle().
