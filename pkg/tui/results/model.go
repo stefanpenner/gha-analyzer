@@ -134,8 +134,12 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 	// Build tree from spans
 	m.roots = analyzer.BuildTreeFromSpans(spans, globalStart, globalEnd)
 
-	// Expand only workflows by default, jobs are collapsed
-	m.expandAllToDepth(0)
+	// Expand URL groups + workflows for multi-URL, just workflows for single
+	if len(inputURLs) > 1 {
+		m.expandAllToDepth(1)
+	} else {
+		m.expandAllToDepth(0)
+	}
 
 	m.rebuildItems()
 	return m
@@ -165,17 +169,45 @@ func calculateComputeAndSteps(spans []trace.ReadOnlySpan) (computeMs int64, step
 
 // expandAllToDepth expands all items up to the given depth
 func (m *Model) expandAllToDepth(maxDepth int) {
-	var expand func(nodes []*analyzer.TreeNode, parentID string, depth int)
-	expand = func(nodes []*analyzer.TreeNode, parentID string, depth int) {
-		for i, node := range nodes {
-			if depth <= maxDepth {
-				id := makeNodeID(parentID, node.Name, i)
-				m.expandedState[id] = true
-				expand(node.Children, id, depth+1)
+	if len(m.inputURLs) > 1 {
+		// Multi-URL: URL groups are at depth 0, tree roots at depth 1
+		// Group roots by URLIndex (must match BuildTreeItems grouping)
+		grouped := make(map[int][]*analyzer.TreeNode)
+		for _, root := range m.roots {
+			grouped[root.URLIndex] = append(grouped[root.URLIndex], root)
+		}
+		for urlIdx := range m.inputURLs {
+			groupID := fmt.Sprintf("url-group/%d", urlIdx)
+			if 0 <= maxDepth {
+				m.expandedState[groupID] = true
+			}
+			var expand func(nodes []*analyzer.TreeNode, parentID string, depth int)
+			expand = func(nodes []*analyzer.TreeNode, parentID string, depth int) {
+				for i, node := range nodes {
+					if depth <= maxDepth {
+						id := makeNodeID(parentID, node.Name, i)
+						m.expandedState[id] = true
+						expand(node.Children, id, depth+1)
+					}
+				}
+			}
+			if 1 <= maxDepth {
+				expand(grouped[urlIdx], groupID, 1)
 			}
 		}
+	} else {
+		var expand func(nodes []*analyzer.TreeNode, parentID string, depth int)
+		expand = func(nodes []*analyzer.TreeNode, parentID string, depth int) {
+			for i, node := range nodes {
+				if depth <= maxDepth {
+					id := makeNodeID(parentID, node.Name, i)
+					m.expandedState[id] = true
+					expand(node.Children, id, depth+1)
+				}
+			}
+		}
+		expand(m.roots, "", 0)
 	}
-	expand(m.roots, "", 0)
 }
 
 // Init implements tea.Model
@@ -211,7 +243,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.roots = analyzer.BuildTreeFromSpans(msg.spans, msg.globalStart, msg.globalEnd)
 		m.expandedState = make(map[string]bool)
 		m.hiddenState = make(map[string]bool)
-		m.expandAllToDepth(0)
+		if len(m.inputURLs) > 1 {
+			m.expandAllToDepth(1)
+		} else {
+			m.expandAllToDepth(0)
+		}
 		m.rebuildItems()
 		m.cursor = 0
 		m.selectionStart = -1
@@ -675,7 +711,7 @@ func addHorizontalPadding(content string, pad int) string {
 
 // rebuildItems rebuilds the flattened item list based on expanded state
 func (m *Model) rebuildItems() {
-	m.treeItems = BuildTreeItems(m.roots, m.expandedState)
+	m.treeItems = BuildTreeItems(m.roots, m.expandedState, m.inputURLs)
 	m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState)
 
 	// Ensure cursor is valid

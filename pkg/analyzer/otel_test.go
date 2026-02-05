@@ -104,7 +104,7 @@ func TestOTelSpanGeneration(t *testing.T) {
 
 		emitter.EmitMarkers(ctx, &RawData{
 			ReviewEvents: reviewEvents,
-		})
+		}, 0)
 
 		_, err := buildURLResult(ctx, parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, nil, mockClient, nil, 0)
 		assert.NoError(t, err)
@@ -142,7 +142,7 @@ func TestOTelSpanGeneration(t *testing.T) {
 
 		emitter.EmitMarkers(ctx, &RawData{
 			CommitTimeMs: &commitTimeMs,
-		})
+		}, 0)
 
 		_, err := buildURLResult(ctx, parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, nil, mockClient, nil, 0)
 		assert.NoError(t, err)

@@ -394,6 +394,8 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 // All icons are normalized to display width 2 for consistent alignment
 func getItemIcon(item TreeItem) string {
 	switch item.ItemType {
+	case ItemTypeURLGroup:
+		return "🔗" // width 2
 	case ItemTypeWorkflow:
 		return "📋" // width 2
 	case ItemTypeJob:

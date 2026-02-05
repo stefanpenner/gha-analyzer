@@ -70,7 +70,7 @@ func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProv
 		}
 
 		// Emit markers before processing runs to ensure chronological order in collector
-		emitter.EmitMarkers(ctx, rawData)
+		emitter.EmitMarkers(ctx, rawData, urlIndex)
 
 		// Calculate urlEarliestTime here to ensure it's consistent
 		urlEarliestTime := FindEarliestTimestamp(rawData.Runs)
@@ -283,6 +283,7 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 			attribute.String("github.conclusion", run.Conclusion),
 			attribute.String("github.repo", fmt.Sprintf("%s/%s", owner, repo)),
 			attribute.String("github.url", workflowURL),
+			attribute.Int("github.url_index", urlIndex),
 		),
 	)
 	defer span.End(trace.WithTimestamp(runEnd))

@@ -15,6 +15,7 @@ func TestItemTypeString(t *testing.T) {
 		itemType ItemType
 		expected string
 	}{
+		{ItemTypeURLGroup, "URLGroup"},
 		{ItemTypeWorkflow, "Workflow"},
 		{ItemTypeJob, "Job"},
 		{ItemTypeStep, "Step"},
@@ -68,7 +69,7 @@ func TestBuildTreeItems(t *testing.T) {
 			},
 		}
 
-		items := BuildTreeItems(roots, nil)
+		items := BuildTreeItems(roots, nil, nil)
 
 		assert.Len(t, items, 1)
 		assert.Equal(t, "CI", items[0].Name)
@@ -95,7 +96,7 @@ func TestBuildTreeItems(t *testing.T) {
 			},
 		}
 
-		items := BuildTreeItems(roots, nil)
+		items := BuildTreeItems(roots, nil, nil)
 
 		assert.Len(t, items, 1)
 		assert.True(t, items[0].HasChildren)
@@ -112,7 +113,7 @@ func TestBuildTreeItems(t *testing.T) {
 		}
 		expandedState := map[string]bool{"CI/0": true}
 
-		items := BuildTreeItems(roots, expandedState)
+		items := BuildTreeItems(roots, expandedState, nil)
 
 		assert.True(t, items[0].IsExpanded)
 	})
@@ -127,7 +128,7 @@ func TestBuildTreeItems(t *testing.T) {
 			},
 		}
 
-		items := BuildTreeItems(roots, nil)
+		items := BuildTreeItems(roots, nil, nil)
 
 		assert.Equal(t, "reviewer", items[0].User)
 		assert.Equal(t, "approved", items[0].EventType)

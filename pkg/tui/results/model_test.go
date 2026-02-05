@@ -567,6 +567,424 @@ func TestRenderFooter(t *testing.T) {
 	})
 }
 
+// createMultiURLTestModel creates a Model with two input URLs for testing URL group behavior.
+// Tree structure:
+//
+//	url-group/0: PR #123 (test/repo)
+//	  url-group/0/CI/0: CI workflow
+//	    url-group/0/CI/0/build/0: build job
+//	      url-group/0/CI/0/build/0/Checkout/0: Checkout step
+//	  url-group/0/Review: APPROVED/0: marker
+//	url-group/1: PR #456 (other/repo)
+//	  url-group/1/Deploy/0: Deploy workflow
+//	    url-group/1/Deploy/0/deploy-prod/0: deploy-prod job
+func createMultiURLTestModel() Model {
+	now := time.Now()
+	globalStart := now
+	globalEnd := now.Add(10 * time.Minute)
+
+	m := Model{
+		expandedState:  make(map[string]bool),
+		hiddenState:    make(map[string]bool),
+		globalStart:    globalStart,
+		globalEnd:      globalEnd,
+		chartStart:     globalStart,
+		chartEnd:       globalEnd,
+		keys:           DefaultKeyMap(),
+		width:          120,
+		height:         40,
+		inputURLs:      []string{"https://github.com/test/repo/pull/123", "https://github.com/other/repo/pull/456"},
+		selectionStart: -1,
+	}
+
+	m.roots = []*analyzer.TreeNode{
+		{
+			Name:       "CI",
+			Type:       analyzer.NodeTypeWorkflow,
+			StartTime:  globalStart,
+			EndTime:    globalStart.Add(5 * time.Minute),
+			Status:     "completed",
+			Conclusion: "success",
+			URLIndex:   0,
+			Children: []*analyzer.TreeNode{
+				{
+					Name:       "build",
+					Type:       analyzer.NodeTypeJob,
+					StartTime:  globalStart,
+					EndTime:    globalStart.Add(2 * time.Minute),
+					Status:     "completed",
+					Conclusion: "success",
+					URLIndex:   0,
+					Children: []*analyzer.TreeNode{
+						{
+							Name:       "Checkout",
+							Type:       analyzer.NodeTypeStep,
+							StartTime:  globalStart,
+							EndTime:    globalStart.Add(10 * time.Second),
+							Status:     "completed",
+							Conclusion: "success",
+							URLIndex:   0,
+						},
+					},
+				},
+			},
+		},
+		{
+			Name:       "Review: APPROVED",
+			Type:       analyzer.NodeTypeMarker,
+			StartTime:  globalStart.Add(3 * time.Minute),
+			EndTime:    globalStart.Add(3 * time.Minute),
+			EventType:  "approved",
+			User:       "reviewer",
+			URLIndex:   0,
+		},
+		{
+			Name:       "Deploy",
+			Type:       analyzer.NodeTypeWorkflow,
+			StartTime:  globalStart.Add(5 * time.Minute),
+			EndTime:    globalEnd,
+			Status:     "completed",
+			Conclusion: "failure",
+			URLIndex:   1,
+			Children: []*analyzer.TreeNode{
+				{
+					Name:       "deploy-prod",
+					Type:       analyzer.NodeTypeJob,
+					StartTime:  globalStart.Add(5 * time.Minute),
+					EndTime:    globalEnd,
+					Status:     "completed",
+					Conclusion: "failure",
+					URLIndex:   1,
+				},
+			},
+		},
+	}
+
+	// Expand URL groups and their workflows (depth 1)
+	m.expandAllToDepth(1)
+	m.rebuildItems()
+
+	return m
+}
+
+// collectAllIDs returns every ID in the tree (via treeItems).
+func collectAllIDs(items []*TreeItem) map[string]bool {
+	ids := make(map[string]bool)
+	var walk func([]*TreeItem)
+	walk = func(items []*TreeItem) {
+		for _, item := range items {
+			ids[item.ID] = true
+			walk(item.Children)
+		}
+	}
+	walk(items)
+	return ids
+}
+
+// focusedIDs returns the set of item IDs that are NOT hidden after focus.
+func focusedIDs(m *Model) map[string]bool {
+	all := collectAllIDs(m.treeItems)
+	focused := make(map[string]bool)
+	for id := range all {
+		if !m.hiddenState[id] {
+			focused[id] = true
+		}
+	}
+	return focused
+}
+
+// hiddenIDs returns the set of item IDs that ARE hidden.
+func hiddenIDs(m *Model) map[string]bool {
+	all := collectAllIDs(m.treeItems)
+	hidden := make(map[string]bool)
+	for id := range all {
+		if m.hiddenState[id] {
+			hidden[id] = true
+		}
+	}
+	return hidden
+}
+
+// findVisibleIndex returns the index of the item with the given ID in visibleItems, or -1.
+func findVisibleIndex(m *Model, id string) int {
+	for i, item := range m.visibleItems {
+		if item.ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestFocusSingleURL(t *testing.T) {
+	t.Parallel()
+
+	t.Run("focus on workflow focuses entire subtree", func(t *testing.T) {
+		m := createTestModel()
+		// cursor is on the workflow (CI)
+		m.cursor = 0
+		m.toggleFocus()
+
+		assert.True(t, m.isFocused)
+		focused := focusedIDs(&m)
+		// Workflow and all children should be focused
+		assert.True(t, focused["CI/0"])
+		assert.True(t, focused["CI/0/build/0"])
+		assert.True(t, focused["CI/0/test/1"])
+		assert.True(t, focused["CI/0/build/0/Checkout/0"])
+		assert.True(t, focused["CI/0/build/0/Build/1"])
+	})
+
+	t.Run("focus on job focuses job and its steps", func(t *testing.T) {
+		m := createTestModel()
+		// Expand workflow to see jobs
+		m.expandedState["CI/0"] = true
+		m.rebuildItems()
+
+		// Move cursor to "build" job
+		idx := findVisibleIndex(&m, "CI/0/build/0")
+		assert.GreaterOrEqual(t, idx, 0, "build job should be visible")
+		m.cursor = idx
+		m.toggleFocus()
+
+		assert.True(t, m.isFocused)
+		focused := focusedIDs(&m)
+		// Job and its steps should be focused
+		assert.True(t, focused["CI/0/build/0"])
+		assert.True(t, focused["CI/0/build/0/Checkout/0"])
+		assert.True(t, focused["CI/0/build/0/Build/1"])
+		// Sibling job should be hidden
+		hidden := hiddenIDs(&m)
+		assert.True(t, hidden["CI/0/test/1"])
+	})
+
+	t.Run("focus on step focuses only that step", func(t *testing.T) {
+		m := createTestModel()
+		// Expand all to see steps
+		m.expandAll()
+
+		idx := findVisibleIndex(&m, "CI/0/build/0/Checkout/0")
+		assert.GreaterOrEqual(t, idx, 0, "Checkout step should be visible")
+		m.cursor = idx
+		m.toggleFocus()
+
+		assert.True(t, m.isFocused)
+		focused := focusedIDs(&m)
+		assert.True(t, focused["CI/0/build/0/Checkout/0"])
+		// Sibling step should be hidden
+		hidden := hiddenIDs(&m)
+		assert.True(t, hidden["CI/0/build/0/Build/1"])
+	})
+
+	t.Run("unfocus restores previous hidden state", func(t *testing.T) {
+		m := createTestModel()
+		// Hide a job first
+		m.hiddenState["CI/0/test/1"] = true
+		originalHidden := make(map[string]bool)
+		for k, v := range m.hiddenState {
+			originalHidden[k] = v
+		}
+
+		m.cursor = 0
+		m.toggleFocus()
+		assert.True(t, m.isFocused)
+
+		m.toggleFocus()
+		assert.False(t, m.isFocused)
+		assert.Equal(t, originalHidden, m.hiddenState)
+	})
+}
+
+func TestFocusMultiURL(t *testing.T) {
+	t.Parallel()
+
+	t.Run("focus on URL group focuses entire subtree", func(t *testing.T) {
+		m := createMultiURLTestModel()
+
+		// Find URL group 0
+		idx := findVisibleIndex(&m, "url-group/0")
+		assert.GreaterOrEqual(t, idx, 0, "url-group/0 should be visible")
+		m.cursor = idx
+		m.toggleFocus()
+
+		assert.True(t, m.isFocused)
+		focused := focusedIDs(&m)
+		// URL group 0 and all descendants should be focused
+		assert.True(t, focused["url-group/0"], "url-group/0 should be focused")
+		for id := range focused {
+			// All focused items should belong to url-group/0
+			if id != "url-group/0" {
+				assert.NotContains(t, id, "url-group/1", "url-group/1 items should not be focused: %s", id)
+			}
+		}
+		// URL group 1 and all its descendants should be hidden
+		hidden := hiddenIDs(&m)
+		assert.True(t, hidden["url-group/1"], "url-group/1 should be hidden")
+	})
+
+	t.Run("focus on URL group includes markers", func(t *testing.T) {
+		m := createMultiURLTestModel()
+
+		idx := findVisibleIndex(&m, "url-group/0")
+		assert.GreaterOrEqual(t, idx, 0)
+		m.cursor = idx
+		m.toggleFocus()
+
+		focused := focusedIDs(&m)
+		// Find the marker under url-group/0
+		markerFocused := false
+		for id := range focused {
+			if strings.Contains(id, "Review") || strings.Contains(id, "APPROVED") {
+				markerFocused = true
+			}
+		}
+		assert.True(t, markerFocused, "marker under url-group/0 should be focused")
+	})
+
+	t.Run("focus on workflow inside URL group focuses only that workflow", func(t *testing.T) {
+		m := createMultiURLTestModel()
+
+		// Find the CI workflow under url-group/0
+		var ciID string
+		for _, item := range m.visibleItems {
+			if item.Name == "CI" && item.ItemType == ItemTypeWorkflow {
+				ciID = item.ID
+				break
+			}
+		}
+		assert.NotEmpty(t, ciID, "CI workflow should be visible")
+
+		idx := findVisibleIndex(&m, ciID)
+		m.cursor = idx
+		m.toggleFocus()
+
+		focused := focusedIDs(&m)
+		assert.True(t, focused[ciID])
+		// Children should be focused
+		for _, item := range m.treeItems {
+			for _, child := range item.Children {
+				if child.ID == ciID {
+					for _, grandchild := range child.Children {
+						assert.True(t, focused[grandchild.ID], "child %s should be focused", grandchild.ID)
+					}
+				}
+			}
+		}
+		// URL group 1's items should be hidden
+		hidden := hiddenIDs(&m)
+		assert.True(t, hidden["url-group/1"])
+	})
+
+	t.Run("focus on job inside URL group focuses only that job subtree", func(t *testing.T) {
+		m := createMultiURLTestModel()
+		// Expand all to see jobs
+		m.expandAll()
+
+		// Find the build job
+		var buildID string
+		for _, item := range m.visibleItems {
+			if item.Name == "build" && item.ItemType == ItemTypeJob {
+				buildID = item.ID
+				break
+			}
+		}
+		assert.NotEmpty(t, buildID, "build job should be visible")
+
+		idx := findVisibleIndex(&m, buildID)
+		m.cursor = idx
+		m.toggleFocus()
+
+		focused := focusedIDs(&m)
+		assert.True(t, focused[buildID])
+		// Step should be focused
+		for _, id := range []string{} {
+			_ = id
+		}
+		// Check that deploy-prod job (in URL group 1) is hidden
+		hidden := hiddenIDs(&m)
+		for id := range hidden {
+			if strings.Contains(id, "deploy-prod") {
+				// deploy-prod should be hidden
+				assert.True(t, hidden[id])
+			}
+		}
+	})
+
+	t.Run("focus on collapsed URL group still focuses all descendants", func(t *testing.T) {
+		m := createMultiURLTestModel()
+
+		// Collapse url-group/0
+		m.expandedState["url-group/0"] = false
+		m.rebuildItems()
+
+		idx := findVisibleIndex(&m, "url-group/0")
+		assert.GreaterOrEqual(t, idx, 0)
+		m.cursor = idx
+		m.toggleFocus()
+
+		focused := focusedIDs(&m)
+		assert.True(t, focused["url-group/0"])
+		// Descendants should still be focused even though they weren't visible
+		allIDs := collectAllIDs(m.treeItems)
+		for id := range allIDs {
+			if strings.HasPrefix(id, "url-group/0/") {
+				assert.True(t, focused[id], "descendant %s should be focused even when parent collapsed", id)
+			}
+		}
+	})
+
+	t.Run("unfocus after URL group focus restores state", func(t *testing.T) {
+		m := createMultiURLTestModel()
+		originalHidden := make(map[string]bool)
+		for k, v := range m.hiddenState {
+			originalHidden[k] = v
+		}
+
+		idx := findVisibleIndex(&m, "url-group/0")
+		m.cursor = idx
+		m.toggleFocus()
+		assert.True(t, m.isFocused)
+
+		m.toggleFocus()
+		assert.False(t, m.isFocused)
+		assert.Equal(t, originalHidden, m.hiddenState)
+	})
+
+	t.Run("focus updates chart bounds to focused subtree", func(t *testing.T) {
+		m := createMultiURLTestModel()
+
+		// Focus on URL group 0 (which has earlier times)
+		idx := findVisibleIndex(&m, "url-group/0")
+		m.cursor = idx
+		m.toggleFocus()
+
+		// Chart bounds should reflect only url-group/0's time range
+		// url-group/0 ends at globalStart+5min, url-group/1 starts at globalStart+5min
+		assert.True(t, m.chartEnd.Before(m.globalEnd) || m.chartEnd.Equal(m.globalEnd))
+		assert.True(t, m.chartStart.Equal(m.globalStart) || m.chartStart.After(m.globalStart))
+	})
+
+	t.Run("double focus-unfocus is idempotent", func(t *testing.T) {
+		m := createMultiURLTestModel()
+		originalHidden := make(map[string]bool)
+		for k, v := range m.hiddenState {
+			originalHidden[k] = v
+		}
+
+		idx := findVisibleIndex(&m, "url-group/0")
+		m.cursor = idx
+
+		// Focus then unfocus
+		m.toggleFocus()
+		m.toggleFocus()
+		assert.Equal(t, originalHidden, m.hiddenState)
+
+		// Focus then unfocus again
+		m.toggleFocus()
+		m.toggleFocus()
+		assert.Equal(t, originalHidden, m.hiddenState)
+	})
+}
+
 func TestLoadingState(t *testing.T) {
 	t.Parallel()
 

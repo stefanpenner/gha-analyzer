@@ -30,6 +30,7 @@ type TreeNode struct {
 	IsRequired  bool
 	User        string // for markers (reviewer, merged by, etc.)
 	EventType   string // for markers (merged, approved, comment, etc.)
+	URLIndex    int    // index of the input URL this node belongs to
 	Children    []*TreeNode
 }
 
@@ -105,6 +106,14 @@ func BuildTreeFromSpans(spans []trace.ReadOnlySpan, globalEarliest, globalLatest
 		spanID := sa.span.SpanContext().SpanID().String()
 		spanMap[spanID] = sa
 
+		urlIndex := 0
+		for _, a := range sa.span.Attributes() {
+			if string(a.Key) == "github.url_index" {
+				urlIndex = int(a.Value.AsInt64())
+				break
+			}
+		}
+
 		node := &TreeNode{
 			Type:       NodeType(sa.attrs["type"]),
 			Name:       sa.span.Name(),
@@ -116,6 +125,7 @@ func BuildTreeFromSpans(spans []trace.ReadOnlySpan, globalEarliest, globalLatest
 			IsRequired: sa.attrs["github.is_required"] == "true",
 			User:       sa.attrs["github.user"],
 			EventType:  sa.attrs["github.event_type"],
+			URLIndex:   urlIndex,
 			Children:   []*TreeNode{},
 		}
 		nodes[spanID] = node

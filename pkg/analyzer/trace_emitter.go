@@ -20,7 +20,7 @@ func NewTraceEmitter(tracer trace.Tracer) *TraceEmitter {
 	return &TraceEmitter{tracer: tracer}
 }
 
-func (e *TraceEmitter) EmitMarkers(ctx context.Context, data *RawData) {
+func (e *TraceEmitter) EmitMarkers(ctx context.Context, data *RawData, urlIndex int) {
 	// Emit OTel spans for review and merge events
 	for _, event := range data.ReviewEvents {
 		eventTime, _ := utils.ParseTime(event.Time)
@@ -49,6 +49,7 @@ func (e *TraceEmitter) EmitMarkers(ctx context.Context, data *RawData) {
 				attribute.String("github.url", event.URL),
 				attribute.String("github.event_id", fmt.Sprintf("%s-%s-%s-%s", event.Type, event.Time, firstNonEmpty(event.Reviewer, event.MergedBy), event.URL)),
 				attribute.String("github.event_time", event.Time),
+				attribute.Int("github.url_index", urlIndex),
 			),
 		)
 		span.End(trace.WithTimestamp(eventTime.Add(time.Millisecond)))
@@ -61,6 +62,7 @@ func (e *TraceEmitter) EmitMarkers(ctx context.Context, data *RawData) {
 			trace.WithAttributes(
 				attribute.String("type", "marker"),
 				attribute.String("github.event_type", "commit"),
+				attribute.Int("github.url_index", urlIndex),
 			),
 		)
 		span.End(trace.WithTimestamp(t.Add(time.Millisecond)))
@@ -73,6 +75,7 @@ func (e *TraceEmitter) EmitMarkers(ctx context.Context, data *RawData) {
 			trace.WithAttributes(
 				attribute.String("type", "marker"),
 				attribute.String("github.event_type", "push"),
+				attribute.Int("github.url_index", urlIndex),
 			),
 		)
 		span.End(trace.WithTimestamp(t.Add(time.Millisecond)))
