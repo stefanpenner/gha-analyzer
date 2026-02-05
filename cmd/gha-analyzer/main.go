@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -169,8 +170,17 @@ func main() {
 		}
 	}
 
+	// Fall back to `gh auth token` if gh CLI is available
 	if token == "" {
-		printErrorMsg("GITHUB_TOKEN environment variable or token argument is required")
+		if ghPath, err := exec.LookPath("gh"); err == nil {
+			if out, err := exec.Command(ghPath, "auth", "token").Output(); err == nil {
+				token = strings.TrimSpace(string(out))
+			}
+		}
+	}
+
+	if token == "" {
+		printErrorMsg("GITHUB_TOKEN environment variable or token argument is required.\n  Tip: install the GitHub CLI (gh) and run `gh auth login` to authenticate automatically.")
 		printUsage()
 		os.Exit(1)
 	}
