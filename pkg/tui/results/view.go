@@ -329,47 +329,64 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	// Wrap name in hyperlink if URL is available (must be done after width calculation)
 	displayName := hyperlink(item.URL, name)
 
-	// Style duration in gray (muted)
-	styledDuration := ""
-	if durationStr != "" {
-		styledDuration = FooterStyle.Render(durationStr)
+	// Build tree part content
+	// When selected, every segment must carry the selection background because
+	// each lipgloss Render() ends with an ANSI reset that kills the outer background.
+	var treePart string
+	if isSelected {
+		sel := SelectedStyle
+		if isHidden {
+			sel = HiddenSelectedStyle
+		}
+		selDur := FooterStyle.Background(ColorSelectionBg)
+		prefix := fmt.Sprintf("%s%s %s %s", indent, expandIndicator, icon, displayName)
+		treePart = sel.Render(prefix)
+		if durationStr != "" {
+			treePart += selDur.Render(durationStr)
+		}
+		treePart += sel.Render(badges+" ") + getStyledStatusIconWithBg(item, ColorSelectionBg)
+	} else {
+		styledDuration := ""
+		if durationStr != "" {
+			styledDuration = FooterStyle.Render(durationStr)
+		}
+		styledStatusIcon := getStyledStatusIcon(item)
+		treePart = fmt.Sprintf("%s%s %s %s%s%s %s", indent, expandIndicator, icon, displayName, styledDuration, badges, styledStatusIcon)
 	}
-
-	// Build tree part with hyperlinked name and styled duration
-	treePart := fmt.Sprintf("%s%s %s %s%s%s %s", indent, expandIndicator, icon, displayName, styledDuration, badges, statusIcon)
-	treePart += strings.Repeat(" ", treePadding)
 
 	// Render timeline bar (empty if hidden, dimmed colors if selected, full colors otherwise)
 	// For normal items, URL is passed so bar characters are clickable.
 	// For selected/hidden items, URL is omitted since we apply row-level hyperlink at the end.
 	var timelineBar string
-	if isHidden {
+	if isHidden && isSelected {
+		// Hidden + selected: empty timeline with selection background
+		timelineBar = SelectedBgStyle.Render(strings.Repeat(" ", timelineW))
+	} else if isHidden {
 		timelineBar = strings.Repeat(" ", timelineW)
 	} else if isSelected {
-		// Render with dimmed colors to show status while selected
+		// Render with dimmed colors and selection background
 		timelineBar = RenderTimelineBarSelected(item, m.chartStart, m.chartEnd, timelineW, "")
 	} else {
 		// Normal: full colors, pass URL so bar is clickable
 		timelineBar = RenderTimelineBar(item, m.chartStart, m.chartEnd, timelineW, item.URL)
 	}
 
-	// Combine with styled borders (borders always gray)
-	// Middle separator is subtle, outer borders are normal
+	// Combine with styled borders
 	midSep := SeparatorStyle.Render("│")
 
+	// Padding is rendered separately so that inner ANSI resets (from styled
+	// status icons, durations, etc.) don't kill the selection background.
 	if isSelected && isHidden {
-		// Hidden and selected: gray text with selection background
-		// Timeline is empty for hidden items, so just apply HiddenSelectedStyle
-		return BorderStyle.Render("│") + HiddenSelectedStyle.Render(treePart) + midSep + timelineBar + BorderStyle.Render("│")
+		pad := SelectedBgStyle.Render(strings.Repeat(" ", treePadding))
+		return BorderStyle.Render("│") + treePart + pad + midSep + timelineBar + BorderStyle.Render("│")
 	} else if isSelected {
-		// Selected but not hidden: white text with selection background
-		// Timeline bar already has dimmed status colors, don't override with SelectedStyle
-		return BorderStyle.Render("│") + SelectedStyle.Render(treePart) + midSep + timelineBar + BorderStyle.Render("│")
+		pad := SelectedBgStyle.Render(strings.Repeat(" ", treePadding))
+		return BorderStyle.Render("│") + treePart + pad + midSep + timelineBar + BorderStyle.Render("│")
 	} else if isHidden {
-		// Hidden but not selected: gray text, no background
+		treePart += strings.Repeat(" ", treePadding)
 		return BorderStyle.Render("│") + HiddenStyle.Render(treePart) + midSep + timelineBar + BorderStyle.Render("│")
 	}
-	// Normal: no special styling
+	treePart += strings.Repeat(" ", treePadding)
 	return BorderStyle.Render("│") + treePart + midSep + timelineBar + BorderStyle.Render("│")
 }
 
@@ -417,6 +434,45 @@ func getStatusIcon(item TreeItem) string {
 		return "○"
 	default:
 		return " "
+	}
+}
+
+// getStyledStatusIcon returns the status icon with color applied
+func getStyledStatusIcon(item TreeItem) string {
+	switch item.Status {
+	case "in_progress", "queued", "waiting":
+		return PendingStyle.Render("◷")
+	}
+
+	switch item.Conclusion {
+	case "success":
+		return SuccessStyle.Render("✓")
+	case "failure":
+		return FailureStyle.Render("✗")
+	case "skipped", "cancelled":
+		return SkippedStyle.Render("○")
+	default:
+		return " "
+	}
+}
+
+// getStyledStatusIconWithBg returns the status icon with color and background
+func getStyledStatusIconWithBg(item TreeItem, bg lipgloss.Color) string {
+	bgStyle := lipgloss.NewStyle().Background(bg)
+	switch item.Status {
+	case "in_progress", "queued", "waiting":
+		return PendingStyle.Background(bg).Render("◷")
+	}
+
+	switch item.Conclusion {
+	case "success":
+		return SuccessStyle.Background(bg).Render("✓")
+	case "failure":
+		return FailureStyle.Background(bg).Render("✗")
+	case "skipped", "cancelled":
+		return SkippedStyle.Background(bg).Render("○")
+	default:
+		return bgStyle.Render(" ")
 	}
 }
 

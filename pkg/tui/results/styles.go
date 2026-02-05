@@ -12,8 +12,9 @@ var (
 	ColorGray     = lipgloss.Color("#626262")
 	ColorGrayDim  = lipgloss.Color("#404040")
 	ColorWhite    = lipgloss.Color("#FFFFFF")
-	ColorOffWhite = lipgloss.Color("#D0D0D0")
-	ColorMagenta  = lipgloss.Color("#C678DD")
+	ColorOffWhite    = lipgloss.Color("#D0D0D0")
+	ColorMagenta     = lipgloss.Color("#C678DD")
+	ColorSelectionBg = lipgloss.Color("#2D3B4D")
 
 	// Dimmed colors for selected state (darker shades that still show status)
 	ColorGreenDim  = lipgloss.Color("#1A7048")
@@ -46,12 +47,16 @@ var (
 	SelectedStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(ColorWhite).
-			Background(lipgloss.Color("#3D3D3D"))
+			Background(ColorSelectionBg)
 
 	// HiddenSelectedStyle combines hidden (gray text) with selection background
 	HiddenSelectedStyle = lipgloss.NewStyle().
 				Foreground(ColorGray).
-				Background(lipgloss.Color("#3D3D3D"))
+				Background(ColorSelectionBg)
+
+	// SelectedBgStyle applies only the selection background (no foreground override)
+	SelectedBgStyle = lipgloss.NewStyle().
+			Background(ColorSelectionBg)
 
 	NormalStyle = lipgloss.NewStyle()
 
@@ -100,22 +105,27 @@ var (
 			Foreground(ColorGray)
 )
 
-// Timeline bar colors for selected state (dimmed but still show status)
+// Timeline bar colors for selected state (dimmed but still show status, with selection background)
 var (
 	BarSuccessSelectedStyle = lipgloss.NewStyle().
-				Foreground(ColorGreenDim)
+				Foreground(ColorGreenDim).
+				Background(ColorSelectionBg)
 
 	BarFailureSelectedStyle = lipgloss.NewStyle().
-				Foreground(ColorRedDim)
+				Foreground(ColorRedDim).
+				Background(ColorSelectionBg)
 
 	BarFailureNonBlockingSelectedStyle = lipgloss.NewStyle().
-						Foreground(ColorYellowDim)
+						Foreground(ColorYellowDim).
+						Background(ColorSelectionBg)
 
 	BarPendingSelectedStyle = lipgloss.NewStyle().
-				Foreground(ColorBlueDim)
+				Foreground(ColorBlueDim).
+				Background(ColorSelectionBg)
 
 	BarSkippedSelectedStyle = lipgloss.NewStyle().
-				Foreground(ColorGrayDim)
+				Foreground(ColorGrayDim).
+				Background(ColorSelectionBg)
 )
 
 // Time header style

@@ -164,10 +164,10 @@ func RenderTimelineBar(item TreeItem, globalStart, globalEnd time.Time, width in
 	return leftPad + timelineHyperlink(url, styledBar) + rightPad
 }
 
-// RenderTimelineBarSelected renders a timeline bar with dimmed colors for selected items
+// RenderTimelineBarSelected renders a timeline bar with dimmed colors and selection background
 func RenderTimelineBarSelected(item TreeItem, globalStart, globalEnd time.Time, width int, url string) string {
 	if globalEnd.Before(globalStart) || globalEnd.Equal(globalStart) || width <= 0 {
-		return strings.Repeat(" ", width)
+		return SelectedBgStyle.Render(strings.Repeat(" ", width))
 	}
 
 	totalDuration := globalEnd.Sub(globalStart)
@@ -224,11 +224,11 @@ func RenderTimelineBarSelected(item TreeItem, globalStart, globalEnd time.Time, 
 
 	barChar, style := getBarStyleSelected(item)
 
-	leftPad := strings.Repeat(" ", startPos)
+	// Apply selection background to padding and bar
+	leftPad := SelectedBgStyle.Render(strings.Repeat(" ", startPos))
 	bar := strings.Repeat(barChar, barLength)
-	rightPad := strings.Repeat(" ", width-startPos-barLength)
+	rightPad := SelectedBgStyle.Render(strings.Repeat(" ", width-startPos-barLength))
 
-	// Apply dimmed style and wrap in hyperlink
 	styledBar := style.Render(bar)
 	return leftPad + timelineHyperlink(url, styledBar) + rightPad
 }
