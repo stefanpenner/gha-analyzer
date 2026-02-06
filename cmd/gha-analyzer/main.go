@@ -14,10 +14,11 @@ import (
 	otelexport "github.com/stefanpenner/gha-analyzer/pkg/export/otel"
 	perfettoexport "github.com/stefanpenner/gha-analyzer/pkg/export/perfetto"
 	"github.com/stefanpenner/gha-analyzer/pkg/export/terminal"
-	"github.com/stefanpenner/gha-analyzer/pkg/perfetto"
 	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
 	"github.com/stefanpenner/gha-analyzer/pkg/ingest/polling"
+	"github.com/stefanpenner/gha-analyzer/pkg/ingest/webhook"
 	"github.com/stefanpenner/gha-analyzer/pkg/output"
+	"github.com/stefanpenner/gha-analyzer/pkg/perfetto"
 	"github.com/stefanpenner/gha-analyzer/pkg/tui"
 	tuiresults "github.com/stefanpenner/gha-analyzer/pkg/tui/results"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
@@ -75,69 +76,100 @@ func printErrorMsg(message string) {
 	fmt.Fprintf(os.Stderr, "%sError: %s%s\n", colorRed, message, colorReset)
 }
 
-func main() {
-	args := os.Args[1:]
-	perfettoFile := ""
-	openInPerfetto := false
-	openInOTel := false
-	otelEndpoint := ""
-	tuiMode := isTerminal() // TUI only enabled if running in a terminal
-	clearCache := false
-	var window time.Duration
+type config struct {
+	urls             []string
+	perfettoFile     string
+	openInPerfetto   bool
+	openInOTel       bool
+	otelEndpoint     string
+	otelStdout       bool
+	otelGRPCEndpoint string
+	tuiMode          bool
+	clearCache       bool
+	window           time.Duration
+	showHelp         bool
+}
 
-	filtered := []string{}
+func parseArgs(args []string, terminal bool) (config, error) {
+	cfg := config{
+		tuiMode: terminal,
+	}
+
 	for _, arg := range args {
 		if arg == "help" || arg == "--help" || arg == "-h" {
-			printUsage()
-			os.Exit(0)
+			cfg.showHelp = true
+			continue
 		}
 		if strings.HasPrefix(arg, "--perfetto=") {
-			perfettoFile = strings.TrimPrefix(arg, "--perfetto=")
+			cfg.perfettoFile = strings.TrimPrefix(arg, "--perfetto=")
 			continue
 		}
 		if strings.HasPrefix(arg, "--window=") {
 			d, err := time.ParseDuration(strings.TrimPrefix(arg, "--window="))
 			if err != nil {
-				printError(err, fmt.Sprintf("invalid window duration %s", arg))
-				os.Exit(1)
+				return cfg, fmt.Errorf("invalid window duration %s: %w", arg, err)
 			}
-			window = d
+			cfg.window = d
 			continue
 		}
 		if arg == "--open-in-perfetto" {
-			openInPerfetto = true
+			cfg.openInPerfetto = true
 			continue
 		}
 		if arg == "--open-in-otel" {
-			openInOTel = true
+			cfg.openInOTel = true
 			continue
 		}
 		if strings.HasPrefix(arg, "--otel=") {
-			otelEndpoint = strings.TrimPrefix(arg, "--otel=")
+			cfg.otelEndpoint = strings.TrimPrefix(arg, "--otel=")
 			continue
 		}
 		if arg == "--otel" {
-			otelEndpoint = "localhost:4318"
+			cfg.otelStdout = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--otel-grpc=") {
+			cfg.otelGRPCEndpoint = strings.TrimPrefix(arg, "--otel-grpc=")
+			continue
+		}
+		if arg == "--otel-grpc" {
+			cfg.otelGRPCEndpoint = "localhost:4317"
 			continue
 		}
 		if arg == "--tui" {
-			tuiMode = true
+			cfg.tuiMode = true
 			continue
 		}
 		if arg == "--no-tui" || arg == "--notui" {
-			tuiMode = false
+			cfg.tuiMode = false
 			continue
 		}
 		if arg == "--clear-cache" {
-			clearCache = true
+			cfg.clearCache = true
 			continue
 		}
-		filtered = append(filtered, arg)
+		cfg.urls = append(cfg.urls, arg)
 	}
-	args = filtered
+
+	return cfg, nil
+}
+
+func main() {
+	cfg, err := parseArgs(os.Args[1:], isTerminal())
+	if err != nil {
+		printErrorMsg(err.Error())
+		os.Exit(1)
+	}
+
+	if cfg.showHelp {
+		printUsage()
+		os.Exit(0)
+	}
+
+	args := cfg.urls
 
 	// Handle --clear-cache flag
-	if clearCache {
+	if cfg.clearCache {
 		cacheDir := githubapi.DefaultCacheDir()
 		if err := os.RemoveAll(cacheDir); err != nil {
 			printError(err, "failed to clear cache")
@@ -149,8 +181,26 @@ func main() {
 		}
 	}
 
+	// If no URL args and stdin is piped, read webhook from stdin
+	if len(args) == 0 && !isStdinTerminal() {
+		fmt.Fprintf(os.Stderr, "Reading webhook from stdin...\n")
+		urls, err := webhook.ParseWebhook(os.Stdin)
+		if err != nil {
+			printError(err, "failed to parse webhook")
+			os.Exit(1)
+		}
+		args = urls
+	}
+
+	// When --otel stdout is used, disable TUI so output goes to stdout cleanly
+	if cfg.otelStdout {
+		cfg.tuiMode = false
+	}
+
+	perfettoFile := cfg.perfettoFile
+
 	// Auto-generate perfetto file if --open-in-perfetto is used without --perfetto
-	if openInPerfetto && perfettoFile == "" {
+	if cfg.openInPerfetto && perfettoFile == "" {
 		tmpFile, err := os.CreateTemp("", "gha-trace-*.json")
 		if err == nil {
 			perfettoFile = tmpFile.Name()
@@ -206,13 +256,27 @@ func main() {
 	}
 
 	if perfettoFile != "" {
-		exporters = append(exporters, perfettoexport.NewExporter(os.Stderr, perfettoFile, openInPerfetto))
+		exporters = append(exporters, perfettoexport.NewExporter(os.Stderr, perfettoFile, cfg.openInPerfetto))
 	}
 
-	if otelEndpoint != "" {
-		otelExporter, err := otelexport.NewExporter(ctx, otelEndpoint)
+	if cfg.otelStdout {
+		stdoutExporter, err := otelexport.NewStdoutExporter(os.Stdout)
+		if err == nil {
+			exporters = append(exporters, stdoutExporter)
+		}
+	}
+
+	if cfg.otelEndpoint != "" {
+		otelExporter, err := otelexport.NewExporter(ctx, cfg.otelEndpoint)
 		if err == nil {
 			exporters = append(exporters, otelExporter)
+		}
+	}
+
+	if cfg.otelGRPCEndpoint != "" {
+		grpcExporter, err := otelexport.NewGRPCExporter(ctx, cfg.otelGRPCEndpoint)
+		if err == nil {
+			exporters = append(exporters, grpcExporter)
 		}
 	}
 
@@ -224,7 +288,7 @@ func main() {
 
 	// 5. Run Ingestor
 	ingestor := polling.NewPollingIngestor(client, args, progress, analyzer.AnalyzeOptions{
-		Window: window,
+		Window: cfg.window,
 	})
 	results, globalEarliest, globalLatest, err := ingestor.Ingest(ctx)
 	
@@ -245,7 +309,7 @@ func main() {
 	}
 
 	// If TUI mode is enabled, launch interactive TUI
-	if tuiMode {
+	if cfg.tuiMode {
 		// Handle perfetto export before TUI starts (so it opens immediately)
 		if perfettoFile != "" {
 			combined := analyzer.CalculateCombinedMetrics(results, sumRuns(results), collectStarts(results), collectEnds(results))
@@ -253,7 +317,7 @@ func main() {
 			for _, res := range results {
 				allTraceEvents = append(allTraceEvents, res.TraceEvents...)
 			}
-			if err := perfetto.WriteTrace(os.Stderr, results, combined, allTraceEvents, globalEarliest, perfettoFile, openInPerfetto, spans); err != nil {
+			if err := perfetto.WriteTrace(os.Stderr, results, combined, allTraceEvents, globalEarliest, perfettoFile, cfg.openInPerfetto, spans); err != nil {
 				printError(err, "writing perfetto trace failed")
 			}
 		}
@@ -296,7 +360,7 @@ func main() {
 			// Re-run ingestion
 			reloadClient := githubapi.NewClient(githubapi.NewContext(token))
 			reloadIngestor := polling.NewPollingIngestor(reloadClient, args, progressReporter, analyzer.AnalyzeOptions{
-				Window: window,
+				Window: cfg.window,
 			})
 			_, reloadEarliest, reloadLatest, err := reloadIngestor.Ingest(ctx)
 			if err != nil {
@@ -346,13 +410,13 @@ func main() {
 	for _, res := range results {
 		allTraceEvents = append(allTraceEvents, res.TraceEvents...)
 	}
-	output.OutputCombinedResults(os.Stderr, results, combined, allTraceEvents, globalEarliest, globalLatest, perfettoFile, openInPerfetto, spans)
+	output.OutputCombinedResults(os.Stderr, results, combined, allTraceEvents, globalEarliest, globalLatest, perfettoFile, cfg.openInPerfetto, spans)
 
 	if err := pipeline.Finish(ctx); err != nil {
 		printError(err, "finalizing pipeline failed")
 	}
 
-	if openInOTel {
+	if cfg.openInOTel {
 		fmt.Println("Opening OTel Desktop Viewer...")
 		_ = utils.OpenBrowser("http://localhost:8000")
 	}
@@ -391,7 +455,9 @@ func printUsage() {
 	fmt.Println("  --no-tui                  Disable interactive TUI, use CLI output instead")
 	fmt.Println("  --perfetto=<file.json>    Save trace for Perfetto.dev analysis")
 	fmt.Println("  --open-in-perfetto        Automatically open the generated trace in Perfetto UI")
-	fmt.Println("  --otel[=<endpoint>]       Export traces to OTel collector (default: localhost:4318)")
+	fmt.Println("  --otel                    Write OTel spans as JSON to stdout")
+	fmt.Println("  --otel=<endpoint>         Export traces via OTLP/HTTP (default port: 4318)")
+	fmt.Println("  --otel-grpc[=<endpoint>]  Export traces via OTLP/gRPC (default: localhost:4317)")
 	fmt.Println("  --open-in-otel            Automatically open the OTel Desktop Viewer")
 	fmt.Println("  --window=<duration>       Only show events within <duration> of merge/latest activity (e.g. 24h, 2h)")
 	fmt.Println("  --clear-cache             Clear the HTTP cache (can be combined with other flags)")
@@ -409,6 +475,15 @@ func printUsage() {
 func isTerminal() bool {
 	// Check if stdout is a terminal using file mode
 	info, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
+}
+
+// isStdinTerminal checks if stdin is connected to a terminal
+func isStdinTerminal() bool {
+	info, err := os.Stdin.Stat()
 	if err != nil {
 		return false
 	}
