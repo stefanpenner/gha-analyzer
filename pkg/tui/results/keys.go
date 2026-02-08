@@ -21,6 +21,8 @@ type KeyMap struct {
 	Perfetto    key.Binding
 	Search      key.Binding
 	Mouse       key.Binding
+	GoTop       key.Binding
+	GoBottom    key.Binding
 	Help        key.Binding
 	Quit        key.Binding
 }
@@ -96,6 +98,14 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("m"),
 			key.WithHelp("m", "toggle mouse"),
 		),
+		GoTop: key.NewBinding(
+			key.WithKeys("g"),
+			key.WithHelp("gg", "go to top"),
+		),
+		GoBottom: key.NewBinding(
+			key.WithKeys("G"),
+			key.WithHelp("GG", "go to bottom"),
+		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
 			key.WithHelp("?", "help"),
@@ -109,7 +119,7 @@ func DefaultKeyMap() KeyMap {
 
 // ShortHelp returns a short help string for the footer
 func (k KeyMap) ShortHelp() string {
-	return "↑↓ nav • ←→ expand/collapse • space toggle • / search • o open • ? help • q quit"
+	return "↑↓ nav • gg/GG top/bottom • ←→ expand/collapse • space toggle • / search • o open • ? help • q quit"
 }
 
 // FullHelp returns all key bindings for the help modal
@@ -126,6 +136,8 @@ func (k KeyMap) FullHelp() [][]string {
 		{"o", "Open in browser"},
 		{"i", "Item info"},
 		{"f", "Focus on selection"},
+		{"gg", "Go to top"},
+		{"GG", "Go to bottom"},
 		{"e", "Expand all"},
 		{"c", "Collapse all"},
 		{"r", "Reload data"},
