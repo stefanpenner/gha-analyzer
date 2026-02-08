@@ -20,6 +20,7 @@ func TestItemTypeString(t *testing.T) {
 		{ItemTypeJob, "Job"},
 		{ItemTypeStep, "Step"},
 		{ItemTypeMarker, "Marker"},
+		{ItemTypeActivityGroup, "ActivityGroup"},
 		{ItemType(99), "Unknown"},
 	}
 
@@ -118,7 +119,7 @@ func TestBuildTreeItems(t *testing.T) {
 		assert.True(t, items[0].IsExpanded)
 	})
 
-	t.Run("preserves marker attributes", func(t *testing.T) {
+	t.Run("preserves marker attributes under Activity group", func(t *testing.T) {
 		roots := []*analyzer.TreeNode{
 			{
 				Name:      "Approval",
@@ -130,9 +131,126 @@ func TestBuildTreeItems(t *testing.T) {
 
 		items := BuildTreeItems(roots, nil, nil)
 
-		assert.Equal(t, "reviewer", items[0].User)
-		assert.Equal(t, "approved", items[0].EventType)
-		assert.Equal(t, ItemTypeMarker, items[0].ItemType)
+		assert.Len(t, items, 1)
+		assert.Equal(t, ItemTypeActivityGroup, items[0].ItemType)
+		assert.Equal(t, "Activity", items[0].Name)
+		assert.True(t, items[0].HasChildren)
+		assert.Len(t, items[0].Children, 1)
+
+		marker := items[0].Children[0]
+		assert.Equal(t, "reviewer", marker.User)
+		assert.Equal(t, "approved", marker.EventType)
+		assert.Equal(t, ItemTypeMarker, marker.ItemType)
+	})
+}
+
+func TestBuildTreeItemsPartitioning(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+
+	t.Run("workflows at root, markers grouped under Activity", func(t *testing.T) {
+		roots := []*analyzer.TreeNode{
+			{Name: "Tests", Type: analyzer.NodeTypeWorkflow, StartTime: now, EndTime: now.Add(time.Minute)},
+			{Name: "approved", Type: analyzer.NodeTypeMarker, User: "bob", EventType: "approved", StartTime: now.Add(2 * time.Minute), EndTime: now.Add(2 * time.Minute)},
+			{Name: "Deploy", Type: analyzer.NodeTypeWorkflow, StartTime: now.Add(time.Minute), EndTime: now.Add(3 * time.Minute)},
+			{Name: "merged", Type: analyzer.NodeTypeMarker, User: "alice", EventType: "merged", StartTime: now.Add(4 * time.Minute), EndTime: now.Add(4 * time.Minute)},
+		}
+
+		items := BuildTreeItems(roots, nil, nil)
+
+		// Should have 1 Activity group + 2 workflows = 3 root items
+		// Activity group comes first (collapsed by default)
+		assert.Len(t, items, 3)
+		assert.Equal(t, ItemTypeActivityGroup, items[0].ItemType)
+		assert.Equal(t, "Activity", items[0].Name)
+		assert.Equal(t, ItemTypeWorkflow, items[1].ItemType)
+		assert.Equal(t, "Tests", items[1].Name)
+		assert.Equal(t, ItemTypeWorkflow, items[2].ItemType)
+		assert.Equal(t, "Deploy", items[2].Name)
+
+		// Activity group should contain 2 markers
+		assert.Len(t, items[0].Children, 2)
+		assert.Equal(t, ItemTypeMarker, items[0].Children[0].ItemType)
+		assert.Equal(t, "bob", items[0].Children[0].User)
+		assert.Equal(t, ItemTypeMarker, items[0].Children[1].ItemType)
+		assert.Equal(t, "alice", items[0].Children[1].User)
+	})
+
+	t.Run("no markers means no Activity group", func(t *testing.T) {
+		roots := []*analyzer.TreeNode{
+			{Name: "Tests", Type: analyzer.NodeTypeWorkflow},
+			{Name: "Deploy", Type: analyzer.NodeTypeWorkflow},
+		}
+
+		items := BuildTreeItems(roots, nil, nil)
+
+		assert.Len(t, items, 2)
+		for _, item := range items {
+			assert.Equal(t, ItemTypeWorkflow, item.ItemType)
+		}
+	})
+
+	t.Run("only markers produces only Activity group", func(t *testing.T) {
+		roots := []*analyzer.TreeNode{
+			{Name: "comment", Type: analyzer.NodeTypeMarker, User: "carol", EventType: "comment"},
+		}
+
+		items := BuildTreeItems(roots, nil, nil)
+
+		assert.Len(t, items, 1)
+		assert.Equal(t, ItemTypeActivityGroup, items[0].ItemType)
+		assert.Len(t, items[0].Children, 1)
+	})
+
+	t.Run("Activity group aggregates time bounds", func(t *testing.T) {
+		roots := []*analyzer.TreeNode{
+			{Name: "comment", Type: analyzer.NodeTypeMarker, StartTime: now.Add(2 * time.Minute), EndTime: now.Add(2 * time.Minute)},
+			{Name: "merged", Type: analyzer.NodeTypeMarker, StartTime: now.Add(5 * time.Minute), EndTime: now.Add(5 * time.Minute)},
+		}
+
+		items := BuildTreeItems(roots, nil, nil)
+
+		assert.Equal(t, now.Add(2*time.Minute), items[0].StartTime)
+		assert.Equal(t, now.Add(5*time.Minute), items[0].EndTime)
+	})
+
+	t.Run("multi-URL mode groups markers under Activity per URL group", func(t *testing.T) {
+		roots := []*analyzer.TreeNode{
+			{Name: "Tests", Type: analyzer.NodeTypeWorkflow, URLIndex: 0},
+			{Name: "approved", Type: analyzer.NodeTypeMarker, User: "bob", URLIndex: 0, StartTime: now, EndTime: now},
+			{Name: "Deploy", Type: analyzer.NodeTypeWorkflow, URLIndex: 1, StartTime: now, EndTime: now},
+		}
+
+		items := BuildTreeItems(roots, nil, []string{
+			"https://github.com/owner/repo/pull/1",
+			"https://github.com/owner/repo/pull/2",
+		})
+
+		// 2 URL groups
+		assert.Len(t, items, 2)
+
+		// First URL group: 1 workflow + 1 Activity group
+		group0 := items[0]
+		if group0.URL == "https://github.com/owner/repo/pull/2" {
+			// Sort may reorder; find the one with PR #1
+			group0 = items[1]
+		}
+		// Find PR #1 group
+		var pr1Group *TreeItem
+		for _, item := range items {
+			if item.URL == "https://github.com/owner/repo/pull/1" {
+				pr1Group = item
+				break
+			}
+		}
+		if assert.NotNil(t, pr1Group) {
+			// Activity group first, then workflow
+			assert.Len(t, pr1Group.Children, 2)
+			assert.Equal(t, ItemTypeActivityGroup, pr1Group.Children[0].ItemType)
+			assert.Len(t, pr1Group.Children[0].Children, 1)
+			assert.Equal(t, ItemTypeWorkflow, pr1Group.Children[1].ItemType)
+		}
 	})
 }
 

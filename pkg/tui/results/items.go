@@ -19,6 +19,7 @@ const (
 	ItemTypeJob
 	ItemTypeStep
 	ItemTypeMarker
+	ItemTypeActivityGroup
 )
 
 // String returns a human-readable string for the ItemType
@@ -34,6 +35,8 @@ func (t ItemType) String() string {
 		return "Step"
 	case ItemTypeMarker:
 		return "Marker"
+	case ItemTypeActivityGroup:
+		return "ActivityGroup"
 	default:
 		return "Unknown"
 	}
@@ -66,13 +69,8 @@ type TreeItem struct {
 // When multiple inputURLs are provided, roots are grouped under URL group items.
 func BuildTreeItems(roots []*analyzer.TreeNode, expandedState map[string]bool, inputURLs []string) []*TreeItem {
 	if len(inputURLs) <= 1 {
-		// Single URL or no URLs: no grouping, same as before
-		var items []*TreeItem
-		for i, root := range roots {
-			item := convertNode(root, "", i, 0, expandedState)
-			items = append(items, item)
-		}
-		return items
+		// Single URL or no URLs: partition into workflows + Activity group
+		return partitionAndGroup(roots, "", 0, expandedState)
 	}
 
 	// Multiple URLs: group roots by URLIndex
@@ -130,10 +128,7 @@ func BuildTreeItems(roots []*analyzer.TreeNode, expandedState map[string]bool, i
 			Children:    []*TreeItem{},
 		}
 
-		for i, child := range children {
-			childItem := convertNode(child, groupID, i, 1, expandedState)
-			groupItem.Children = append(groupItem.Children, childItem)
-		}
+		groupItem.Children = partitionAndGroup(children, groupID, 1, expandedState)
 
 		items = append(items, groupItem)
 	}
@@ -165,6 +160,61 @@ func aggregateConclusion(nodes []*analyzer.TreeNode) string {
 		return "success"
 	}
 	return ""
+}
+
+// partitionAndGroup splits roots into workflow items and marker items,
+// grouping all markers under a synthetic "Activity" node.
+func partitionAndGroup(roots []*analyzer.TreeNode, parentID string, depth int, expandedState map[string]bool) []*TreeItem {
+	var workflows []*analyzer.TreeNode
+	var markers []*analyzer.TreeNode
+	for _, root := range roots {
+		if root.Type == analyzer.NodeTypeMarker {
+			markers = append(markers, root)
+		} else {
+			workflows = append(workflows, root)
+		}
+	}
+
+	var items []*TreeItem
+
+	// Activity group goes first (collapsed by default)
+	if len(markers) > 0 {
+		groupID := makeNodeID(parentID, "Activity", 0)
+
+		var earliest, latest time.Time
+		var children []*TreeItem
+		for i, m := range markers {
+			child := convertNode(m, groupID, i, depth+1, expandedState)
+			children = append(children, child)
+			if !m.StartTime.IsZero() && (earliest.IsZero() || m.StartTime.Before(earliest)) {
+				earliest = m.StartTime
+			}
+			if !m.EndTime.IsZero() && (latest.IsZero() || m.EndTime.After(latest)) {
+				latest = m.EndTime
+			}
+		}
+
+		activityGroup := &TreeItem{
+			ID:          groupID,
+			Name:        "Activity",
+			DisplayName: "Activity",
+			StartTime:   earliest,
+			EndTime:     latest,
+			Depth:       depth,
+			HasChildren: true,
+			IsExpanded:  expandedState[groupID],
+			ItemType:    ItemTypeActivityGroup,
+			ParentID:    parentID,
+			Children:    children,
+		}
+		items = append(items, activityGroup)
+	}
+
+	for i, wf := range workflows {
+		items = append(items, convertNode(wf, parentID, i, depth, expandedState))
+	}
+
+	return items
 }
 
 func convertNode(node *analyzer.TreeNode, parentID string, index, depth int, expandedState map[string]bool) *TreeItem {
