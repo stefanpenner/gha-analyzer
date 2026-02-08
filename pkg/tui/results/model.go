@@ -87,6 +87,9 @@ type Model struct {
 	openPerfettoFunc func()
 	// Mouse mode state
 	mouseEnabled bool
+	// Vim-style two-key sequence state
+	pendingG  bool // waiting for second 'g' in gg
+	pendingGG bool // waiting for second 'G' in GG
 	// Search/filter state
 	isSearching    bool
 	searchQuery    string
@@ -148,6 +151,8 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 	}
 
 	m.rebuildItems()
+	m.hideActivityGroups()
+	m.recalculateChartBounds()
 	return m
 }
 
@@ -255,6 +260,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.expandAllToDepth(0)
 		}
 		m.rebuildItems()
+		m.hideActivityGroups()
+		m.recalculateChartBounds()
 		m.cursor = 0
 		m.selectionStart = -1
 		return m, nil
@@ -403,6 +410,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+
+		// Handle vim-style two-key sequences (gg / GG)
+		if key.Matches(msg, m.keys.GoTop) {
+			if m.pendingG {
+				m.pendingG = false
+				m.selectionStart = -1
+				m.cursor = 0
+				return m, nil
+			}
+			m.pendingG = true
+			m.pendingGG = false
+			return m, nil
+		}
+		if key.Matches(msg, m.keys.GoBottom) {
+			if m.pendingGG {
+				m.pendingGG = false
+				m.selectionStart = -1
+				if len(m.visibleItems) > 0 {
+					m.cursor = len(m.visibleItems) - 1
+				}
+				return m, nil
+			}
+			m.pendingGG = true
+			m.pendingG = false
+			return m, nil
+		}
+		// Any other key clears pending g/G state
+		m.pendingG = false
+		m.pendingGG = false
 
 		switch {
 		case key.Matches(msg, m.keys.Quit):
@@ -1103,6 +1139,21 @@ func (m *Model) collapseAll() {
 		m.expandedState[id] = false
 	}
 	m.rebuildItems()
+}
+
+// hideActivityGroups hides all Activity groups and their children from the chart by default
+func (m *Model) hideActivityGroups() {
+	var walk func(items []*TreeItem)
+	walk = func(items []*TreeItem) {
+		for _, item := range items {
+			if item.ItemType == ItemTypeActivityGroup {
+				m.hiddenState[item.ID] = true
+				m.toggleDescendants(item.Children, true)
+			}
+			walk(item.Children)
+		}
+	}
+	walk(m.treeItems)
 }
 
 // toggleFocus focuses on the current selection, hiding everything else
