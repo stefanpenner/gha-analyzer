@@ -109,6 +109,31 @@ var (
 			Foreground(ColorGray)
 )
 
+// Timeline bar colors for collapsed child markers (dimmed to not compete with parent bar)
+var (
+	BarChildSuccessStyle = lipgloss.NewStyle().
+				Foreground(ColorGreenDim)
+
+	BarChildFailureStyle = lipgloss.NewStyle().
+				Foreground(ColorRedDim)
+
+	BarChildDefaultStyle = lipgloss.NewStyle().
+				Foreground(ColorGrayDim)
+
+	// Selected variants (dimmed + selection background)
+	BarChildSuccessSelectedStyle = lipgloss.NewStyle().
+					Foreground(ColorGreenDim).
+					Background(ColorSelectionBg)
+
+	BarChildFailureSelectedStyle = lipgloss.NewStyle().
+					Foreground(ColorRedDim).
+					Background(ColorSelectionBg)
+
+	BarChildDefaultSelectedStyle = lipgloss.NewStyle().
+					Foreground(ColorGrayDim).
+					Background(ColorSelectionBg)
+)
+
 // Timeline bar colors for selected state (dimmed but still show status, with selection background)
 var (
 	BarSuccessSelectedStyle = lipgloss.NewStyle().

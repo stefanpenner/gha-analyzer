@@ -404,6 +404,228 @@ func getBarStyleSelected(item TreeItem) (string, lipgloss.Style) {
 	}
 }
 
+// getChildMarkerStyle returns the dimmed style for a child marker based on its conclusion
+func getChildMarkerStyle(child *TreeItem) lipgloss.Style {
+	switch child.Conclusion {
+	case "success":
+		return BarChildSuccessStyle
+	case "failure":
+		return BarChildFailureStyle
+	default:
+		return BarChildDefaultStyle
+	}
+}
+
+// getChildMarkerStyleSelected returns the dimmed+selected style for a child marker
+func getChildMarkerStyleSelected(child *TreeItem) lipgloss.Style {
+	switch child.Conclusion {
+	case "success":
+		return BarChildSuccessSelectedStyle
+	case "failure":
+		return BarChildFailureSelectedStyle
+	default:
+		return BarChildDefaultSelectedStyle
+	}
+}
+
+// childMarkerPos holds the timeline position and style for a single child marker
+type childMarkerPos struct {
+	pos   int
+	style lipgloss.Style
+}
+
+// computeChildPositions calculates the timeline position for each immediate child
+func computeChildPositions(children []*TreeItem, globalStart, globalEnd time.Time, width int, styleFn func(*TreeItem) lipgloss.Style) []childMarkerPos {
+	totalDuration := globalEnd.Sub(globalStart)
+	if totalDuration <= 0 || width <= 0 {
+		return nil
+	}
+
+	var positions []childMarkerPos
+	for _, child := range children {
+		childStart := child.StartTime
+		if childStart.IsZero() {
+			continue
+		}
+		if childStart.Before(globalStart) {
+			childStart = globalStart
+		}
+		if childStart.After(globalEnd) {
+			childStart = globalEnd
+		}
+
+		pos := int(float64(childStart.Sub(globalStart)) / float64(totalDuration) * float64(width))
+		if pos >= width {
+			pos = width - 1
+		}
+		if pos < 0 {
+			pos = 0
+		}
+
+		positions = append(positions, childMarkerPos{pos: pos, style: styleFn(child)})
+	}
+	return positions
+}
+
+// renderTimelineWithChildren builds a timeline bar with child markers overlaid.
+// The buffer is filled with child markers first, then the parent bar overwrites on top.
+// styleFn selects the appropriate child style variant (normal vs selected).
+// If bgStyle is non-nil, empty space gets that background (for search-match rows).
+// If selected is true, parent uses selected styles and padding gets selection bg.
+func renderTimelineWithChildren(item TreeItem, globalStart, globalEnd time.Time, width int, url string, selected bool, bgStyle *lipgloss.Style) string {
+	if globalEnd.Before(globalStart) || globalEnd.Equal(globalStart) || width <= 0 {
+		if selected {
+			return SelectedBgStyle.Render(strings.Repeat(" ", width))
+		}
+		if bgStyle != nil {
+			return bgStyle.Render(strings.Repeat(" ", width))
+		}
+		return strings.Repeat(" ", width)
+	}
+
+	totalDuration := globalEnd.Sub(globalStart)
+
+	// Choose child style function based on mode
+	childStyleFn := getChildMarkerStyle
+	if selected {
+		childStyleFn = getChildMarkerStyleSelected
+	}
+
+	// Compute child marker positions
+	childPositions := computeChildPositions(item.Children, globalStart, globalEnd, width, childStyleFn)
+
+	// Build buffer tracking what's at each position
+	type cell struct {
+		isChild bool
+		style   lipgloss.Style
+	}
+	buf := make([]cell, width)
+
+	// Place child markers
+	for _, cp := range childPositions {
+		buf[cp.pos] = cell{isChild: true, style: cp.style}
+	}
+
+	// Compute parent bar range
+	parentStart := item.StartTime
+	parentEnd := item.EndTime
+	if parentStart.Before(globalStart) {
+		parentStart = globalStart
+	}
+	if parentEnd.After(globalEnd) {
+		parentEnd = globalEnd
+	}
+
+	isZeroDuration := parentEnd.Before(parentStart) || parentEnd.Equal(parentStart)
+
+	var parentStartPos, parentBarLen int
+	if isZeroDuration {
+		startOffset := parentStart.Sub(globalStart)
+		parentStartPos = int(float64(startOffset) / float64(totalDuration) * float64(width))
+		if parentStartPos >= width {
+			parentStartPos = width - 1
+		}
+		if parentStartPos < 0 {
+			parentStartPos = 0
+		}
+		parentBarLen = 1
+	} else {
+		startOffset := parentStart.Sub(globalStart)
+		endOffset := parentEnd.Sub(globalStart)
+		parentStartPos = int(float64(startOffset) / float64(totalDuration) * float64(width))
+		endPos := int(float64(endOffset) / float64(totalDuration) * float64(width))
+		parentBarLen = endPos - parentStartPos
+		if parentBarLen < 1 {
+			parentBarLen = 1
+		}
+		if parentStartPos < 0 {
+			parentStartPos = 0
+		}
+		if parentStartPos > width-1 {
+			parentStartPos = width - 1
+		}
+		if parentStartPos+parentBarLen > width {
+			parentBarLen = width - parentStartPos
+		}
+		if parentBarLen < 1 {
+			parentBarLen = 1
+		}
+	}
+
+	// Get parent bar character and style
+	var barChar string
+	var parentStyle lipgloss.Style
+	if selected {
+		barChar, parentStyle = getBarStyleSelected(item)
+	} else {
+		barChar, parentStyle = getBarStyle(item)
+	}
+
+	// For zero-duration non-marker, use | as indicator
+	if isZeroDuration && item.ItemType != ItemTypeMarker {
+		barChar = "|"
+	}
+
+	// Now build the output string by scanning the buffer and grouping runs
+	var result strings.Builder
+	i := 0
+	for i < width {
+		if i >= parentStartPos && i < parentStartPos+parentBarLen {
+			// Parent bar region — collect consecutive parent chars
+			end := parentStartPos + parentBarLen
+			if end > width {
+				end = width
+			}
+			count := end - i
+			bar := strings.Repeat(barChar, count)
+			styledBar := parentStyle.Render(bar)
+			if !selected && bgStyle == nil {
+				styledBar = timelineHyperlink(url, styledBar)
+			}
+			result.WriteString(styledBar)
+			i = end
+		} else if buf[i].isChild {
+			// Child marker
+			result.WriteString(buf[i].style.Render("·"))
+			i++
+		} else {
+			// Empty space — collect consecutive spaces
+			j := i
+			for j < width && j != parentStartPos && !buf[j].isChild {
+				if j >= parentStartPos && j < parentStartPos+parentBarLen {
+					break
+				}
+				j++
+			}
+			spaces := strings.Repeat(" ", j-i)
+			if selected {
+				spaces = SelectedBgStyle.Render(spaces)
+			} else if bgStyle != nil {
+				spaces = bgStyle.Render(spaces)
+			}
+			result.WriteString(spaces)
+			i = j
+		}
+	}
+
+	return result.String()
+}
+
+// RenderTimelineBarWithChildren renders a timeline bar with dimmed child markers for collapsed items
+func RenderTimelineBarWithChildren(item TreeItem, globalStart, globalEnd time.Time, width int, url string) string {
+	return renderTimelineWithChildren(item, globalStart, globalEnd, width, url, false, nil)
+}
+
+// RenderTimelineBarWithChildrenSelected renders a timeline bar with child markers and selection background
+func RenderTimelineBarWithChildrenSelected(item TreeItem, globalStart, globalEnd time.Time, width int, url string) string {
+	return renderTimelineWithChildren(item, globalStart, globalEnd, width, url, true, nil)
+}
+
+// renderTimelineBarWithChildrenBg renders a timeline bar with child markers and a custom background
+func renderTimelineBarWithChildrenBg(item TreeItem, globalStart, globalEnd time.Time, width int, url string, bg lipgloss.Style) string {
+	return renderTimelineWithChildren(item, globalStart, globalEnd, width, url, false, &bg)
+}
+
 func maxInt(a, b int) int {
 	if a > b {
 		return a

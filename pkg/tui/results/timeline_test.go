@@ -279,6 +279,234 @@ func TestTimelineHyperlink(t *testing.T) {
 	})
 }
 
+func TestRenderTimelineBarWithChildren(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	globalStart := now
+	globalEnd := now.Add(10 * time.Second)
+	width := 20
+
+	t.Run("child markers appear at correct positions", func(t *testing.T) {
+		item := TreeItem{
+			ItemType:    ItemTypeWorkflow,
+			StartTime:   globalStart,
+			EndTime:     globalStart.Add(4 * time.Second),
+			Conclusion:  "success",
+			HasChildren: true,
+			Children: []*TreeItem{
+				{
+					StartTime:  globalStart.Add(6 * time.Second), // position 12
+					EndTime:    globalStart.Add(7 * time.Second),
+					Conclusion: "success",
+				},
+				{
+					StartTime:  globalStart.Add(9 * time.Second), // position 18
+					EndTime:    globalStart.Add(10 * time.Second),
+					Conclusion: "failure",
+				},
+			},
+		}
+
+		result := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "")
+
+		// Child markers should be present as middle dot characters
+		assert.Contains(t, result, "·", "Should contain child marker dots")
+		assert.NotEmpty(t, result)
+	})
+
+	t.Run("parent bar overwrites child markers where they overlap", func(t *testing.T) {
+		item := TreeItem{
+			ItemType:    ItemTypeWorkflow,
+			StartTime:   globalStart,
+			EndTime:     globalEnd, // full width bar
+			Conclusion:  "success",
+			HasChildren: true,
+			Children: []*TreeItem{
+				{
+					StartTime:  globalStart.Add(5 * time.Second), // right in the middle of parent
+					EndTime:    globalStart.Add(6 * time.Second),
+					Conclusion: "success",
+				},
+			},
+		}
+
+		result := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "")
+
+		// Parent bar fills entire width, so child marker should be overwritten
+		// Result should contain parent bar char but NOT the child dot
+		assert.Contains(t, result, "█", "Parent bar should be present")
+		assert.NotContains(t, result, "·", "Child marker should be overwritten by parent bar")
+	})
+
+	t.Run("no children produces same structure as normal RenderTimelineBar", func(t *testing.T) {
+		item := TreeItem{
+			ItemType:    ItemTypeWorkflow,
+			StartTime:   globalStart,
+			EndTime:     globalStart.Add(5 * time.Second),
+			Conclusion:  "success",
+			HasChildren: true,
+			Children:    []*TreeItem{}, // empty children
+		}
+
+		withChildren := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "")
+		normal := RenderTimelineBar(item, globalStart, globalEnd, width, "")
+
+		// Both should contain the same bar character
+		assert.Contains(t, withChildren, "█")
+		assert.Contains(t, normal, "█")
+	})
+
+	t.Run("failure children use failure dim style", func(t *testing.T) {
+		item := TreeItem{
+			ItemType:    ItemTypeWorkflow,
+			StartTime:   globalStart,
+			EndTime:     globalStart.Add(2 * time.Second),
+			Conclusion:  "success",
+			HasChildren: true,
+			Children: []*TreeItem{
+				{
+					StartTime:  globalStart.Add(8 * time.Second), // well outside parent bar
+					EndTime:    globalStart.Add(9 * time.Second),
+					Conclusion: "failure",
+				},
+			},
+		}
+
+		result := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "")
+
+		// Should contain both parent bar and child marker
+		assert.Contains(t, result, "█", "Parent bar should be present")
+		assert.Contains(t, result, "·", "Child marker should be present")
+	})
+
+	t.Run("returns spaces for invalid time range", func(t *testing.T) {
+		item := TreeItem{
+			HasChildren: true,
+			Children:    []*TreeItem{},
+		}
+		result := RenderTimelineBarWithChildren(item, now, now.Add(-time.Second), width, "")
+		assert.Equal(t, strings.Repeat(" ", width), result)
+	})
+
+	t.Run("children with zero start time are skipped", func(t *testing.T) {
+		item := TreeItem{
+			ItemType:    ItemTypeWorkflow,
+			StartTime:   globalStart,
+			EndTime:     globalStart.Add(2 * time.Second),
+			Conclusion:  "success",
+			HasChildren: true,
+			Children: []*TreeItem{
+				{
+					// StartTime is zero
+					EndTime:    globalStart.Add(5 * time.Second),
+					Conclusion: "success",
+				},
+			},
+		}
+
+		result := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "")
+
+		// Should not contain child marker since start time is zero
+		assert.NotContains(t, result, "·")
+		assert.Contains(t, result, "█", "Parent bar should still be present")
+	})
+}
+
+func TestRenderTimelineBarWithChildrenSelected(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	globalStart := now
+	globalEnd := now.Add(10 * time.Second)
+	width := 20
+
+	t.Run("renders with selection styles", func(t *testing.T) {
+		item := TreeItem{
+			ItemType:    ItemTypeWorkflow,
+			StartTime:   globalStart,
+			EndTime:     globalStart.Add(4 * time.Second),
+			Conclusion:  "success",
+			HasChildren: true,
+			Children: []*TreeItem{
+				{
+					StartTime:  globalStart.Add(7 * time.Second),
+					EndTime:    globalStart.Add(8 * time.Second),
+					Conclusion: "success",
+				},
+			},
+		}
+
+		result := RenderTimelineBarWithChildrenSelected(item, globalStart, globalEnd, width, "")
+
+		// Should contain both bar and marker characters
+		assert.Contains(t, result, "█", "Parent bar should be present")
+		assert.Contains(t, result, "·", "Child marker should be present")
+	})
+
+	t.Run("returns selection bg for invalid time range", func(t *testing.T) {
+		item := TreeItem{
+			HasChildren: true,
+			Children:    []*TreeItem{},
+		}
+		result := RenderTimelineBarWithChildrenSelected(item, now, now.Add(-time.Second), width, "")
+		assert.NotEmpty(t, result)
+	})
+}
+
+func TestComputeChildPositions(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	globalStart := now
+	globalEnd := now.Add(10 * time.Second)
+	width := 20
+
+	t.Run("computes positions correctly", func(t *testing.T) {
+		children := []*TreeItem{
+			{StartTime: globalStart.Add(5 * time.Second), Conclusion: "success"},
+			{StartTime: globalEnd, Conclusion: "failure"},
+		}
+
+		positions := computeChildPositions(children, globalStart, globalEnd, width, getChildMarkerStyle)
+
+		assert.Len(t, positions, 2)
+		assert.Equal(t, 10, positions[0].pos) // 5/10 * 20 = 10
+		assert.Equal(t, 19, positions[1].pos) // clamped to width-1
+	})
+
+	t.Run("skips children with zero start time", func(t *testing.T) {
+		children := []*TreeItem{
+			{Conclusion: "success"}, // zero start time
+		}
+
+		positions := computeChildPositions(children, globalStart, globalEnd, width, getChildMarkerStyle)
+
+		assert.Empty(t, positions)
+	})
+
+	t.Run("returns nil for zero width", func(t *testing.T) {
+		children := []*TreeItem{
+			{StartTime: globalStart.Add(5 * time.Second), Conclusion: "success"},
+		}
+
+		positions := computeChildPositions(children, globalStart, globalEnd, 0, getChildMarkerStyle)
+
+		assert.Nil(t, positions)
+	})
+
+	t.Run("clamps positions before global start", func(t *testing.T) {
+		children := []*TreeItem{
+			{StartTime: globalStart.Add(-2 * time.Second), Conclusion: "success"},
+		}
+
+		positions := computeChildPositions(children, globalStart, globalEnd, width, getChildMarkerStyle)
+
+		assert.Len(t, positions, 1)
+		assert.Equal(t, 0, positions[0].pos)
+	})
+}
+
 func TestMaxInt(t *testing.T) {
 	t.Parallel()
 

@@ -346,6 +346,9 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 		treePadding = 0
 	}
 
+	// Check if item has collapsed children (for sparkline markers)
+	hasCollapsedChildren := item.HasChildren && !m.expandedState[item.ID]
+
 	// Check if item is hidden from chart
 	isHidden := m.hiddenState[item.ID]
 
@@ -402,18 +405,25 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	// Render timeline bar (empty if hidden, dimmed colors if selected, full colors otherwise)
 	// For normal items, URL is passed so bar characters are clickable.
 	// For selected/hidden items, URL is omitted since we apply row-level hyperlink at the end.
+	// For collapsed items with children, overlay dimmed child markers as a sparkline summary.
 	var timelineBar string
 	if isHidden && isSelected {
 		// Hidden + selected: empty timeline with selection background
 		timelineBar = SelectedBgStyle.Render(strings.Repeat(" ", timelineW))
 	} else if isHidden {
 		timelineBar = strings.Repeat(" ", timelineW)
+	} else if isSelected && hasCollapsedChildren {
+		timelineBar = RenderTimelineBarWithChildrenSelected(item, m.chartStart, m.chartEnd, timelineW, "")
 	} else if isSelected {
 		// Render with dimmed colors and selection background
 		timelineBar = RenderTimelineBarSelected(item, m.chartStart, m.chartEnd, timelineW, "")
+	} else if isSearchMatch && hasCollapsedChildren {
+		timelineBar = renderTimelineBarWithChildrenBg(item, m.chartStart, m.chartEnd, timelineW, item.URL, SearchRowBgStyle)
 	} else if isSearchMatch {
 		// Search match: normal bar colors but with subtle row background on empty space
 		timelineBar = renderTimelineBarWithBg(item, m.chartStart, m.chartEnd, timelineW, item.URL, SearchRowBgStyle)
+	} else if hasCollapsedChildren {
+		timelineBar = RenderTimelineBarWithChildren(item, m.chartStart, m.chartEnd, timelineW, item.URL)
 	} else {
 		// Normal: full colors, pass URL so bar is clickable
 		timelineBar = RenderTimelineBar(item, m.chartStart, m.chartEnd, timelineW, item.URL)
@@ -453,6 +463,8 @@ func getItemIcon(item TreeItem) string {
 		return "⚙️" // width 2
 	case ItemTypeStep:
 		return "↳" // width 1, no padding needed for steps
+	case ItemTypeActivityGroup:
+		return "📌" // width 2
 	case ItemTypeMarker:
 		switch item.EventType {
 		case "merged":
