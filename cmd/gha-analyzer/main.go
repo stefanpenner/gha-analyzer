@@ -192,6 +192,11 @@ func main() {
 		args = urls
 	}
 
+	if len(args) == 0 {
+		printErrorMsg("No GitHub URLs provided.\n\n  Usage: gha-analyzer <github_url> [flags]\n\n  Run 'gha-analyzer --help' for more information.")
+		os.Exit(1)
+	}
+
 	// When --otel stdout is used, disable TUI so output goes to stdout cleanly
 	if cfg.otelStdout {
 		cfg.tuiMode = false

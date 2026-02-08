@@ -1,0 +1,12 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "terminal",
+    srcs = ["terminal.go"],
+    importpath = "github.com/stefanpenner/gha-analyzer/pkg/export/terminal",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/analyzer",
+        "@io_opentelemetry_go_otel_sdk//trace",
+    ],
+)

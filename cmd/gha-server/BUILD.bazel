@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "gha-server_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/stefanpenner/gha-analyzer/cmd/gha-server",
+    visibility = ["//visibility:private"],
+    deps = ["//pkg/core"],
+)
+
+go_binary(
+    name = "gha-server",
+    embed = [":gha-server_lib"],
+    visibility = ["//visibility:public"],
+)

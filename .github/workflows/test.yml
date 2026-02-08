@@ -31,27 +31,24 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Setup Bazel
+      uses: bazel-contrib/setup-bazel@0.14.0
+      with:
+        bazelisk-cache: true
+        disk-cache: ${{ github.workflow }}
+        repository-cache: true
+
+    - name: Run tests
+      run: bazel test //...
+
+    - name: Build
+      run: bazel build //cmd/...
+
     - name: Setup Go
       uses: actions/setup-go@v5
       with:
         go-version: '1.25'
         cache: false
-
-    - name: Cache Go modules
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/go/pkg/mod
-          ~/.cache/go-build
-        key: v1-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          v1-go-
-
-    - name: Install dependencies
-      run: go mod download
-
-    - name: Run tests
-      run: go test -v ./...
 
     - name: Start Observability Stack
       run: ./run.sh up
@@ -70,6 +67,3 @@ jobs:
 
     - name: Verify Stack Status
       run: ./run.sh status
-
-    - name: Build
-      run: go build -v ./cmd/gha-analyzer ./cmd/gha-server

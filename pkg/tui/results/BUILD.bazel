@@ -1,0 +1,39 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "results",
+    srcs = [
+        "items.go",
+        "keys.go",
+        "model.go",
+        "styles.go",
+        "timeline.go",
+        "view.go",
+    ],
+    importpath = "github.com/stefanpenner/gha-analyzer/pkg/tui/results",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/analyzer",
+        "//pkg/utils",
+        "@com_github_charmbracelet_bubbles//key",
+        "@com_github_charmbracelet_bubbles//spinner",
+        "@com_github_charmbracelet_bubbletea//:bubbletea",
+        "@com_github_charmbracelet_lipgloss//:lipgloss",
+        "@io_opentelemetry_go_otel_sdk//trace",
+    ],
+)
+
+go_test(
+    name = "results_test",
+    srcs = [
+        "items_test.go",
+        "model_test.go",
+        "timeline_test.go",
+    ],
+    embed = [":results"],
+    deps = [
+        "//pkg/analyzer",
+        "@com_github_charmbracelet_bubbletea//:bubbletea",
+        "@com_github_stretchr_testify//assert",
+    ],
+)
