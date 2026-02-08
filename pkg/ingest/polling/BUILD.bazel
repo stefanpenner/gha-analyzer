@@ -1,0 +1,12 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "polling",
+    srcs = ["polling.go"],
+    importpath = "github.com/stefanpenner/gha-analyzer/pkg/ingest/polling",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/analyzer",
+        "//pkg/githubapi",
+    ],
+)

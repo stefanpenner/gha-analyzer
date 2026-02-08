@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "simulate_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/stefanpenner/gha-analyzer/cmd/simulate",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//pkg/core",
+        "//pkg/export/otel",
+        "//pkg/githubapi",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
+
+go_binary(
+    name = "simulate",
+    embed = [":simulate_lib"],
+    visibility = ["//visibility:public"],
+)

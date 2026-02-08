@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "core",
+    srcs = [
+        "pipeline.go",
+        "types.go",
+    ],
+    importpath = "github.com/stefanpenner/gha-analyzer/pkg/core",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_cockroachdb_errors//:errors",
+        "@io_opentelemetry_go_otel_sdk//trace",
+    ],
+)

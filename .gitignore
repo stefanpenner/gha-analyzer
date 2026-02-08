@@ -1,4 +1,5 @@
 node_modules
 out.json
 .gha-cache
-gha-analyzer
+/gha-analyzer
+bazel-*

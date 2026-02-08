@@ -130,6 +130,27 @@ func TestGetJobGroup(t *testing.T) {
 	}
 }
 
+func TestExpandGitHubURL(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		input    string
+		expected string
+	}{
+		{"https://github.com/owner/repo/pull/1", "https://github.com/owner/repo/pull/1"},
+		{"http://github.com/owner/repo/pull/1", "http://github.com/owner/repo/pull/1"},
+		{"github.com/owner/repo/pull/1", "https://github.com/owner/repo/pull/1"},
+		{"owner/repo/pull/1", "https://github.com/owner/repo/pull/1"},
+		{"nodejs/node/pull/60369", "https://github.com/nodejs/node/pull/60369"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.input, func(t *testing.T) {
+			assert.Equal(t, tc.expected, ExpandGitHubURL(tc.input))
+		})
+	}
+}
+
 func TestMakeClickableLink(t *testing.T) {
 	t.Parallel()
 

@@ -163,7 +163,7 @@ func (m Model) renderHeader() string {
 		if lipgloss.Width(urlText) > maxURLWidth {
 			urlText = urlText[:maxURLWidth-3] + "..."
 		}
-		linkedURL := hyperlink(inputURL, urlText)
+		linkedURL := hyperlink(utils.ExpandGitHubURL(inputURL), urlText)
 		lineURL += "\n" + buildLeftLine(linkedURL, urlText)
 	}
 

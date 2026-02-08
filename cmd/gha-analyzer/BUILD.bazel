@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "gha-analyzer_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/stefanpenner/gha-analyzer/cmd/gha-analyzer",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//pkg/analyzer",
+        "//pkg/core",
+        "//pkg/export/otel",
+        "//pkg/export/perfetto",
+        "//pkg/export/terminal",
+        "//pkg/githubapi",
+        "//pkg/ingest/polling",
+        "//pkg/ingest/webhook",
+        "//pkg/output",
+        "//pkg/perfetto",
+        "//pkg/tui",
+        "//pkg/tui/results",
+        "//pkg/utils",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel_sdk//trace",
+    ],
+)
+
+go_binary(
+    name = "gha-analyzer",
+    embed = [":gha-analyzer_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "gha-analyzer_test",
+    srcs = ["args_test.go"],
+    embed = [":gha-analyzer_lib"],
+)

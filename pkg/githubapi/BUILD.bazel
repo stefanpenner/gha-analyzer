@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "githubapi",
+    srcs = [
+        "cache.go",
+        "client.go",
+        "ids.go",
+        "provider.go",
+    ],
+    importpath = "github.com/stefanpenner/gha-analyzer/pkg/githubapi",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
+
+go_test(
+    name = "githubapi_test",
+    srcs = [
+        "cache_test.go",
+        "ids_test.go",
+        "otel_test.go",
+    ],
+    embed = [":githubapi"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk//trace/tracetest",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)

@@ -70,6 +70,18 @@ func ParseGitHubURL(raw string) (ParsedGitHubURL, error) {
 	return ParsedGitHubURL{}, fmt.Errorf("Invalid GitHub URL: %s. Expected format: PR: https://github.com/owner/repo/pull/123 or Commit: https://github.com/owner/repo/commit/abc123...", raw)
 }
 
+// ExpandGitHubURL ensures a GitHub URL has the full https://github.com/ prefix.
+// Shorthand forms like "owner/repo/pull/123" are expanded; already-full URLs are returned as-is.
+func ExpandGitHubURL(raw string) string {
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return raw
+	}
+	if strings.HasPrefix(raw, "github.com/") {
+		return "https://" + raw
+	}
+	return "https://github.com/" + raw
+}
+
 func GetJobGroup(jobName string) string {
 	parts := strings.Split(jobName, " / ")
 	if len(parts) > 1 {
