@@ -21,6 +21,10 @@ var (
 	ColorBlueDim   = lipgloss.Color("#2E5EA8")
 	ColorRedDim    = lipgloss.Color("#9E3A3A")
 	ColorYellowDim = lipgloss.Color("#A08856")
+
+	// Search match row background (subtle purple tint)
+	ColorSearchRowBg  = lipgloss.Color("#1E1A2E")
+	ColorSearchCharBg = lipgloss.Color("#2E2545")
 )
 
 // Header styles
@@ -135,6 +139,35 @@ var (
 
 	DurationStyle = lipgloss.NewStyle().
 			Foreground(ColorGray)
+)
+
+// Search styles
+var (
+	SearchBarStyle = lipgloss.NewStyle().
+			Foreground(ColorWhite)
+
+	// SearchRowStyle is the subtle background for the entire matching row
+	SearchRowStyle = lipgloss.NewStyle().
+			Background(ColorSearchRowBg)
+
+	// SearchRowBgStyle applies only the row background (no foreground override)
+	SearchRowBgStyle = lipgloss.NewStyle().
+				Background(ColorSearchRowBg)
+
+	// SearchCharStyle highlights the exact matching characters (stronger)
+	SearchCharStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(ColorPurple).
+			Background(ColorSearchCharBg)
+
+	// SearchCharSelectedStyle highlights matching chars when row is also selected
+	SearchCharSelectedStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(ColorPurple).
+				Background(ColorSelectionBg)
+
+	SearchCountStyle = lipgloss.NewStyle().
+				Foreground(ColorGray)
 )
 
 // Modal styles

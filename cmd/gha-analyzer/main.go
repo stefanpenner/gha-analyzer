@@ -213,6 +213,10 @@ func main() {
 	if token == "" {
 		for i, arg := range args {
 			if !strings.HasPrefix(arg, "http") && !strings.HasPrefix(arg, "-") {
+				// Skip arguments that look like GitHub URLs (shorthand or full)
+				if _, err := utils.ParseGitHubURL(arg); err == nil {
+					continue
+				}
 				token = arg
 				args = append(args[:i], args[i+1:]...)
 				break

@@ -233,6 +233,76 @@ func RenderTimelineBarSelected(item TreeItem, globalStart, globalEnd time.Time, 
 	return leftPad + timelineHyperlink(url, styledBar) + rightPad
 }
 
+// renderTimelineBarWithBg renders a timeline bar with normal colors but applies
+// bgStyle to the empty space (left/right padding) for a subtle row tint.
+func renderTimelineBarWithBg(item TreeItem, globalStart, globalEnd time.Time, width int, url string, bgStyle lipgloss.Style) string {
+	if globalEnd.Before(globalStart) || globalEnd.Equal(globalStart) || width <= 0 {
+		return bgStyle.Render(strings.Repeat(" ", width))
+	}
+
+	totalDuration := globalEnd.Sub(globalStart)
+	itemStart := item.StartTime
+	itemEnd := item.EndTime
+
+	if itemStart.Before(globalStart) {
+		itemStart = globalStart
+	}
+	if itemEnd.After(globalEnd) {
+		itemEnd = globalEnd
+	}
+
+	isZeroDuration := itemEnd.Before(itemStart) || itemEnd.Equal(itemStart)
+	if isZeroDuration {
+		markerChar, style := getBarStyle(item)
+		if item.ItemType != ItemTypeMarker {
+			markerChar = "|"
+		}
+		startOffset := itemStart.Sub(globalStart)
+		startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
+		// Render marker with bg on padding
+		if startPos < 0 {
+			startPos = 0
+		}
+		if startPos >= width {
+			startPos = width - 1
+		}
+		leftPad := bgStyle.Render(strings.Repeat(" ", startPos))
+		rightPad := bgStyle.Render(strings.Repeat(" ", width-startPos-1))
+		return leftPad + style.Render(markerChar) + rightPad
+	}
+
+	startOffset := itemStart.Sub(globalStart)
+	endOffset := itemEnd.Sub(globalStart)
+	startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
+	endPos := int(float64(endOffset) / float64(totalDuration) * float64(width))
+
+	barLength := endPos - startPos
+	if barLength < 1 {
+		barLength = 1
+	}
+	if startPos < 0 {
+		startPos = 0
+	}
+	if startPos > width-1 {
+		startPos = width - 1
+	}
+	if startPos+barLength > width {
+		barLength = width - startPos
+	}
+	if barLength < 1 {
+		barLength = 1
+	}
+
+	barChar, style := getBarStyle(item)
+
+	leftPad := bgStyle.Render(strings.Repeat(" ", startPos))
+	bar := strings.Repeat(barChar, barLength)
+	rightPad := bgStyle.Render(strings.Repeat(" ", width-startPos-barLength))
+
+	styledBar := style.Render(bar)
+	return leftPad + timelineHyperlink(url, styledBar) + rightPad
+}
+
 // getBarStyle returns the bar character and style based on item status
 func getBarStyle(item TreeItem) (string, lipgloss.Style) {
 	// Steps use different character

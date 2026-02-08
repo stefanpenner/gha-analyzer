@@ -14,6 +14,29 @@ const (
 	horizontalPad = 2 // left/right padding for main view
 )
 
+// highlightMatch splits name into before/match/after and styles the match portion
+// with charStyle, and the rest with rowStyle. The match is case-insensitive.
+func highlightMatch(name, query string, charStyle, rowStyle lipgloss.Style) string {
+	lower := strings.ToLower(name)
+	idx := strings.Index(lower, strings.ToLower(query))
+	if idx < 0 {
+		return rowStyle.Render(name)
+	}
+	before := name[:idx]
+	match := name[idx : idx+len(query)]
+	after := name[idx+len(query):]
+
+	var result string
+	if before != "" {
+		result += rowStyle.Render(before)
+	}
+	result += charStyle.Render(match)
+	if after != "" {
+		result += rowStyle.Render(after)
+	}
+	return result
+}
+
 // hyperlink wraps text in OSC 8 terminal hyperlink escape sequence.
 // This makes the text clickable in supporting terminals (iTerm2, Kitty, WezTerm, etc.)
 // The id parameter ensures terminals treat each link independently.
@@ -326,8 +349,20 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	// Check if item is hidden from chart
 	isHidden := m.hiddenState[item.ID]
 
+	// Check if item is a search match for two-tone highlighting
+	isSearchMatch := m.searchMatchIDs[item.ID]
+
 	// Wrap name in hyperlink if URL is available (must be done after width calculation)
-	displayName := hyperlink(item.URL, name)
+	// Apply two-tone search match highlighting: row gets subtle bg, matching chars get stronger style
+	displayName := name
+	if isSearchMatch && m.searchQuery != "" {
+		if isSelected {
+			displayName = highlightMatch(name, m.searchQuery, SearchCharSelectedStyle, SelectedStyle)
+		} else {
+			displayName = highlightMatch(name, m.searchQuery, SearchCharStyle, SearchRowStyle)
+		}
+	}
+	displayName = hyperlink(item.URL, displayName)
 
 	// Build tree part content
 	// When selected, every segment must carry the selection background because
@@ -345,6 +380,16 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 			treePart += selDur.Render(durationStr)
 		}
 		treePart += sel.Render(badges+" ") + getStyledStatusIconWithBg(item, ColorSelectionBg)
+	} else if isSearchMatch {
+		// Search match row: subtle purple-tinted background
+		row := SearchRowStyle
+		rowDur := FooterStyle.Background(ColorSearchRowBg)
+		prefix := fmt.Sprintf("%s%s %s %s", indent, expandIndicator, icon, displayName)
+		treePart = row.Render(prefix)
+		if durationStr != "" {
+			treePart += rowDur.Render(durationStr)
+		}
+		treePart += row.Render(badges+" ") + getStyledStatusIconWithBg(item, ColorSearchRowBg)
 	} else {
 		styledDuration := ""
 		if durationStr != "" {
@@ -366,6 +411,9 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	} else if isSelected {
 		// Render with dimmed colors and selection background
 		timelineBar = RenderTimelineBarSelected(item, m.chartStart, m.chartEnd, timelineW, "")
+	} else if isSearchMatch {
+		// Search match: normal bar colors but with subtle row background on empty space
+		timelineBar = renderTimelineBarWithBg(item, m.chartStart, m.chartEnd, timelineW, item.URL, SearchRowBgStyle)
 	} else {
 		// Normal: full colors, pass URL so bar is clickable
 		timelineBar = RenderTimelineBar(item, m.chartStart, m.chartEnd, timelineW, item.URL)
@@ -381,6 +429,9 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 		return BorderStyle.Render("│") + treePart + pad + midSep + timelineBar + BorderStyle.Render("│")
 	} else if isSelected {
 		pad := SelectedBgStyle.Render(strings.Repeat(" ", treePadding))
+		return BorderStyle.Render("│") + treePart + pad + midSep + timelineBar + BorderStyle.Render("│")
+	} else if isSearchMatch {
+		pad := SearchRowBgStyle.Render(strings.Repeat(" ", treePadding))
 		return BorderStyle.Render("│") + treePart + pad + midSep + timelineBar + BorderStyle.Render("│")
 	} else if isHidden {
 		treePart += strings.Repeat(" ", treePadding)

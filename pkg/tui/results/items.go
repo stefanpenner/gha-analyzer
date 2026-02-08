@@ -230,6 +230,18 @@ func FlattenVisibleItems(items []*TreeItem, expandedState map[string]bool) []Tre
 	return result
 }
 
+// FilterVisibleItems filters already-flattened visible items to only include
+// items whose ID is in matchIDs or ancestorIDs.
+func FilterVisibleItems(items []TreeItem, matchIDs, ancestorIDs map[string]bool) []TreeItem {
+	var result []TreeItem
+	for _, item := range items {
+		if matchIDs[item.ID] || ancestorIDs[item.ID] {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
 func makeNodeID(parentID, name string, index int) string {
 	if parentID == "" {
 		return fmt.Sprintf("%s/%d", name, index)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -86,6 +87,11 @@ type Model struct {
 	openPerfettoFunc func()
 	// Mouse mode state
 	mouseEnabled bool
+	// Search/filter state
+	isSearching    bool
+	searchQuery    string
+	searchMatchIDs map[string]bool // IDs of items matching the query (not ancestors)
+	searchAncIDs   map[string]bool // IDs of ancestor items (for context)
 }
 
 // ReloadFunc is the function signature for reloading data
@@ -341,6 +347,63 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
+		// Handle search input mode
+		if m.isSearching {
+			switch msg.Type {
+			case tea.KeyEsc:
+				m.isSearching = false
+				m.searchQuery = ""
+				m.searchMatchIDs = nil
+				m.searchAncIDs = nil
+				m.rebuildItems()
+				return m, nil
+			case tea.KeyEnter, tea.KeyDown, tea.KeyTab:
+				// Exit search input but keep filter active
+				m.isSearching = false
+				return m, nil
+			case tea.KeyBackspace:
+				if len(m.searchQuery) > 0 {
+					_, size := utf8.DecodeLastRuneInString(m.searchQuery)
+					m.searchQuery = m.searchQuery[:len(m.searchQuery)-size]
+				}
+				m.applySearchFilter()
+				m.rebuildItems()
+				return m, nil
+			default:
+				if msg.Type == tea.KeyRunes {
+					m.searchQuery += string(msg.Runes)
+					m.applySearchFilter()
+					m.rebuildItems()
+				}
+				return m, nil
+			}
+		}
+
+		// Esc or Enter clears active search filter (when not in input mode).
+		// Enter preserves cursor on the current item in the full tree;
+		// Esc simply clears and resets.
+		if m.searchQuery != "" && (msg.Type == tea.KeyEsc || msg.Type == tea.KeyEnter) {
+			// Remember current item ID so we can find it after rebuild
+			var curID string
+			if m.cursor >= 0 && m.cursor < len(m.visibleItems) {
+				curID = m.visibleItems[m.cursor].ID
+			}
+			m.searchQuery = ""
+			m.searchMatchIDs = nil
+			m.searchAncIDs = nil
+			m.rebuildItems()
+			// Restore cursor to the same item in the unfiltered list
+			if curID != "" {
+				for i, item := range m.visibleItems {
+					if item.ID == curID {
+						m.cursor = i
+						break
+					}
+				}
+			}
+			return m, nil
+		}
+
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
@@ -421,6 +484,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.EnableMouseCellMotion
 			}
 			return m, tea.DisableMouse
+
+		case key.Matches(msg, m.keys.Search):
+			m.isSearching = true
+			m.searchQuery = ""
+			m.searchMatchIDs = nil
+			m.searchAncIDs = nil
+			return m, nil
 
 		case key.Matches(msg, m.keys.Help):
 			m.showHelpModal = true
@@ -532,6 +602,10 @@ func (m Model) View() string {
 	// Calculate available height for items
 	headerLines := 9 // header box (6 lines) + 1 newline + time axis + 1 blank line
 	footerLines := 3 // blank line + help line + bottom border
+	searchActive := m.isSearching || m.searchQuery != ""
+	if searchActive {
+		headerLines++ // search bar takes one line
+	}
 	availableHeight := height - headerLines - footerLines
 	if availableHeight < 1 {
 		availableHeight = 10
@@ -558,6 +632,12 @@ func (m Model) View() string {
 	blankLine := BorderStyle.Render("│") + strings.Repeat(" ", contentWidth) + BorderStyle.Render("│")
 	b.WriteString(blankLine)
 	b.WriteString("\n")
+
+	// Search bar (between blank line and content)
+	if searchActive {
+		b.WriteString(m.renderSearchBar(contentWidth))
+		b.WriteString("\n")
+	}
 
 	// Determine scroll window
 	startIdx := 0
@@ -709,10 +789,74 @@ func addHorizontalPadding(content string, pad int) string {
 	return result.String()
 }
 
+// applySearchFilter computes searchMatchIDs and searchAncIDs based on searchQuery.
+// It also auto-expands ancestors of matching items.
+func (m *Model) applySearchFilter() {
+	if m.searchQuery == "" {
+		m.searchMatchIDs = nil
+		m.searchAncIDs = nil
+		return
+	}
+
+	query := strings.ToLower(m.searchQuery)
+	m.searchMatchIDs = make(map[string]bool)
+	m.searchAncIDs = make(map[string]bool)
+
+	// Walk tree items recursively looking for matches
+	var walk func(items []*TreeItem)
+	walk = func(items []*TreeItem) {
+		for _, item := range items {
+			if strings.Contains(strings.ToLower(item.Name), query) {
+				m.searchMatchIDs[item.ID] = true
+				// Collect and expand ancestors
+				m.addAncestors(item.ParentID)
+			}
+			walk(item.Children)
+		}
+	}
+	walk(m.treeItems)
+}
+
+// addAncestors walks up the tree from parentID, adding each ancestor to searchAncIDs
+// and expanding them so they become visible.
+func (m *Model) addAncestors(parentID string) {
+	if parentID == "" {
+		return
+	}
+	if m.searchAncIDs[parentID] {
+		return // already processed
+	}
+	m.searchAncIDs[parentID] = true
+	m.expandedState[parentID] = true
+
+	// Find the parent item to continue up
+	var findParent func(items []*TreeItem) string
+	findParent = func(items []*TreeItem) string {
+		for _, item := range items {
+			if item.ID == parentID {
+				return item.ParentID
+			}
+			if found := findParent(item.Children); found != "" {
+				return found
+			}
+		}
+		return ""
+	}
+	grandparentID := findParent(m.treeItems)
+	if grandparentID != "" {
+		m.addAncestors(grandparentID)
+	}
+}
+
 // rebuildItems rebuilds the flattened item list based on expanded state
 func (m *Model) rebuildItems() {
 	m.treeItems = BuildTreeItems(m.roots, m.expandedState, m.inputURLs)
 	m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState)
+
+	// Apply search filter if active
+	if m.searchQuery != "" && (m.searchMatchIDs != nil || m.searchAncIDs != nil) {
+		m.visibleItems = FilterVisibleItems(m.visibleItems, m.searchMatchIDs, m.searchAncIDs)
+	}
 
 	// Ensure cursor is valid
 	if m.cursor >= len(m.visibleItems) {
@@ -772,6 +916,49 @@ func (m *Model) openCurrentItem() {
 	if item.URL != "" {
 		_ = utils.OpenBrowser(item.URL)
 	}
+}
+
+// renderSearchBar renders the search input bar
+func (m Model) renderSearchBar(contentWidth int) string {
+	// Format: │ / query█              N matches │
+	prefix := SearchBarStyle.Render(" / ")
+	query := SearchBarStyle.Render(m.searchQuery)
+	cursor := ""
+	if m.isSearching {
+		cursor = SearchBarStyle.Render("█")
+	}
+
+	// Count matches
+	matchCount := len(m.searchMatchIDs)
+	countStr := ""
+	if m.searchQuery != "" {
+		countStr = SearchCountStyle.Render(fmt.Sprintf("%d matches ", matchCount))
+	}
+
+	// Calculate padding
+	prefixWidth := 3 // " / "
+	queryWidth := len(m.searchQuery)
+	cursorWidth := 0
+	if m.isSearching {
+		cursorWidth = 1
+	}
+	countWidth := 0
+	if countStr != "" {
+		if matchCount >= 100 {
+			countWidth = 12 // "NNN matches "
+		} else if matchCount >= 10 {
+			countWidth = 11 // "NN matches "
+		} else {
+			countWidth = 10 // "N matches "
+		}
+	}
+
+	padWidth := contentWidth - prefixWidth - queryWidth - cursorWidth - countWidth
+	if padWidth < 1 {
+		padWidth = 1
+	}
+
+	return BorderStyle.Render("│") + prefix + query + cursor + strings.Repeat(" ", padWidth) + countStr + BorderStyle.Render("│")
 }
 
 // renderLoadingView renders the loading progress display

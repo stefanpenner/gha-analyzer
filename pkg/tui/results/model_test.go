@@ -985,6 +985,356 @@ func TestFocusMultiURL(t *testing.T) {
 	})
 }
 
+func TestSearchMode(t *testing.T) {
+	t.Parallel()
+
+	t.Run("/ activates search mode", func(t *testing.T) {
+		m := createTestModel()
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+
+		assert.True(t, m.isSearching)
+		assert.Equal(t, "", m.searchQuery)
+	})
+
+	t.Run("typing in search mode updates query and filters", func(t *testing.T) {
+		m := createTestModel()
+		// Expand all so steps are visible
+		m.expandAll()
+
+		// Enter search mode
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+
+		// Type "build"
+		for _, r := range "build" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+
+		assert.Equal(t, "build", m.searchQuery)
+		assert.True(t, m.isSearching)
+		// "build" job should match, plus its ancestor "CI" workflow
+		assert.True(t, m.searchMatchIDs["CI/0/build/0"], "build job should be a match")
+		// CI workflow should be an ancestor (visible for context)
+		assert.True(t, m.searchAncIDs["CI/0"], "CI workflow should be an ancestor")
+	})
+
+	t.Run("search is case insensitive", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+
+		for _, r := range "BUILD" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+
+		// "build" job should still match (case-insensitive)
+		assert.True(t, m.searchMatchIDs["CI/0/build/0"])
+	})
+
+	t.Run("search filters visible items", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+		beforeCount := len(m.visibleItems)
+
+		// Enter search mode and type "test"
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+
+		for _, r := range "test" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+
+		// Should have fewer visible items
+		assert.Less(t, len(m.visibleItems), beforeCount)
+		// "test" job should be visible
+		found := false
+		for _, item := range m.visibleItems {
+			if item.Name == "test" {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "test job should be visible in filtered results")
+	})
+
+	t.Run("Esc during search clears query and exits", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+		beforeCount := len(m.visibleItems)
+
+		// Enter search mode and type something
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+		m = newModel.(Model)
+
+		// Press Esc
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		m = newModel.(Model)
+
+		assert.False(t, m.isSearching)
+		assert.Equal(t, "", m.searchQuery)
+		assert.Nil(t, m.searchMatchIDs)
+		assert.Equal(t, beforeCount, len(m.visibleItems))
+	})
+
+	t.Run("Down exits search input but keeps filter", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+
+		// Enter search mode and type "build"
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		for _, r := range "build" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+		filteredCount := len(m.visibleItems)
+
+		// Press Down to exit input but keep filter
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = newModel.(Model)
+
+		assert.False(t, m.isSearching)
+		assert.Equal(t, "build", m.searchQuery)
+		assert.Equal(t, filteredCount, len(m.visibleItems))
+	})
+
+	t.Run("Enter clears filter and preserves cursor position", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+		beforeCount := len(m.visibleItems)
+
+		// Enter search mode and type "test" (matches the "test" job)
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		for _, r := range "test" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+
+		// Exit search input with Down, then navigate to the match
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = newModel.(Model)
+
+		// Find the "test" item in filtered results
+		var testIdx int
+		for i, item := range m.visibleItems {
+			if item.Name == "test" {
+				testIdx = i
+				break
+			}
+		}
+		m.cursor = testIdx
+		cursorItemID := m.visibleItems[m.cursor].ID
+
+		// Press Enter to clear filter and keep cursor on same item
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = newModel.(Model)
+
+		assert.Equal(t, "", m.searchQuery)
+		assert.Equal(t, beforeCount, len(m.visibleItems))
+		// Cursor should still be on the "test" item
+		assert.Equal(t, cursorItemID, m.visibleItems[m.cursor].ID)
+	})
+
+	t.Run("Esc clears filter and preserves cursor position", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+		beforeCount := len(m.visibleItems)
+
+		// Enter search mode, type, exit input with Down, then Esc to clear
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		for _, r := range "build" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = newModel.(Model)
+
+		// Navigate to "build" in filtered list
+		var buildIdx int
+		for i, item := range m.visibleItems {
+			if item.Name == "build" {
+				buildIdx = i
+				break
+			}
+		}
+		m.cursor = buildIdx
+		cursorItemID := m.visibleItems[m.cursor].ID
+
+		// Press Esc to clear filter
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		m = newModel.(Model)
+
+		assert.Equal(t, "", m.searchQuery)
+		assert.Equal(t, beforeCount, len(m.visibleItems))
+		assert.Equal(t, cursorItemID, m.visibleItems[m.cursor].ID)
+	})
+
+	t.Run("backspace removes last character", func(t *testing.T) {
+		m := createTestModel()
+
+		// Enter search mode and type "abc"
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		for _, r := range "abc" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+		assert.Equal(t, "abc", m.searchQuery)
+
+		// Backspace
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		m = newModel.(Model)
+		assert.Equal(t, "ab", m.searchQuery)
+	})
+
+	t.Run("search auto-expands ancestors of matches", func(t *testing.T) {
+		m := createTestModel()
+		// Collapse everything first
+		m.expandedState = make(map[string]bool)
+		m.rebuildItems()
+		assert.Equal(t, 1, len(m.visibleItems)) // only CI workflow visible
+
+		// Search for "Checkout" (a step nested under CI > build)
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		for _, r := range "Checkout" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+
+		// Ancestors should be expanded and visible
+		assert.True(t, m.expandedState["CI/0"], "CI workflow should be expanded")
+		assert.True(t, m.expandedState["CI/0/build/0"], "build job should be expanded")
+		// Checkout should be visible
+		found := false
+		for _, item := range m.visibleItems {
+			if item.Name == "Checkout" {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "Checkout step should be visible")
+	})
+
+	t.Run("no match query shows no items", func(t *testing.T) {
+		m := createTestModel()
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		for _, r := range "zzzznonexistent" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+
+		assert.Equal(t, 0, len(m.searchMatchIDs))
+		assert.Equal(t, 0, len(m.visibleItems))
+	})
+
+	t.Run("search bar renders in view", func(t *testing.T) {
+		m := createTestModel()
+
+		// Enter search mode
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		for _, r := range "build" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+
+		view := m.View()
+		assert.Contains(t, view, "build")
+		assert.Contains(t, view, "matches")
+	})
+
+	t.Run("navigation keys ignored during search input", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+
+		// Enter search mode
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+
+		// Try j key (should be appended as text, not nav)
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		m = newModel.(Model)
+
+		assert.Equal(t, "j", m.searchQuery)
+		assert.Equal(t, 0, m.cursor) // cursor should not have moved
+	})
+}
+
+func TestFilterVisibleItems(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns only matched and ancestor items", func(t *testing.T) {
+		items := []TreeItem{
+			{ID: "a"},
+			{ID: "b"},
+			{ID: "c"},
+		}
+		matchIDs := map[string]bool{"b": true}
+		ancestorIDs := map[string]bool{"a": true}
+
+		result := FilterVisibleItems(items, matchIDs, ancestorIDs)
+
+		assert.Len(t, result, 2)
+		assert.Equal(t, "a", result[0].ID)
+		assert.Equal(t, "b", result[1].ID)
+	})
+
+	t.Run("returns empty for no matches", func(t *testing.T) {
+		items := []TreeItem{
+			{ID: "a"},
+			{ID: "b"},
+		}
+		matchIDs := map[string]bool{}
+		ancestorIDs := map[string]bool{}
+
+		result := FilterVisibleItems(items, matchIDs, ancestorIDs)
+
+		assert.Empty(t, result)
+	})
+}
+
+func TestSearchKeyBinding(t *testing.T) {
+	t.Parallel()
+
+	t.Run("keymap includes search binding", func(t *testing.T) {
+		km := DefaultKeyMap()
+		assert.NotEmpty(t, km.Search.Keys())
+	})
+
+	t.Run("short help includes search", func(t *testing.T) {
+		km := DefaultKeyMap()
+		help := km.ShortHelp()
+		assert.Contains(t, help, "search")
+	})
+
+	t.Run("full help includes search", func(t *testing.T) {
+		km := DefaultKeyMap()
+		help := km.FullHelp()
+		found := false
+		for _, row := range help {
+			if len(row) >= 2 && strings.Contains(row[1], "Search") {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "Full help should contain search info")
+	})
+}
+
 func TestLoadingState(t *testing.T) {
 	t.Parallel()
 
