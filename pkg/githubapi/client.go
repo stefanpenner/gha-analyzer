@@ -125,6 +125,7 @@ type WorkflowRun struct {
 	ID         int64   `json:"id"`
 	RunAttempt int64   `json:"run_attempt"`
 	Name       string  `json:"name"`
+	Path       string  `json:"path"`
 	Status     string  `json:"status"`
 	Conclusion string  `json:"conclusion"`
 	CreatedAt  string  `json:"created_at"`
@@ -542,18 +543,34 @@ func (c *Client) FetchRecentWorkflowRuns(ctx context.Context, owner, repo string
 	params.Set("per_page", "100")
 	params.Set("created", ">="+since) // Filter by creation date
 
-	// Add optional filters
+	// Add optional branch filter
 	if branch != "" {
 		params.Set("branch", branch)
 	}
-	if workflow != "" {
-		params.Set("workflow_id", workflow)
-	}
+	// Note: workflow_id API parameter doesn't work reliably (includes triggered workflows)
+	// We'll filter client-side after fetching
 
 	baseURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", owner, repo)
 	runsURL := fmt.Sprintf("%s/actions/runs?%s", baseURL, params.Encode())
 
-	return fetchWorkflowRunsPaginated(ctx, c, runsURL)
+	runs, err := fetchWorkflowRunsPaginated(ctx, c, runsURL)
+	if err != nil {
+		return nil, err
+	}
+
+	// Client-side workflow filtering (more reliable than API parameter)
+	if workflow != "" {
+		filtered := make([]WorkflowRun, 0, len(runs))
+		for _, run := range runs {
+			// Match against filename or full path
+			if strings.HasSuffix(run.Path, workflow) || run.Path == workflow {
+				filtered = append(filtered, run)
+			}
+		}
+		return filtered, nil
+	}
+
+	return runs, nil
 }
 
 func (c *Client) FetchRepository(ctx context.Context, baseURL string) (*RepoMeta, error) {
