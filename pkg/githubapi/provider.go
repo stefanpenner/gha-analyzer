@@ -7,6 +7,7 @@ import (
 // GitHubProvider defines the interface for interacting with GitHub's API.
 type GitHubProvider interface {
 	FetchWorkflowRuns(ctx context.Context, baseURL, headSHA string, branch, event string) ([]WorkflowRun, error)
+	FetchRecentWorkflowRuns(ctx context.Context, owner, repo string, days int) ([]WorkflowRun, error)
 	FetchRepository(ctx context.Context, baseURL string) (*RepoMeta, error)
 	FetchCommitAssociatedPRs(ctx context.Context, owner, repo, sha string) ([]PullAssociated, error)
 	FetchCommit(ctx context.Context, baseURL, sha string) (*CommitResponse, error)

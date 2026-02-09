@@ -18,7 +18,8 @@
       "Bash(GITHUB_TOKEN=invalid_token go run:*)",
       "Bash(sips:*)",
       "Bash(id=%s)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(bazel build:*)"
     ]
   }
 }
