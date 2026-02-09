@@ -21,6 +21,37 @@ type TrendAnalysis struct {
 	SuccessRateTrend []DataPoint
 	JobTrends        []JobTrend
 	FlakyJobs        []FlakyJob
+	TopRegressions   []JobRegression
+	TopImprovements  []JobImprovement
+	QueueTimeStats   QueueTimeStats
+}
+
+// JobRegression represents a job that got slower
+type JobRegression struct {
+	Name            string
+	OldAvgDuration  float64
+	NewAvgDuration  float64
+	PercentIncrease float64
+	AbsoluteChange  float64
+}
+
+// JobImprovement represents a job that got faster
+type JobImprovement struct {
+	Name            string
+	OldAvgDuration  float64
+	NewAvgDuration  float64
+	PercentDecrease float64
+	AbsoluteChange  float64
+}
+
+// QueueTimeStats contains queue time analysis
+type QueueTimeStats struct {
+	AvgQueueTime    float64
+	MedianQueueTime float64
+	P95QueueTime    float64
+	AvgRunTime      float64
+	MedianRunTime   float64
+	QueueTimeRatio  float64 // queue time / total time
 }
 
 // TimeRange represents a time period
@@ -85,13 +116,15 @@ type RunData struct {
 
 // JobData represents simplified job data
 type JobData struct {
-	ID         int64
-	Name       string
-	Status     string
-	Conclusion string
-	StartedAt  time.Time
+	ID          int64
+	Name        string
+	Status      string
+	Conclusion  string
+	CreatedAt   time.Time
+	StartedAt   time.Time
 	CompletedAt time.Time
-	Duration   int64 // milliseconds
+	Duration    int64 // milliseconds
+	QueueTime   int64 // milliseconds
 }
 
 // AnalyzeTrends analyzes historical trends for a repository using GitHub API
@@ -141,6 +174,12 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 	analysis.FlakyJobs = detectFlakyJobs(runData)
 	analysis.Summary.MostFlakyJobsCount = len(analysis.FlakyJobs)
 
+	// Calculate regressions and improvements
+	analysis.TopRegressions, analysis.TopImprovements = calculateJobChanges(runData)
+
+	// Calculate queue time statistics
+	analysis.QueueTimeStats = calculateQueueTimeStats(runData)
+
 	return analysis, nil
 }
 
@@ -167,6 +206,7 @@ func convertAndFetchJobs(ctx context.Context, client githubapi.GitHubProvider, r
 		jobs, err := client.FetchJobsPaginated(ctx, jobsURL)
 		if err == nil {
 			for _, job := range jobs {
+				createdAt, _ := utils.ParseTime(job.CreatedAt)
 				startedAt, _ := utils.ParseTime(job.StartedAt)
 				completedAt, _ := utils.ParseTime(job.CompletedAt)
 
@@ -175,14 +215,21 @@ func convertAndFetchJobs(ctx context.Context, client githubapi.GitHubProvider, r
 					duration = completedAt.Sub(startedAt).Milliseconds()
 				}
 
+				queueTime := int64(0)
+				if !createdAt.IsZero() && !startedAt.IsZero() {
+					queueTime = startedAt.Sub(createdAt).Milliseconds()
+				}
+
 				rd.Jobs = append(rd.Jobs, JobData{
 					ID:          job.ID,
 					Name:        job.Name,
 					Status:      job.Status,
 					Conclusion:  job.Conclusion,
+					CreatedAt:   createdAt,
 					StartedAt:   startedAt,
 					CompletedAt: completedAt,
 					Duration:    duration,
+					QueueTime:   queueTime,
 				})
 			}
 		}
@@ -501,4 +548,129 @@ func calculatePercentile(values []float64, p int) float64 {
 	}
 
 	return sorted[index]
+}
+
+// calculateJobChanges finds jobs that got significantly slower or faster
+func calculateJobChanges(runs []RunData) ([]JobRegression, []JobImprovement) {
+	if len(runs) < 4 {
+		return nil, nil // Not enough data
+	}
+
+	// Group jobs by name and split into first/second half
+	jobMap := make(map[string]struct {
+		firstHalf  []float64
+		secondHalf []float64
+	})
+
+	midpoint := len(runs) / 2
+	for i, run := range runs {
+		for _, job := range run.Jobs {
+			if job.Duration <= 0 {
+				continue
+			}
+			durationSec := float64(job.Duration) / 1000.0
+			entry := jobMap[job.Name]
+			if i < midpoint {
+				entry.firstHalf = append(entry.firstHalf, durationSec)
+			} else {
+				entry.secondHalf = append(entry.secondHalf, durationSec)
+			}
+			jobMap[job.Name] = entry
+		}
+	}
+
+	var regressions []JobRegression
+	var improvements []JobImprovement
+
+	for name, data := range jobMap {
+		if len(data.firstHalf) < 2 || len(data.secondHalf) < 2 {
+			continue
+		}
+
+		oldAvg := average(data.firstHalf)
+		newAvg := average(data.secondHalf)
+		change := newAvg - oldAvg
+		percentChange := (change / oldAvg) * 100
+
+		// Only include significant changes (>10%)
+		if math.Abs(percentChange) < 10 {
+			continue
+		}
+
+		if change > 0 {
+			// Regression (got slower)
+			regressions = append(regressions, JobRegression{
+				Name:            name,
+				OldAvgDuration:  oldAvg,
+				NewAvgDuration:  newAvg,
+				PercentIncrease: percentChange,
+				AbsoluteChange:  change,
+			})
+		} else {
+			// Improvement (got faster)
+			improvements = append(improvements, JobImprovement{
+				Name:            name,
+				OldAvgDuration:  oldAvg,
+				NewAvgDuration:  newAvg,
+				PercentDecrease: -percentChange,
+				AbsoluteChange:  -change,
+			})
+		}
+	}
+
+	// Sort by percent change (worst first)
+	sort.Slice(regressions, func(i, j int) bool {
+		return regressions[i].PercentIncrease > regressions[j].PercentIncrease
+	})
+	sort.Slice(improvements, func(i, j int) bool {
+		return improvements[i].PercentDecrease > improvements[j].PercentDecrease
+	})
+
+	// Limit to top 10
+	if len(regressions) > 10 {
+		regressions = regressions[:10]
+	}
+	if len(improvements) > 10 {
+		improvements = improvements[:10]
+	}
+
+	return regressions, improvements
+}
+
+// calculateQueueTimeStats computes queue time statistics
+func calculateQueueTimeStats(runs []RunData) QueueTimeStats {
+	var queueTimes []float64
+	var runTimes []float64
+
+	for _, run := range runs {
+		for _, job := range run.Jobs {
+			if job.QueueTime > 0 {
+				queueTimes = append(queueTimes, float64(job.QueueTime)/1000.0)
+			}
+			if job.Duration > 0 {
+				runTimes = append(runTimes, float64(job.Duration)/1000.0)
+			}
+		}
+	}
+
+	if len(queueTimes) == 0 {
+		return QueueTimeStats{}
+	}
+
+	avgQueue := average(queueTimes)
+	avgRun := average(runTimes)
+	totalTime := avgQueue + avgRun
+	queueRatio := 0.0
+	if totalTime > 0 {
+		queueRatio = (avgQueue / totalTime) * 100
+	}
+
+	return QueueTimeStats{
+		AvgQueueTime:    avgQueue,
+		MedianQueueTime: calculateMedian(queueTimes),
+		P95QueueTime:    calculatePercentile(queueTimes, 95),
+		AvgRunTime:      avgRun,
+		MedianRunTime:   calculateMedian(runTimes),
+		QueueTimeRatio:  queueRatio,
+	}
 }

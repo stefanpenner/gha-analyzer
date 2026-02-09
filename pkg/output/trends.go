@@ -51,11 +51,33 @@ func OutputTrends(w io.Writer, analysis *analyzer.TrendAnalysis, format string) 
 		renderJobTrends(w, analysis.JobTrends)
 	}
 
+	// Queue time analysis
+	if analysis.QueueTimeStats.AvgQueueTime > 0 {
+		section(w, "Queue Time Analysis")
+		renderQueueTimeStats(w, analysis.QueueTimeStats)
+	}
+
+	// Top regressions
+	if len(analysis.TopRegressions) > 0 {
+		section(w, "Top Performance Regressions")
+		renderRegressions(w, analysis.TopRegressions)
+	}
+
+	// Top improvements
+	if len(analysis.TopImprovements) > 0 {
+		section(w, "Top Performance Improvements")
+		renderImprovements(w, analysis.TopImprovements)
+	}
+
 	// Flaky jobs
 	if len(analysis.FlakyJobs) > 0 {
 		section(w, "Flaky Jobs Detected")
 		renderFlakyJobs(w, analysis.FlakyJobs)
 	}
+
+	// Legend
+	section(w, "Legend")
+	renderLegend(w)
 
 	return nil
 }
@@ -330,4 +352,80 @@ func generateSparkline(points []analyzer.DataPoint) string {
 	}
 
 	return sb.String()
+}
+func renderQueueTimeStats(w io.Writer, stats analyzer.QueueTimeStats) {
+	fmt.Fprintf(w, "\n%-25s %20s\n", "Metric", "Value")
+	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 50))
+
+	fmt.Fprintf(w, "%-25s %20s\n", "Average Queue Time", utils.HumanizeTime(stats.AvgQueueTime))
+	fmt.Fprintf(w, "%-25s %20s\n", "Median Queue Time", utils.HumanizeTime(stats.MedianQueueTime))
+	fmt.Fprintf(w, "%-25s %20s\n", "95th Percentile Queue", utils.HumanizeTime(stats.P95QueueTime))
+	fmt.Fprintf(w, "%-25s %20s\n", "Average Run Time", utils.HumanizeTime(stats.AvgRunTime))
+	fmt.Fprintf(w, "%-25s %20s\n", "Median Run Time", utils.HumanizeTime(stats.MedianRunTime))
+	fmt.Fprintf(w, "%-25s %19.1f%%\n", "Queue Time Ratio", stats.QueueTimeRatio)
+
+	// Provide context on queue time
+	if stats.QueueTimeRatio > 50 {
+		fmt.Fprintf(w, "\n%s Jobs spend more time waiting than running. Consider:\n", utils.YellowText("⚠️"))
+		fmt.Fprintf(w, "   • Adding more runners\n")
+		fmt.Fprintf(w, "   • Using self-hosted runners for faster startup\n")
+		fmt.Fprintf(w, "   • Optimizing job concurrency limits\n")
+	} else if stats.QueueTimeRatio > 25 {
+		fmt.Fprintf(w, "\n%s Queue time is moderate. Monitor for spikes during peak hours.\n", utils.BlueText("💡"))
+	} else {
+		fmt.Fprintf(w, "\n%s Queue time is healthy. Jobs start quickly.\n", utils.GreenText("✓"))
+	}
+}
+
+func renderRegressions(w io.Writer, regressions []analyzer.JobRegression) {
+	fmt.Fprintf(w, "\n%s Jobs that got significantly slower (>10%% increase):\n\n", utils.RedText("⚠️"))
+	fmt.Fprintf(w, "%-60s %12s %12s %12s\n", "Job Name", "Was", "Now", "Change")
+	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 100))
+
+	for _, reg := range regressions {
+		name := reg.Name
+		if len(name) > 60 {
+			name = name[:57] + "..."
+		}
+
+		changeDisplay := fmt.Sprintf("+%.1f%%", reg.PercentIncrease)
+		fmt.Fprintf(w, "%-60s %12s %12s %s\n",
+			name,
+			utils.HumanizeTime(reg.OldAvgDuration),
+			utils.HumanizeTime(reg.NewAvgDuration),
+			utils.RedText(changeDisplay))
+	}
+
+	fmt.Fprintf(w, "\n%s Investigate these jobs for:\n", utils.BlueText("💡"))
+	fmt.Fprintf(w, "   • Recent code changes that may have added overhead\n")
+	fmt.Fprintf(w, "   • Missing or invalid caches\n")
+	fmt.Fprintf(w, "   • Resource contention or runner performance issues\n")
+	fmt.Fprintf(w, "   • Dependencies that need updating or optimization\n")
+}
+
+func renderImprovements(w io.Writer, improvements []analyzer.JobImprovement) {
+	fmt.Fprintf(w, "\n%s Jobs that got significantly faster (>10%% decrease):\n\n", utils.GreenText("✓"))
+	fmt.Fprintf(w, "%-60s %12s %12s %12s\n", "Job Name", "Was", "Now", "Change")
+	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 100))
+
+	for _, imp := range improvements {
+		name := imp.Name
+		if len(name) > 60 {
+			name = name[:57] + "..."
+		}
+
+		changeDisplay := fmt.Sprintf("-%.1f%%", imp.PercentDecrease)
+		fmt.Fprintf(w, "%-60s %12s %12s %s\n",
+			name,
+			utils.HumanizeTime(imp.OldAvgDuration),
+			utils.HumanizeTime(imp.NewAvgDuration),
+			utils.GreenText(changeDisplay))
+	}
+}
+
+func renderLegend(w io.Writer) {
+	fmt.Fprintf(w, "\n%s Trend Indicators:\n", utils.BlueText("ℹ️"))
+	fmt.Fprintf(w, "   %s  Job got faster (>5%% improvement)\n", utils.GreenText("✓"))
+	fmt.Fprintf(w, "   %s  Job got slower (>5%% regression)\n", utils.RedText("⚠"))
+	fmt.Fprintf(w, "   %s  Job performance is stable (<5%% change)\n", utils.BlueText("→"))
 }
