@@ -95,12 +95,12 @@ type JobData struct {
 }
 
 // AnalyzeTrends analyzes historical trends for a repository using GitHub API
-func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, repo string, days int) (*TrendAnalysis, error) {
+func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, repo string, days int, branch, workflow string) (*TrendAnalysis, error) {
 	endTime := time.Now()
 	startTime := endTime.Add(-time.Duration(days) * 24 * time.Hour)
 
 	// Fetch workflow runs from GitHub
-	runs, err := client.FetchRecentWorkflowRuns(ctx, owner, repo, days)
+	runs, err := client.FetchRecentWorkflowRuns(ctx, owner, repo, days, branch, workflow)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch workflow runs: %w", err)
 	}

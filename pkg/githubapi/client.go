@@ -525,11 +525,13 @@ func (c *Client) FetchWorkflowRuns(ctx context.Context, baseURL, headSHA string,
 }
 
 // FetchRecentWorkflowRuns fetches workflow runs for a repository from the last N days
-func (c *Client) FetchRecentWorkflowRuns(ctx context.Context, owner, repo string, days int) ([]WorkflowRun, error) {
+func (c *Client) FetchRecentWorkflowRuns(ctx context.Context, owner, repo string, days int, branch, workflow string) ([]WorkflowRun, error) {
 	ctx, span := getTracer().Start(ctx, "FetchRecentWorkflowRuns", trace.WithAttributes(
 		attribute.String("github.owner", owner),
 		attribute.String("github.repo", repo),
 		attribute.Int("days", days),
+		attribute.String("github.branch", branch),
+		attribute.String("github.workflow", workflow),
 	))
 	defer span.End()
 
@@ -539,6 +541,14 @@ func (c *Client) FetchRecentWorkflowRuns(ctx context.Context, owner, repo string
 	params := url.Values{}
 	params.Set("per_page", "100")
 	params.Set("created", ">="+since) // Filter by creation date
+
+	// Add optional filters
+	if branch != "" {
+		params.Set("branch", branch)
+	}
+	if workflow != "" {
+		params.Set("workflow_id", workflow)
+	}
 
 	baseURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", owner, repo)
 	runsURL := fmt.Sprintf("%s/actions/runs?%s", baseURL, params.Encode())
