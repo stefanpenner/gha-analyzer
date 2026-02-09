@@ -88,14 +88,28 @@ type config struct {
 	clearCache       bool
 	window           time.Duration
 	showHelp         bool
+	trendsMode       bool
+	trendsRepo       string
+	trendsDays       int
+	trendsFormat     string
 }
 
 func parseArgs(args []string, terminal bool) (config, error) {
 	cfg := config{
-		tuiMode: terminal,
+		tuiMode:      terminal,
+		trendsDays:   30, // default to 30 days
+		trendsFormat: "terminal",
 	}
 
-	for _, arg := range args {
+	// Check if first arg is "trends" subcommand
+	if len(args) > 0 && args[0] == "trends" {
+		cfg.trendsMode = true
+		args = args[1:] // consume the "trends" subcommand
+	}
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
 		if arg == "help" || arg == "--help" || arg == "-h" {
 			cfg.showHelp = true
 			continue
@@ -148,6 +162,31 @@ func parseArgs(args []string, terminal bool) (config, error) {
 			cfg.clearCache = true
 			continue
 		}
+
+		// Trends-specific flags
+		if strings.HasPrefix(arg, "--days=") {
+			days := strings.TrimPrefix(arg, "--days=")
+			var err error
+			_, err = fmt.Sscanf(days, "%d", &cfg.trendsDays)
+			if err != nil || cfg.trendsDays < 1 {
+				return cfg, fmt.Errorf("invalid --days value: %s", days)
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "--format=") {
+			cfg.trendsFormat = strings.TrimPrefix(arg, "--format=")
+			if cfg.trendsFormat != "terminal" && cfg.trendsFormat != "json" {
+				return cfg, fmt.Errorf("invalid --format value: %s (must be 'terminal' or 'json')", cfg.trendsFormat)
+			}
+			continue
+		}
+
+		// For trends mode, first non-flag arg is the repo
+		if cfg.trendsMode && cfg.trendsRepo == "" && !strings.HasPrefix(arg, "-") {
+			cfg.trendsRepo = arg
+			continue
+		}
+
 		cfg.urls = append(cfg.urls, arg)
 	}
 
@@ -176,9 +215,59 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Fprintf(os.Stderr, "Cache cleared: %s\n", cacheDir)
-		if len(args) == 0 {
+		if len(args) == 0 && !cfg.trendsMode {
 			os.Exit(0)
 		}
+	}
+
+	// Handle trends mode
+	if cfg.trendsMode {
+		if cfg.trendsRepo == "" {
+			printErrorMsg("Trends mode requires a repository in format 'owner/repo'\n\n  Usage: gha-analyzer trends owner/repo [--days=30] [--format=terminal|json]\n\n  Run 'gha-analyzer --help' for more information.")
+			os.Exit(1)
+		}
+
+		// Parse owner/repo
+		parts := strings.Split(cfg.trendsRepo, "/")
+		if len(parts) != 2 {
+			printErrorMsg(fmt.Sprintf("Invalid repository format: %s (expected 'owner/repo')", cfg.trendsRepo))
+			os.Exit(1)
+		}
+		owner, repo := parts[0], parts[1]
+
+		// Get GitHub token
+		token := os.Getenv("GITHUB_TOKEN")
+		if token == "" {
+			if ghPath, err := exec.LookPath("gh"); err == nil {
+				if out, err := exec.Command(ghPath, "auth", "token").Output(); err == nil {
+					token = strings.TrimSpace(string(out))
+				}
+			}
+		}
+		if token == "" {
+			printErrorMsg("GITHUB_TOKEN environment variable is required.\n  Tip: install the GitHub CLI (gh) and run `gh auth login` to authenticate automatically.")
+			os.Exit(1)
+		}
+
+		ctx := context.Background()
+		client := githubapi.NewClient(githubapi.NewContext(token))
+
+		fmt.Fprintf(os.Stderr, "Analyzing trends for %s/%s over the last %d days...\n", owner, repo, cfg.trendsDays)
+
+		// Perform trend analysis
+		analysis, err := analyzer.AnalyzeTrends(ctx, client, owner, repo, cfg.trendsDays)
+		if err != nil {
+			printError(err, "trend analysis failed")
+			os.Exit(1)
+		}
+
+		// Output results
+		if err := output.OutputTrends(os.Stderr, analysis, cfg.trendsFormat); err != nil {
+			printError(err, "output failed")
+			os.Exit(1)
+		}
+
+		return
 	}
 
 	// If no URL args and stdin is piped, read webhook from stdin
@@ -459,6 +548,7 @@ func printUsage() {
 	fmt.Println("GitHub Actions Analyzer")
 	fmt.Println("\nUsage:")
 	fmt.Println("  gha-analyzer <github_url1> [github_url2...] [token] [flags]")
+	fmt.Println("  gha-analyzer trends <owner/repo> [flags]")
 	fmt.Println("\nFlags:")
 	fmt.Println("  --tui                     Force interactive TUI mode (default when terminal is available)")
 	fmt.Println("  --no-tui                  Disable interactive TUI, use CLI output instead")
@@ -471,12 +561,17 @@ func printUsage() {
 	fmt.Println("  --window=<duration>       Only show events within <duration> of merge/latest activity (e.g. 24h, 2h)")
 	fmt.Println("  --clear-cache             Clear the HTTP cache (can be combined with other flags)")
 	fmt.Println("  help, --help, -h          Show this help message")
+	fmt.Println("\nTrends Mode Flags:")
+	fmt.Println("  --days=<n>                Number of days to analyze (default: 30)")
+	fmt.Println("  --format=<format>         Output format: 'terminal' or 'json' (default: terminal)")
 	fmt.Println("\nEnvironment Variables:")
 	fmt.Println("  GITHUB_TOKEN              GitHub PAT (alternatively pass as argument)")
 	fmt.Println("\nExamples:")
 	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123")
 	fmt.Println("  gha-analyzer https://github.com/owner/repo/commit/sha --perfetto=trace.json")
 	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123 --no-tui")
+	fmt.Println("  gha-analyzer trends owner/repo")
+	fmt.Println("  gha-analyzer trends owner/repo --days=7 --format=json")
 	fmt.Println("  gha-analyzer --clear-cache")
 }
 
