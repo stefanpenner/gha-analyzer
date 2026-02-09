@@ -92,6 +92,8 @@ type config struct {
 	trendsRepo       string
 	trendsDays       int
 	trendsFormat     string
+	trendsBranch     string
+	trendsWorkflow   string
 }
 
 func parseArgs(args []string, terminal bool) (config, error) {
@@ -180,6 +182,14 @@ func parseArgs(args []string, terminal bool) (config, error) {
 			}
 			continue
 		}
+		if strings.HasPrefix(arg, "--branch=") {
+			cfg.trendsBranch = strings.TrimPrefix(arg, "--branch=")
+			continue
+		}
+		if strings.HasPrefix(arg, "--workflow=") {
+			cfg.trendsWorkflow = strings.TrimPrefix(arg, "--workflow=")
+			continue
+		}
 
 		// For trends mode, first non-flag arg is the repo
 		if cfg.trendsMode && cfg.trendsRepo == "" && !strings.HasPrefix(arg, "-") {
@@ -252,10 +262,18 @@ func main() {
 		ctx := context.Background()
 		client := githubapi.NewClient(githubapi.NewContext(token))
 
-		fmt.Fprintf(os.Stderr, "Analyzing trends for %s/%s over the last %d days...\n", owner, repo, cfg.trendsDays)
+		// Build filter description for user feedback
+		filterDesc := fmt.Sprintf("Analyzing trends for %s/%s over the last %d days", owner, repo, cfg.trendsDays)
+		if cfg.trendsBranch != "" {
+			filterDesc += fmt.Sprintf(" (branch: %s)", cfg.trendsBranch)
+		}
+		if cfg.trendsWorkflow != "" {
+			filterDesc += fmt.Sprintf(" (workflow: %s)", cfg.trendsWorkflow)
+		}
+		fmt.Fprintf(os.Stderr, "%s...\n", filterDesc)
 
 		// Perform trend analysis
-		analysis, err := analyzer.AnalyzeTrends(ctx, client, owner, repo, cfg.trendsDays)
+		analysis, err := analyzer.AnalyzeTrends(ctx, client, owner, repo, cfg.trendsDays, cfg.trendsBranch, cfg.trendsWorkflow)
 		if err != nil {
 			printError(err, "trend analysis failed")
 			os.Exit(1)
@@ -564,6 +582,8 @@ func printUsage() {
 	fmt.Println("\nTrends Mode Flags:")
 	fmt.Println("  --days=<n>                Number of days to analyze (default: 30)")
 	fmt.Println("  --format=<format>         Output format: 'terminal' or 'json' (default: terminal)")
+	fmt.Println("  --branch=<name>           Filter by branch name (e.g., main, master)")
+	fmt.Println("  --workflow=<file>         Filter by workflow file name (e.g., post-merge.yaml)")
 	fmt.Println("\nEnvironment Variables:")
 	fmt.Println("  GITHUB_TOKEN              GitHub PAT (alternatively pass as argument)")
 	fmt.Println("\nExamples:")
@@ -572,6 +592,7 @@ func printUsage() {
 	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123 --no-tui")
 	fmt.Println("  gha-analyzer trends owner/repo")
 	fmt.Println("  gha-analyzer trends owner/repo --days=7 --format=json")
+	fmt.Println("  gha-analyzer trends owner/repo --branch=main --workflow=post-merge.yaml")
 	fmt.Println("  gha-analyzer --clear-cache")
 }
 

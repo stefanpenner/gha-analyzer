@@ -44,6 +44,15 @@ gha-analyzer trends owner/repo
 # Analyze trends for a specific time period
 gha-analyzer trends owner/repo --days=7
 
+# Filter by branch (e.g., only main branch workflows)
+gha-analyzer trends owner/repo --branch=main
+
+# Filter by workflow file (e.g., only post-merge workflows)
+gha-analyzer trends owner/repo --workflow=post-merge.yaml
+
+# Combine filters for focused analysis
+gha-analyzer trends owner/repo --days=14 --branch=main --workflow=ci.yaml
+
 # Export as JSON for programmatic analysis
 gha-analyzer trends owner/repo --days=14 --format=json
 ```
