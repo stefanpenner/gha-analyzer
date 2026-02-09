@@ -8,7 +8,6 @@ go_library(
         "metrics.go",
         "otel_analyzer.go",
         "processor.go",
-        "storage_converter.go",
         "trace.go",
         "trace_emitter.go",
         "tree.go",
@@ -19,7 +18,6 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/githubapi",
-        "//pkg/storage",
         "//pkg/utils",
         "@com_github_cockroachdb_errors//:errors",
         "@io_opentelemetry_go_otel//:otel",

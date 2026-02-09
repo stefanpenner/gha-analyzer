@@ -524,6 +524,28 @@ func (c *Client) FetchWorkflowRuns(ctx context.Context, baseURL, headSHA string,
 	return fetchWorkflowRunsPaginated(ctx, c, runsURL)
 }
 
+// FetchRecentWorkflowRuns fetches workflow runs for a repository from the last N days
+func (c *Client) FetchRecentWorkflowRuns(ctx context.Context, owner, repo string, days int) ([]WorkflowRun, error) {
+	ctx, span := getTracer().Start(ctx, "FetchRecentWorkflowRuns", trace.WithAttributes(
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+		attribute.Int("days", days),
+	))
+	defer span.End()
+
+	// Calculate created date filter (YYYY-MM-DD format)
+	since := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
+
+	params := url.Values{}
+	params.Set("per_page", "100")
+	params.Set("created", ">="+since) // Filter by creation date
+
+	baseURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", owner, repo)
+	runsURL := fmt.Sprintf("%s/actions/runs?%s", baseURL, params.Encode())
+
+	return fetchWorkflowRunsPaginated(ctx, c, runsURL)
+}
+
 func (c *Client) FetchRepository(ctx context.Context, baseURL string) (*RepoMeta, error) {
 	ctx, span := getTracer().Start(ctx, "FetchRepository", trace.WithAttributes(
 		attribute.String("github.baseURL", baseURL),
