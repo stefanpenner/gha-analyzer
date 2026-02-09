@@ -152,6 +152,7 @@ type Job struct {
 	Name        string `json:"name"`
 	Status      string `json:"status"`
 	Conclusion  string `json:"conclusion"`
+	CreatedAt   string `json:"created_at"`
 	StartedAt   string `json:"started_at"`
 	CompletedAt string `json:"completed_at"`
 	RunnerName  string `json:"runner_name"`
