@@ -7,6 +7,7 @@ go_library(
         "markdown.go",
         "output.go",
         "timeline.go",
+        "trends.go",
     ],
     importpath = "github.com/stefanpenner/gha-analyzer/pkg/output",
     visibility = ["//visibility:public"],
