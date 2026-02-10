@@ -57,6 +57,24 @@ echo '{"workflow_run":{"head_sha":"abc123"},"repository":{"full_name":"owner/rep
 
 Supports `workflow_run` and `workflow_job` events. When no URL arguments are given and stdin is piped, the webhook is read automatically.
 
+## Development
+
+The project uses [Bazel](https://bazel.build/) for hermetic builds.
+
+```bash
+# Run the analyzer
+bazel run //:gha-analyzer -- <url>
+
+# Build everything
+bazel build //...
+
+# Run all tests
+bazel test //...
+
+# Regenerate BUILD.bazel files after adding Go packages
+bazel run //:gazelle
+```
+
 ## License
 
 MIT

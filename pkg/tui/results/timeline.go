@@ -626,6 +626,262 @@ func renderTimelineBarWithChildrenBg(item TreeItem, globalStart, globalEnd time.
 	return renderTimelineWithChildren(item, globalStart, globalEnd, width, url, false, &bg)
 }
 
+// RenderTimelineBarDimmed renders a timeline bar in gray for items after the logical end.
+// It preserves the bar shape but uses BarSkippedStyle (gray) for all elements.
+func RenderTimelineBarDimmed(item TreeItem, globalStart, globalEnd time.Time, width int) string {
+	if globalEnd.Before(globalStart) || globalEnd.Equal(globalStart) || width <= 0 {
+		return strings.Repeat(" ", width)
+	}
+
+	totalDuration := globalEnd.Sub(globalStart)
+
+	itemStart := item.StartTime
+	itemEnd := item.EndTime
+
+	if itemStart.Before(globalStart) {
+		itemStart = globalStart
+	}
+	if itemEnd.After(globalEnd) {
+		itemEnd = globalEnd
+	}
+
+	// Handle 0-duration items
+	isZeroDuration := itemEnd.Before(itemStart) || itemEnd.Equal(itemStart)
+	if isZeroDuration {
+		startOffset := itemStart.Sub(globalStart)
+		startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
+		markerChar := "|"
+		if item.ItemType == ItemTypeMarker {
+			markerChar, _ = getBarStyle(item)
+		}
+		return renderMarker(markerChar, BarSkippedStyle, startPos, width, "", true)
+	}
+
+	startOffset := itemStart.Sub(globalStart)
+	endOffset := itemEnd.Sub(globalStart)
+
+	startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
+	endPos := int(float64(endOffset) / float64(totalDuration) * float64(width))
+
+	barLength := endPos - startPos
+	if barLength < 1 {
+		barLength = 1
+	}
+	if startPos < 0 {
+		startPos = 0
+	}
+	if startPos > width-1 {
+		startPos = width - 1
+	}
+	if startPos+barLength > width {
+		barLength = width - startPos
+	}
+	if barLength < 1 {
+		barLength = 1
+	}
+
+	// Use the normal bar character but render in gray
+	barChar, _ := getBarStyle(item)
+
+	leftPad := strings.Repeat(" ", startPos)
+	bar := strings.Repeat(barChar, barLength)
+	rightPad := strings.Repeat(" ", width-startPos-barLength)
+
+	return leftPad + BarSkippedStyle.Render(bar) + rightPad
+}
+
+// RenderTimelineBarDimmedSelected renders a dimmed timeline bar with selection background
+func RenderTimelineBarDimmedSelected(item TreeItem, globalStart, globalEnd time.Time, width int) string {
+	if globalEnd.Before(globalStart) || globalEnd.Equal(globalStart) || width <= 0 {
+		return SelectedBgStyle.Render(strings.Repeat(" ", width))
+	}
+
+	totalDuration := globalEnd.Sub(globalStart)
+
+	itemStart := item.StartTime
+	itemEnd := item.EndTime
+
+	if itemStart.Before(globalStart) {
+		itemStart = globalStart
+	}
+	if itemEnd.After(globalEnd) {
+		itemEnd = globalEnd
+	}
+
+	isZeroDuration := itemEnd.Before(itemStart) || itemEnd.Equal(itemStart)
+	if isZeroDuration {
+		startOffset := itemStart.Sub(globalStart)
+		startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
+		markerChar := "|"
+		if item.ItemType == ItemTypeMarker {
+			markerChar, _ = getBarStyle(item)
+		}
+		return renderMarker(markerChar, BarSkippedSelectedStyle, startPos, width, "", true)
+	}
+
+	startOffset := itemStart.Sub(globalStart)
+	endOffset := itemEnd.Sub(globalStart)
+
+	startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
+	endPos := int(float64(endOffset) / float64(totalDuration) * float64(width))
+
+	barLength := endPos - startPos
+	if barLength < 1 {
+		barLength = 1
+	}
+	if startPos < 0 {
+		startPos = 0
+	}
+	if startPos > width-1 {
+		startPos = width - 1
+	}
+	if startPos+barLength > width {
+		barLength = width - startPos
+	}
+	if barLength < 1 {
+		barLength = 1
+	}
+
+	barChar, _ := getBarStyle(item)
+
+	leftPad := SelectedBgStyle.Render(strings.Repeat(" ", startPos))
+	bar := strings.Repeat(barChar, barLength)
+	rightPad := SelectedBgStyle.Render(strings.Repeat(" ", width-startPos-barLength))
+
+	return leftPad + BarSkippedSelectedStyle.Render(bar) + rightPad
+}
+
+// overlayLogicalEndLine replaces the character at visual column `col` in an
+// ANSI-styled timeline string with a yellow "│". The replacement preserves
+// total visible width. col must be in [0, width). If col < 0 the string is
+// returned unchanged.
+//
+// When `selected` is true the marker gets a selection-bg behind it.
+func overlayLogicalEndLine(timeline string, col, width int, selected bool) string {
+	if col < 0 || col >= width {
+		return timeline
+	}
+
+	// Walk the string tracking visible position. We split into three parts:
+	// [before col] [char at col] [after col]
+	// We rebuild: before + styled "│" + after
+	type segment struct {
+		start, end int // byte offsets in timeline
+	}
+
+	bytes := []byte(timeline)
+	visPos := 0
+	i := 0
+	beforeEnd := 0   // byte offset where col starts
+	afterStart := 0   // byte offset where col+1 starts
+	found := false
+
+	for i < len(bytes) && visPos <= col {
+		if bytes[i] == '\x1b' {
+			// Skip ANSI escape sequence
+			j := i + 1
+			if j < len(bytes) && bytes[j] == '[' {
+				// CSI sequence: ESC [ ... final_byte
+				j++
+				for j < len(bytes) && bytes[j] < 0x40 {
+					j++
+				}
+				if j < len(bytes) {
+					j++ // skip final byte
+				}
+			} else if j < len(bytes) && bytes[j] == ']' {
+				// OSC sequence: ESC ] ... ST (ST = ESC \ or BEL)
+				j++
+				for j < len(bytes) {
+					if bytes[j] == '\x07' {
+						j++
+						break
+					}
+					if bytes[j] == '\x1b' && j+1 < len(bytes) && bytes[j+1] == '\\' {
+						j += 2
+						break
+					}
+					j++
+				}
+			}
+			i = j
+			continue
+		}
+
+		// Visible character — decode UTF-8 rune
+		if visPos == col {
+			beforeEnd = i
+			// Skip this one rune
+			r := 1
+			if bytes[i] >= 0x80 {
+				// Multi-byte UTF-8: find rune length
+				for r < 4 && i+r < len(bytes) && (bytes[i+r]&0xC0) == 0x80 {
+					r++
+				}
+			}
+			// The character at col might be wider than 1, but we treat it as 1 column
+			// since timeline positions are 1:1 with width
+			afterStart = i + r
+			// Continue past any trailing ANSI sequences that belong to this char
+			j := afterStart
+			for j < len(bytes) && bytes[j] == '\x1b' {
+				k := j + 1
+				if k < len(bytes) && bytes[k] == '[' {
+					k++
+					for k < len(bytes) && bytes[k] < 0x40 {
+						k++
+					}
+					if k < len(bytes) {
+						k++
+					}
+				} else if k < len(bytes) && bytes[k] == ']' {
+					k++
+					for k < len(bytes) {
+						if bytes[k] == '\x07' {
+							k++
+							break
+						}
+						if bytes[k] == '\x1b' && k+1 < len(bytes) && bytes[k+1] == '\\' {
+							k += 2
+							break
+						}
+						k++
+					}
+				}
+				j = k
+			}
+			afterStart = j
+			found = true
+			break
+		}
+
+		// Advance past this rune
+		if bytes[i] < 0x80 {
+			i++
+		} else {
+			r := 1
+			for r < 4 && i+r < len(bytes) && (bytes[i+r]&0xC0) == 0x80 {
+				r++
+			}
+			i += r
+		}
+		visPos++
+	}
+
+	if !found {
+		return timeline
+	}
+
+	// Build the replacement
+	markerStyle := LogicalEndBadgeStyle
+	if selected {
+		markerStyle = LogicalEndBadgeStyle.Background(ColorSelectionBg)
+	}
+	marker := markerStyle.Render("│")
+
+	return string(bytes[:beforeEnd]) + marker + string(bytes[afterStart:])
+}
+
 func maxInt(a, b int) int {
 	if a > b {
 		return a

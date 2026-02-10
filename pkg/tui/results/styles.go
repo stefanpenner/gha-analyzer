@@ -91,6 +91,12 @@ var (
 			Foreground(ColorGray)
 )
 
+// Logical end badge style
+var (
+	LogicalEndBadgeStyle = lipgloss.NewStyle().
+				Foreground(ColorYellow)
+)
+
 // Timeline bar colors
 var (
 	BarSuccessStyle = lipgloss.NewStyle().

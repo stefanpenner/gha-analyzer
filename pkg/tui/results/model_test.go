@@ -229,24 +229,23 @@ func TestModelExpandCollapse(t *testing.T) {
 		assert.False(t, m.expandedState["CI/0"])
 	})
 
-	t.Run("expand all with e key", func(t *testing.T) {
+	t.Run("expand all with c key (toggle)", func(t *testing.T) {
 		m := createTestModel()
 		// Collapse everything first
 		m.expandedState = make(map[string]bool)
 		m.rebuildItems()
 
-		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
 		m = newModel.(Model)
 
 		// Should expand workflow and jobs
 		assert.True(t, m.expandedState["CI/0"])
 	})
 
-	t.Run("collapse all with c key", func(t *testing.T) {
+	t.Run("collapse all with c key (toggle)", func(t *testing.T) {
 		m := createTestModel()
-		m.expandedState["CI/0"] = true
-		m.expandedState["CI/0/job/0"] = true
-		m.rebuildItems()
+		// Expand everything first so toggle will collapse
+		m.expandAll()
 
 		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
 		m = newModel.(Model)
@@ -465,8 +464,7 @@ func TestKeyMap(t *testing.T) {
 		assert.NotEmpty(t, km.Info.Keys())
 		assert.NotEmpty(t, km.Focus.Keys())
 		assert.NotEmpty(t, km.Reload.Keys())
-		assert.NotEmpty(t, km.ExpandAll.Keys())
-		assert.NotEmpty(t, km.CollapseAll.Keys())
+		assert.NotEmpty(t, km.ToggleExpandAll.Keys())
 		assert.NotEmpty(t, km.Perfetto.Keys())
 		assert.NotEmpty(t, km.Mouse.Keys())
 		assert.NotEmpty(t, km.Help.Keys())

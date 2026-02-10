@@ -2,3 +2,9 @@ load("@gazelle//:def.bzl", "gazelle")
 
 # gazelle:prefix github.com/stefanpenner/gha-analyzer
 gazelle(name = "gazelle")
+
+# Convenience alias so `bazel run //:gha-analyzer` works from the repo root.
+alias(
+    name = "gha-analyzer",
+    actual = "//cmd/gha-analyzer",
+)

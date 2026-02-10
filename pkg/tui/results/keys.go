@@ -16,13 +16,13 @@ type KeyMap struct {
 	Info        key.Binding
 	Focus       key.Binding
 	Reload      key.Binding
-	ExpandAll   key.Binding
-	CollapseAll key.Binding
+	ToggleExpandAll key.Binding
 	Perfetto    key.Binding
 	Search      key.Binding
 	Mouse       key.Binding
 	GoTop       key.Binding
 	GoBottom    key.Binding
+	LogicalEnd  key.Binding
 	Help        key.Binding
 	Quit        key.Binding
 }
@@ -78,13 +78,9 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("r"),
 			key.WithHelp("r", "reload"),
 		),
-		ExpandAll: key.NewBinding(
-			key.WithKeys("e"),
-			key.WithHelp("e", "expand all"),
-		),
-		CollapseAll: key.NewBinding(
+		ToggleExpandAll: key.NewBinding(
 			key.WithKeys("c"),
-			key.WithHelp("c", "collapse all"),
+			key.WithHelp("c", "expand/collapse all"),
 		),
 		Perfetto: key.NewBinding(
 			key.WithKeys("p"),
@@ -106,6 +102,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("G"),
 			key.WithHelp("GG", "go to bottom"),
 		),
+		LogicalEnd: key.NewBinding(
+			key.WithKeys("e"),
+			key.WithHelp("e", "mark end"),
+		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
 			key.WithHelp("?", "help"),
@@ -119,7 +119,7 @@ func DefaultKeyMap() KeyMap {
 
 // ShortHelp returns a short help string for the footer
 func (k KeyMap) ShortHelp() string {
-	return "↑↓ nav • gg/GG top/bottom • ←→ expand/collapse • space toggle • / search • o open • ? help • q quit"
+	return "↑↓ nav • gg/GG top/bottom • ←→ expand/collapse • c toggle all • e mark end • space toggle • / search • ? help • q quit"
 }
 
 // FullHelp returns all key bindings for the help modal
@@ -138,8 +138,8 @@ func (k KeyMap) FullHelp() [][]string {
 		{"f", "Focus on selection"},
 		{"gg", "Go to top"},
 		{"GG", "Go to bottom"},
-		{"e", "Expand all"},
-		{"c", "Collapse all"},
+		{"c", "Toggle expand/collapse all"},
+		{"e", "Mark logical end"},
 		{"r", "Reload data"},
 		{"p", "Open in Perfetto"},
 		{"/", "Search/filter"},

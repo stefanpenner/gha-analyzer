@@ -95,6 +95,9 @@ type Model struct {
 	searchQuery    string
 	searchMatchIDs map[string]bool // IDs of items matching the query (not ancestors)
 	searchAncIDs   map[string]bool // IDs of ancestor items (for context)
+	// Logical end marker
+	logicalEndID   string    // ID of marked item ("" = no marker)
+	logicalEndTime time.Time // EndTime of marked item
 }
 
 // ReloadFunc is the function signature for reloading data
@@ -264,6 +267,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.recalculateChartBounds()
 		m.cursor = 0
 		m.selectionStart = -1
+		m.logicalEndID = ""
+		m.logicalEndTime = time.Time{}
 		return m, nil
 
 	case spinner.TickMsg:
@@ -503,11 +508,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.Focus):
 			m.toggleFocus()
 
-		case key.Matches(msg, m.keys.ExpandAll):
-			m.expandAll()
-
-		case key.Matches(msg, m.keys.CollapseAll):
-			m.collapseAll()
+		case key.Matches(msg, m.keys.ToggleExpandAll):
+			m.toggleExpandAll()
 
 		case key.Matches(msg, m.keys.Perfetto):
 			if m.openPerfettoFunc != nil {
@@ -526,6 +528,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchQuery = ""
 			m.searchMatchIDs = nil
 			m.searchAncIDs = nil
+			return m, nil
+
+		case key.Matches(msg, m.keys.LogicalEnd):
+			m.toggleLogicalEnd()
 			return m, nil
 
 		case key.Matches(msg, m.keys.Help):
@@ -759,7 +765,12 @@ func (m Model) View() string {
 		if timelineW < 10 {
 			timelineW = 10
 		}
-		b.WriteString(BorderStyle.Render("│") + strings.Repeat(" ", treeW) + SeparatorStyle.Render("│") + strings.Repeat(" ", timelineW) + BorderStyle.Render("│"))
+		timelinePad := strings.Repeat(" ", timelineW)
+		endCol := m.logicalEndCol(timelineW)
+		if endCol >= 0 {
+			timelinePad = overlayLogicalEndLine(timelinePad, endCol, timelineW, false)
+		}
+		b.WriteString(BorderStyle.Render("│") + strings.Repeat(" ", treeW) + SeparatorStyle.Render("│") + timelinePad + BorderStyle.Render("│"))
 
 		// Add scrollbar character for empty rows
 		if needsScroll {
@@ -882,6 +893,58 @@ func (m *Model) addAncestors(parentID string) {
 	if grandparentID != "" {
 		m.addAncestors(grandparentID)
 	}
+}
+
+// toggleLogicalEnd toggles the logical end marker on the current cursor item.
+// If the cursor item is already the marker, it clears it. Otherwise it sets it.
+func (m *Model) toggleLogicalEnd() {
+	if m.cursor >= len(m.visibleItems) {
+		return
+	}
+	item := m.visibleItems[m.cursor]
+	if item.ID == m.logicalEndID {
+		// Clear the marker
+		m.logicalEndID = ""
+		m.logicalEndTime = time.Time{}
+	} else {
+		// Set the marker
+		m.logicalEndID = item.ID
+		m.logicalEndTime = item.EndTime
+		// For zero-duration items (markers), use StartTime
+		if item.EndTime.IsZero() || item.EndTime.Equal(item.StartTime) {
+			m.logicalEndTime = item.StartTime
+		}
+	}
+}
+
+// logicalEndCol returns the timeline column position for the logical end marker.
+// Returns -1 if no marker is set or the position is outside the chart bounds.
+func (m *Model) logicalEndCol(timelineW int) int {
+	if m.logicalEndID == "" || m.logicalEndTime.IsZero() || m.chartStart.IsZero() || m.chartEnd.IsZero() {
+		return -1
+	}
+	chartDuration := m.chartEnd.Sub(m.chartStart)
+	if chartDuration <= 0 {
+		return -1
+	}
+	endOffset := m.logicalEndTime.Sub(m.chartStart)
+	col := int(float64(endOffset) / float64(chartDuration) * float64(timelineW))
+	if col >= timelineW {
+		col = timelineW - 1
+	}
+	if col < 0 {
+		col = 0
+	}
+	return col
+}
+
+// isAfterLogicalEnd returns true when the logical end is set and the item
+// starts strictly after the logical end time.
+func (m *Model) isAfterLogicalEnd(item TreeItem) bool {
+	if m.logicalEndID == "" {
+		return false
+	}
+	return item.StartTime.After(m.logicalEndTime)
 }
 
 // rebuildItems rebuilds the flattened item list based on expanded state
@@ -1139,6 +1202,28 @@ func (m *Model) collapseAll() {
 		m.expandedState[id] = false
 	}
 	m.rebuildItems()
+}
+
+// toggleExpandAll expands all if any are collapsed, or collapses all if all are expanded
+func (m *Model) toggleExpandAll() {
+	anyCollapsed := false
+	var check func(nodes []*TreeItem)
+	check = func(nodes []*TreeItem) {
+		for _, item := range nodes {
+			if item.HasChildren && !m.expandedState[item.ID] {
+				anyCollapsed = true
+				return
+			}
+			check(item.Children)
+		}
+	}
+	check(m.treeItems)
+
+	if anyCollapsed {
+		m.expandAll()
+	} else {
+		m.collapseAll()
+	}
 }
 
 // hideActivityGroups hides all Activity groups and their children from the chart by default
