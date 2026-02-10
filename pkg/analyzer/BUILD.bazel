@@ -29,6 +29,7 @@ go_library(
 go_test(
     name = "analyzer_test",
     srcs = [
+        "data_provider_test.go",
         "metrics_test.go",
         "otel_test.go",
     ],

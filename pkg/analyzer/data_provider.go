@@ -220,6 +220,9 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 		if err != nil {
 			return nil, err
 		}
+		if len(runs) == 0 {
+			runs = allRunsForHead
+		}
 		if reporter != nil {
 			reporter.SetPhase("Fetching commit metadata")
 			reporter.SetDetail(headSHA)
