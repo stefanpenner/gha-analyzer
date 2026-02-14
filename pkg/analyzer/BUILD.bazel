@@ -11,6 +11,7 @@ go_library(
         "trace.go",
         "trace_emitter.go",
         "tree.go",
+        "trends.go",
         "types.go",
     ],
     importpath = "github.com/stefanpenner/gha-analyzer/pkg/analyzer",
@@ -32,6 +33,7 @@ go_test(
         "data_provider_test.go",
         "metrics_test.go",
         "otel_test.go",
+        "trends_test.go",
     ],
     embed = [":analyzer"],
     deps = [

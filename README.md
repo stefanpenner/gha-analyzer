@@ -33,6 +33,55 @@ gha-analyzer <url> --perfetto=trace.json --open-in-perfetto
 gha-analyzer <url> --window=1h
 ```
 
+## Historical Trend Analysis
+
+Analyze workflow performance trends over time to identify patterns, flaky jobs, and performance regressions:
+
+```bash
+# Analyze trends for the last 30 days (default)
+gha-analyzer trends owner/repo
+
+# Analyze trends for a specific time period
+gha-analyzer trends owner/repo --days=7
+
+# Filter by branch (e.g., only main branch workflows)
+gha-analyzer trends owner/repo --branch=main
+
+# Filter by workflow file (e.g., only post-merge workflows)
+gha-analyzer trends owner/repo --workflow=post-merge.yaml
+
+# Combine filters for focused analysis
+gha-analyzer trends owner/repo --days=14 --branch=main --workflow=ci.yaml
+
+# Export as JSON for programmatic analysis
+gha-analyzer trends owner/repo --days=14 --format=json
+```
+
+Trend analysis provides:
+- **Summary Statistics**: Average, median, and 95th percentile durations
+- **Success Rate Trends**: Track workflow reliability over time
+- **Duration Trends**: Visualize performance changes with ASCII charts
+- **Job Performance**: Identify slowest jobs and their trends
+- **Flaky Job Detection**: Automatically detect jobs with inconsistent outcomes (>10% failure rate)
+- **Trend Direction**: See if performance is improving, stable, or degrading
+
+### Sample Output
+
+```
+================================================================================
+📈 Historical Trend Analysis: stefanpenner/gha-analyzer
+================================================================================
+
+Summary Statistics
+------------------
+Average Duration                        1m 46s
+Median Duration                         1m 41s
+95th Percentile                         3m 13s
+Average Success Rate                     61.7%
+Trend Direction           ✓ Improving (-20.7%)
+Flaky Jobs Detected                          1
+```
+
 ## OTel Output
 
 ```bash
