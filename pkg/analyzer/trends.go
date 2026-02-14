@@ -11,7 +11,7 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 )
 
-// TrendAnalysis contains trend data for a repository
+// TrendAnalysis holds the result of analyzing historical workflow trends for a repository.
 type TrendAnalysis struct {
 	Owner            string
 	Repo             string
@@ -162,10 +162,10 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 	analysis.Summary = calculateTrendSummary(runData)
 
 	// Generate duration trend
-	analysis.DurationTrend = generateDurationTrend(runData, days)
+	analysis.DurationTrend = generateDurationTrend(runData)
 
 	// Generate success rate trend
-	analysis.SuccessRateTrend = generateSuccessRateTrend(runData, days)
+	analysis.SuccessRateTrend = generateSuccessRateTrend(runData)
 
 	// Analyze individual jobs
 	analysis.JobTrends = analyzeJobTrends(runData)
@@ -299,7 +299,7 @@ func calculateTrendSummary(runs []RunData) TrendSummary {
 }
 
 // generateDurationTrend creates time-series data for duration
-func generateDurationTrend(runs []RunData, days int) []DataPoint {
+func generateDurationTrend(runs []RunData) []DataPoint {
 	dayBuckets := make(map[string][]float64)
 
 	for _, run := range runs {
@@ -329,7 +329,7 @@ func generateDurationTrend(runs []RunData, days int) []DataPoint {
 }
 
 // generateSuccessRateTrend creates time-series data for success rate
-func generateSuccessRateTrend(runs []RunData, days int) []DataPoint {
+func generateSuccessRateTrend(runs []RunData) []DataPoint {
 	dayBuckets := make(map[string]struct{ success, total int })
 
 	for _, run := range runs {

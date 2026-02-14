@@ -313,46 +313,6 @@ func outputTrendsJSON(w io.Writer, analysis *analyzer.TrendAnalysis) error {
 	return encoder.Encode(analysis)
 }
 
-// Additional helper for sparkline (compact inline chart)
-func generateSparkline(points []analyzer.DataPoint) string {
-	if len(points) == 0 {
-		return ""
-	}
-
-	// Sparkline characters from low to high
-	chars := []rune{'▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
-
-	minVal := points[0].Value
-	maxVal := points[0].Value
-	for _, p := range points {
-		if p.Value < minVal {
-			minVal = p.Value
-		}
-		if p.Value > maxVal {
-			maxVal = p.Value
-		}
-	}
-
-	valueRange := maxVal - minVal
-	if valueRange == 0 {
-		return string(chars[len(chars)/2])
-	}
-
-	var sb strings.Builder
-	for _, p := range points {
-		normalized := (p.Value - minVal) / valueRange
-		idx := int(normalized * float64(len(chars)-1))
-		if idx < 0 {
-			idx = 0
-		}
-		if idx >= len(chars) {
-			idx = len(chars) - 1
-		}
-		sb.WriteRune(chars[idx])
-	}
-
-	return sb.String()
-}
 func renderQueueTimeStats(w io.Writer, stats analyzer.QueueTimeStats) {
 	fmt.Fprintf(w, "\n%-25s %20s\n", "Metric", "Value")
 	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 50))
