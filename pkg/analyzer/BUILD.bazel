@@ -33,6 +33,7 @@ go_test(
         "data_provider_test.go",
         "metrics_test.go",
         "otel_test.go",
+        "trends_test.go",
     ],
     embed = [":analyzer"],
     deps = [
