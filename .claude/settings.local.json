@@ -7,19 +7,18 @@
       "Bash(tree:*)",
       "Bash(wc:*)",
       "Bash(go:*)",
-      "Bash(go run:*)",
+      "Bash(bazel:*)",
       "Bash(./gha-analyzer:*)",
       "Bash(GITHUB_TOKEN=\"\" ./gha-analyzer:*)",
       "WebSearch",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:donderom.com)",
-      "WebFetch(domain:zackproser.com)",
       "Bash(grep:*)",
       "Bash(GITHUB_TOKEN=invalid_token go run:*)",
       "Bash(sips:*)",
       "Bash(id=%s)",
       "Bash(python3:*)",
-      "Bash(bazel build:*)"
+      "Bash(bazel build:*)",
+      "Bash(bazel test:*)"
     ]
   }
 }
