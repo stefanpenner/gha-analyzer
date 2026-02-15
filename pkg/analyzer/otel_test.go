@@ -72,6 +72,14 @@ func (m *mockGitHubProvider) FetchRecentWorkflowRuns(ctx context.Context, owner,
 	return args.Get(0).([]githubapi.WorkflowRun), args.Error(1)
 }
 
+func (m *mockGitHubProvider) FetchWorkflowRunsPage(ctx context.Context, owner, repo string, days int, branch string, page int) (*githubapi.WorkflowRunsResponse, error) {
+	args := m.Called(ctx, owner, repo, days, branch, page)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*githubapi.WorkflowRunsResponse), args.Error(1)
+}
+
 func TestOTelSpanGeneration(t *testing.T) {
 	ctx := context.Background()
 

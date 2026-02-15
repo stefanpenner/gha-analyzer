@@ -1,6 +1,7 @@
 package analyzer
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -837,6 +838,296 @@ func TestSampleRunIndices(t *testing.T) {
 		indices2 := sampleRunIndices(runs2, 30)
 		assert.NotEqual(t, indices1, indices2)
 	})
+}
+
+func TestDetectChangepoint(t *testing.T) {
+	t.Parallel()
+
+	t.Run("too few observations returns nil", func(t *testing.T) {
+		t.Parallel()
+		obs := []jobObservation{
+			{DurationSec: 10}, {DurationSec: 10}, {DurationSec: 20}, {DurationSec: 20},
+		}
+		// minSideSize=3 requires at least 6 observations
+		cp := detectChangepoint(obs, 3)
+		assert.Nil(t, cp)
+	})
+
+	t.Run("clear step function finds changepoint at boundary", func(t *testing.T) {
+		t.Parallel()
+		now := time.Now()
+		obs := make([]jobObservation, 10)
+		for i := range obs {
+			dur := 10.0
+			if i >= 5 {
+				dur = 20.0
+			}
+			obs[i] = jobObservation{
+				DurationSec:  dur,
+				RunCreatedAt: now.Add(time.Duration(i) * time.Hour),
+				HeadSHA:      fmt.Sprintf("sha%d", i),
+				JobURL:       fmt.Sprintf("https://example.com/job/%d", i),
+			}
+		}
+		cp := detectChangepoint(obs, 3)
+		assert.NotNil(t, cp)
+		assert.Equal(t, 5, cp.Index)
+		assert.Equal(t, 10, cp.TotalPoints)
+		assert.Equal(t, 10.0, cp.BeforeAvg)
+		assert.Equal(t, 20.0, cp.AfterAvg)
+	})
+
+	t.Run("asymmetric changepoint not at midpoint", func(t *testing.T) {
+		t.Parallel()
+		now := time.Now()
+		// [10,10,10,20,20,20,20,20,20,20] — shift at index 3
+		obs := make([]jobObservation, 10)
+		for i := range obs {
+			dur := 20.0
+			if i < 3 {
+				dur = 10.0
+			}
+			obs[i] = jobObservation{
+				DurationSec:  dur,
+				RunCreatedAt: now.Add(time.Duration(i) * time.Hour),
+				HeadSHA:      fmt.Sprintf("sha%d", i),
+				JobURL:       fmt.Sprintf("https://example.com/job/%d", i),
+			}
+		}
+		cp := detectChangepoint(obs, 3)
+		assert.NotNil(t, cp)
+		assert.Equal(t, 3, cp.Index)
+	})
+
+	t.Run("preserves metadata from boundary observations", func(t *testing.T) {
+		t.Parallel()
+		now := time.Now()
+		obs := make([]jobObservation, 8)
+		for i := range obs {
+			dur := 10.0
+			if i >= 4 {
+				dur = 20.0
+			}
+			obs[i] = jobObservation{
+				DurationSec:  dur,
+				RunCreatedAt: now.Add(time.Duration(i) * time.Hour),
+				HeadSHA:      fmt.Sprintf("sha%d", i),
+				JobURL:       fmt.Sprintf("https://example.com/job/%d", i),
+			}
+		}
+		cp := detectChangepoint(obs, 3)
+		assert.NotNil(t, cp)
+		assert.Equal(t, "sha3", cp.BeforeSHA)  // last before changepoint
+		assert.Equal(t, "sha4", cp.AfterSHA)   // first after changepoint
+		assert.Equal(t, obs[4].RunCreatedAt, cp.Date)
+		assert.Equal(t, "https://example.com/job/3", cp.BeforeRunURL)
+		assert.Equal(t, "https://example.com/job/4", cp.AfterRunURL)
+	})
+}
+
+func TestCalculateJobChanges_Changepoint(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+
+	t.Run("changepoint populated on regression with enough data", func(t *testing.T) {
+		t.Parallel()
+		// 8 runs: first 4 have build=10s, last 4 have build=20s
+		runs := make([]RunData, 8)
+		for i := range runs {
+			dur := int64(10000)
+			if i >= 4 {
+				dur = 20000
+			}
+			runs[i] = RunData{
+				HeadSHA:   fmt.Sprintf("sha%d", i),
+				CreatedAt: now.Add(time.Duration(i) * time.Hour),
+				Jobs: []JobData{{
+					Name:     "build",
+					Duration: dur,
+					URL:      fmt.Sprintf("https://example.com/job/%d", i),
+				}},
+			}
+		}
+		regressions, _ := calculateJobChanges(runs)
+		assert.Len(t, regressions, 1)
+		assert.NotNil(t, regressions[0].Changepoint, "changepoint should be populated with 8 observations")
+		assert.Equal(t, 4, regressions[0].Changepoint.Index)
+	})
+
+	t.Run("changepoint populated on improvement with enough data", func(t *testing.T) {
+		t.Parallel()
+		runs := make([]RunData, 8)
+		for i := range runs {
+			dur := int64(20000)
+			if i >= 4 {
+				dur = 10000
+			}
+			runs[i] = RunData{
+				HeadSHA:   fmt.Sprintf("sha%d", i),
+				CreatedAt: now.Add(time.Duration(i) * time.Hour),
+				Jobs: []JobData{{
+					Name:     "build",
+					Duration: dur,
+					URL:      fmt.Sprintf("https://example.com/job/%d", i),
+				}},
+			}
+		}
+		_, improvements := calculateJobChanges(runs)
+		assert.Len(t, improvements, 1)
+		assert.NotNil(t, improvements[0].Changepoint, "changepoint should be populated with 8 observations")
+		assert.Equal(t, 4, improvements[0].Changepoint.Index)
+	})
+
+	t.Run("changepoint nil when fewer than 6 observations", func(t *testing.T) {
+		t.Parallel()
+		// 4 runs: regression detected but too few for changepoint (minSideSize=3 needs 6)
+		runs := []RunData{
+			{CreatedAt: now.Add(-4 * time.Hour), Jobs: []JobData{{Name: "build", Duration: 10000}}},
+			{CreatedAt: now.Add(-3 * time.Hour), Jobs: []JobData{{Name: "build", Duration: 10000}}},
+			{CreatedAt: now.Add(-2 * time.Hour), Jobs: []JobData{{Name: "build", Duration: 25000}}},
+			{CreatedAt: now.Add(-1 * time.Hour), Jobs: []JobData{{Name: "build", Duration: 25000}}},
+		}
+		regressions, _ := calculateJobChanges(runs)
+		assert.Len(t, regressions, 1)
+		assert.Nil(t, regressions[0].Changepoint, "changepoint should be nil with only 4 observations")
+	})
+}
+
+func TestSelectSamplePages(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns nil for single page", func(t *testing.T) {
+		pages := selectSamplePages(1, 1, 42)
+		assert.Nil(t, pages)
+	})
+
+	t.Run("returns nil for pagesNeeded <= 1", func(t *testing.T) {
+		pages := selectSamplePages(10, 1, 42)
+		assert.Nil(t, pages)
+	})
+
+	t.Run("returns all remaining pages when needed >= available", func(t *testing.T) {
+		pages := selectSamplePages(5, 10, 42)
+		assert.Equal(t, []int{2, 3, 4, 5}, pages) // pages 2-5 (page 1 excluded)
+	})
+
+	t.Run("correct count returned", func(t *testing.T) {
+		pages := selectSamplePages(50, 10, 42)
+		assert.Len(t, pages, 9) // pagesNeeded-1 = 9 (page 1 already fetched)
+	})
+
+	t.Run("pages are in valid range", func(t *testing.T) {
+		pages := selectSamplePages(100, 10, 42)
+		for _, p := range pages {
+			assert.GreaterOrEqual(t, p, 2, "page should be >= 2")
+			assert.LessOrEqual(t, p, 100, "page should be <= totalPages")
+		}
+	})
+
+	t.Run("pages are sorted", func(t *testing.T) {
+		pages := selectSamplePages(100, 20, 42)
+		for i := 1; i < len(pages); i++ {
+			assert.LessOrEqual(t, pages[i-1], pages[i])
+		}
+	})
+
+	t.Run("no duplicate pages", func(t *testing.T) {
+		pages := selectSamplePages(224, 10, 42)
+		seen := make(map[int]bool)
+		for _, p := range pages {
+			assert.False(t, seen[p], "duplicate page: %d", p)
+			seen[p] = true
+		}
+	})
+
+	t.Run("deterministic for same seed", func(t *testing.T) {
+		pages1 := selectSamplePages(100, 10, 42)
+		pages2 := selectSamplePages(100, 10, 42)
+		assert.Equal(t, pages1, pages2)
+	})
+
+	t.Run("different seeds produce different selections", func(t *testing.T) {
+		pages1 := selectSamplePages(100, 10, 42)
+		pages2 := selectSamplePages(100, 10, 999)
+		assert.NotEqual(t, pages1, pages2)
+	})
+
+	t.Run("stratified distribution covers range", func(t *testing.T) {
+		// With 224 pages and 10 needed, pages should be spread across the range
+		pages := selectSamplePages(224, 10, 42)
+		assert.Len(t, pages, 9)
+		// First selected page should be from the early range
+		assert.Less(t, pages[0], 50)
+		// Last selected page should be from the late range
+		assert.Greater(t, pages[len(pages)-1], 150)
+	})
+}
+
+func TestGenerateRationale(t *testing.T) {
+	t.Parallel()
+
+	t.Run("run and job sampling", func(t *testing.T) {
+		s := SamplingInfo{
+			Enabled:        true,
+			SampleSize:     94,
+			TotalRuns:       500,
+			TotalAvailable: 22354,
+			RunSampled:     true,
+			PagesFetched:   5,
+			TotalPages:     224,
+			Confidence:     0.95,
+			MarginOfError:  0.10,
+		}
+		r := generateRationale(s)
+		assert.Contains(t, r, "22,354")
+		assert.Contains(t, r, "500 fetched")
+		assert.Contains(t, r, "5 of 224 pages")
+		assert.Contains(t, r, "94 sampled for job details")
+		assert.Contains(t, r, "95% confidence")
+		assert.Contains(t, r, "±10% margin")
+	})
+
+	t.Run("job-only sampling", func(t *testing.T) {
+		s := SamplingInfo{
+			Enabled:        true,
+			SampleSize:     73,
+			TotalRuns:       150,
+			TotalAvailable: 150,
+			RunSampled:     false,
+			Confidence:     0.95,
+			MarginOfError:  0.10,
+		}
+		r := generateRationale(s)
+		assert.Contains(t, r, "150 runs analyzed")
+		assert.Contains(t, r, "73 sampled for job details")
+		assert.NotContains(t, r, "pages")
+	})
+
+	t.Run("no sampling", func(t *testing.T) {
+		s := SamplingInfo{
+			Enabled:        false,
+			SampleSize:     42,
+			TotalRuns:       42,
+			TotalAvailable: 42,
+			RunSampled:     false,
+			Confidence:     0.95,
+			MarginOfError:  0.10,
+		}
+		r := generateRationale(s)
+		assert.Contains(t, r, "42 runs analyzed")
+		assert.Contains(t, r, "Full job details")
+	})
+}
+
+func TestFormatCount(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "0", formatCount(0))
+	assert.Equal(t, "42", formatCount(42))
+	assert.Equal(t, "999", formatCount(999))
+	assert.Equal(t, "1,000", formatCount(1000))
+	assert.Equal(t, "22,354", formatCount(22354))
+	assert.Equal(t, "1,000,000", formatCount(1000000))
 }
 
 func TestConvertRuns(t *testing.T) {

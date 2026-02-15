@@ -94,14 +94,25 @@ func OutputTrends(w io.Writer, analysis *analyzer.TrendAnalysis, format string) 
 		labelStyle.Render(fmt.Sprintf(" (%d days)", analysis.TimeRange.Days))
 	fmt.Fprintln(w, headerLine(periodText))
 
-	runsText := labelStyle.Render("Total runs: ") + numStyle.Render(fmt.Sprintf("%d", analysis.Summary.TotalRuns))
+	if analysis.Sampling.RunSampled {
+		runsText := labelStyle.Render("Runs fetched: ") +
+			numStyle.Render(fmt.Sprintf("%d/%d", analysis.Sampling.TotalRuns, analysis.Sampling.TotalAvailable)) +
+			dimStyle.Render(fmt.Sprintf(" (%d of %d pages)", analysis.Sampling.PagesFetched, analysis.Sampling.TotalPages))
+		fmt.Fprintln(w, headerLine(runsText))
+	} else {
+		runsText := labelStyle.Render("Total runs: ") + numStyle.Render(fmt.Sprintf("%d", analysis.Summary.TotalRuns))
+		fmt.Fprintln(w, headerLine(runsText))
+	}
 	if analysis.Sampling.Enabled {
-		runsText += labelStyle.Render("  •  Job details sampled: ") +
+		jobText := labelStyle.Render("Job details sampled: ") +
 			numStyle.Render(fmt.Sprintf("%d/%d", analysis.Sampling.SampleSize, analysis.Sampling.TotalRuns)) +
 			dimStyle.Render(fmt.Sprintf(" (%.0f%% confidence, ±%.0f%% margin)",
 				analysis.Sampling.Confidence*100, analysis.Sampling.MarginOfError*100))
+		fmt.Fprintln(w, headerLine(jobText))
 	}
-	fmt.Fprintln(w, headerLine(runsText))
+	if analysis.Sampling.Rationale != "" {
+		fmt.Fprintln(w, headerLine(dimStyle.Render(analysis.Sampling.Rationale)))
+	}
 	fmt.Fprintln(w, botBorder)
 
 	// Summary statistics
@@ -465,6 +476,14 @@ func renderQueueTimeStats(w io.Writer, stats analyzer.QueueTimeStats) {
 	}
 }
 
+// shortSHA safely truncates a SHA to 8 characters.
+func shortSHA(sha string) string {
+	if len(sha) > 8 {
+		return sha[:8]
+	}
+	return sha
+}
+
 func renderRegressions(w io.Writer, regressions []analyzer.JobRegression) {
 	fmt.Fprintf(w, "\n  %s Jobs that got significantly slower (>10%% increase):\n\n", failureStyle.Render("!"))
 
@@ -492,6 +511,38 @@ func renderRegressions(w io.Writer, regressions []analyzer.JobRegression) {
 	}
 
 	fmt.Fprintln(w, t)
+
+	// Render changepoint details for regressions that have them
+	for _, reg := range regressions {
+		if reg.Changepoint == nil {
+			continue
+		}
+		cp := reg.Changepoint
+		fmt.Fprintf(w, "\n  %s %s\n", labelStyle.Render("Changepoint:"), valueStyle.Render(reg.Name))
+		fmt.Fprintf(w, "     %s  %s\n", labelStyle.Render("Date:    "), valueStyle.Render(cp.Date.Format("Jan 02, 2006 15:04")))
+		fmt.Fprintf(w, "     %s  %s %s %s\n",
+			labelStyle.Render("Duration:"),
+			valueStyle.Render(utils.HumanizeTime(cp.BeforeAvg)),
+			dimStyle.Render("->"),
+			failureStyle.Render(utils.HumanizeTime(cp.AfterAvg)))
+
+		beforeSHA := shortSHA(cp.BeforeSHA)
+		afterSHA := shortSHA(cp.AfterSHA)
+		if cp.BeforeRunURL != "" {
+			beforeSHA = utils.MakeClickableLink(cp.BeforeRunURL, beforeSHA)
+		}
+		if cp.AfterRunURL != "" {
+			afterSHA = utils.MakeClickableLink(cp.AfterRunURL, afterSHA)
+		}
+		fmt.Fprintf(w, "     %s  %s %s %s\n",
+			labelStyle.Render("Commits: "),
+			beforeSHA,
+			dimStyle.Render("->"),
+			afterSHA)
+		fmt.Fprintf(w, "     %s  %s\n",
+			labelStyle.Render("Position:"),
+			dimStyle.Render(fmt.Sprintf("observation %d of %d", cp.Index, cp.TotalPoints)))
+	}
 
 	fmt.Fprintf(w, "\n  %s Investigate these jobs for:\n", subheaderStyle.Render("i"))
 	fmt.Fprintf(w, "     %s Recent code changes that may have added overhead\n", dimStyle.Render("•"))
@@ -527,6 +578,38 @@ func renderImprovements(w io.Writer, improvements []analyzer.JobImprovement) {
 	}
 
 	fmt.Fprintln(w, t)
+
+	// Render changepoint details for improvements that have them
+	for _, imp := range improvements {
+		if imp.Changepoint == nil {
+			continue
+		}
+		cp := imp.Changepoint
+		fmt.Fprintf(w, "\n  %s %s\n", labelStyle.Render("Changepoint:"), valueStyle.Render(imp.Name))
+		fmt.Fprintf(w, "     %s  %s\n", labelStyle.Render("Date:    "), valueStyle.Render(cp.Date.Format("Jan 02, 2006 15:04")))
+		fmt.Fprintf(w, "     %s  %s %s %s\n",
+			labelStyle.Render("Duration:"),
+			valueStyle.Render(utils.HumanizeTime(cp.BeforeAvg)),
+			dimStyle.Render("->"),
+			successStyle.Render(utils.HumanizeTime(cp.AfterAvg)))
+
+		beforeSHA := shortSHA(cp.BeforeSHA)
+		afterSHA := shortSHA(cp.AfterSHA)
+		if cp.BeforeRunURL != "" {
+			beforeSHA = utils.MakeClickableLink(cp.BeforeRunURL, beforeSHA)
+		}
+		if cp.AfterRunURL != "" {
+			afterSHA = utils.MakeClickableLink(cp.AfterRunURL, afterSHA)
+		}
+		fmt.Fprintf(w, "     %s  %s %s %s\n",
+			labelStyle.Render("Commits: "),
+			beforeSHA,
+			dimStyle.Render("->"),
+			afterSHA)
+		fmt.Fprintf(w, "     %s  %s\n",
+			labelStyle.Render("Position:"),
+			dimStyle.Render(fmt.Sprintf("observation %d of %d", cp.Index, cp.TotalPoints)))
+	}
 }
 
 func renderLegend(w io.Writer) {
