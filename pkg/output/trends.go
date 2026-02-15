@@ -7,6 +7,8 @@ import (
 	"math"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 )
@@ -38,23 +40,18 @@ func formatSampleLinks(urls []string) (string, int) {
 	return " " + utils.GrayText("("+inner+")"), visibleWidth
 }
 
-// linkAndPad truncates a name, appends clickable numbered sample links,
-// and right-pads to colWidth visible characters so table columns align.
-func linkAndPad(name string, urls []string, colWidth int) string {
+// linkName truncates a name and appends clickable numbered sample links.
+// Column padding is handled by lipgloss/table.
+func linkName(name string, urls []string, maxVisible int) string {
 	suffix, suffixWidth := formatSampleLinks(urls)
-	nameMax := colWidth - suffixWidth
+	nameMax := maxVisible - suffixWidth
 	if nameMax < 4 {
 		nameMax = 4
 	}
 	if len(name) > nameMax {
 		name = name[:nameMax-3] + "..."
 	}
-	visibleLen := len(name) + suffixWidth
-	result := name + suffix
-	if pad := colWidth - visibleLen; pad > 0 {
-		result += strings.Repeat(" ", pad)
-	}
-	return result
+	return name + suffix
 }
 
 // OutputTrends displays historical trend analysis
@@ -75,6 +72,11 @@ func OutputTrends(w io.Writer, analysis *analyzer.TrendAnalysis, format string) 
 		analysis.TimeRange.End.Format("Jan 02, 2006"),
 		analysis.TimeRange.Days)
 	fmt.Fprintf(w, "Total runs analyzed: %d\n", analysis.Summary.TotalRuns)
+	if analysis.Sampling.Enabled {
+		fmt.Fprintf(w, "Job details sampled: %d/%d runs (%.0f%% confidence, ±%.0f%% margin)\n",
+			analysis.Sampling.SampleSize, analysis.Sampling.TotalRuns,
+			analysis.Sampling.Confidence*100, analysis.Sampling.MarginOfError*100)
+	}
 
 	// Summary statistics
 	section(w, "Summary Statistics")
@@ -195,14 +197,26 @@ func renderJobTrends(w io.Writer, trends []analyzer.JobTrend) {
 	}
 
 	fmt.Fprintf(w, "\nTop %d Jobs by Average Duration:\n\n", limit)
-	fmt.Fprintf(w, "%-50s %15s %15s %12s %10s\n",
-		"Job Name", "Avg Duration", "Median", "Success Rate", "Trend")
-	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 105))
+
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(borderStyle).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			if row == table.HeaderRow {
+				return labelStyle.Bold(true)
+			}
+			if col == 0 {
+				return lipgloss.NewStyle()
+			}
+			if col == 4 {
+				return lipgloss.NewStyle().Align(lipgloss.Center)
+			}
+			return lipgloss.NewStyle().Align(lipgloss.Right)
+		}).
+		Headers("Job Name", "Avg Duration", "Median", "Success Rate", "Trend")
 
 	for i := 0; i < limit; i++ {
 		job := trends[i]
-
-		name := linkAndPad(job.Name, job.URLs, 50)
 
 		trendIcon := "→"
 		trendColor := utils.BlueText
@@ -215,13 +229,16 @@ func renderJobTrends(w io.Writer, trends []analyzer.JobTrend) {
 			trendColor = utils.RedText
 		}
 
-		fmt.Fprintf(w, "%s %15s %15s %11.1f%% %10s\n",
-			name,
+		t.Row(
+			linkName(job.Name, job.URLs, 48),
 			utils.HumanizeTime(job.AvgDuration),
 			utils.HumanizeTime(job.MedianDuration),
-			job.SuccessRate,
-			trendColor(trendIcon))
+			fmt.Sprintf("%.1f%%", job.SuccessRate),
+			trendColor(trendIcon),
+		)
 	}
+
+	fmt.Fprintln(w, t)
 
 	if len(trends) > limit {
 		fmt.Fprintf(w, "\n... and %d more jobs\n", len(trends)-limit)
@@ -233,25 +250,36 @@ func renderFlakyJobs(w io.Writer, flakyJobs []analyzer.FlakyJob) {
 		utils.YellowText("⚠️"),
 		len(flakyJobs))
 
-	fmt.Fprintf(w, "%-50s %10s %10s %12s %15s\n",
-		"Job Name", "Total Runs", "Failures", "Flake Rate", "Recent Failures")
-	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 105))
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(borderStyle).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			if row == table.HeaderRow {
+				return labelStyle.Bold(true)
+			}
+			if col == 0 {
+				return lipgloss.NewStyle()
+			}
+			return lipgloss.NewStyle().Align(lipgloss.Right)
+		}).
+		Headers("Job Name", "Total Runs", "Failures", "Flake Rate", "Recent (10)")
 
 	for _, job := range flakyJobs {
-		name := linkAndPad(job.Name, job.URLs, 50)
-
 		flakeRateColor := utils.YellowText
 		if job.FlakeRate > 30 {
 			flakeRateColor = utils.RedText
 		}
 
-		fmt.Fprintf(w, "%s %10d %10d %12s %15d\n",
-			name,
-			job.TotalRuns,
-			job.FailureCount,
+		t.Row(
+			linkName(job.Name, job.URLs, 48),
+			fmt.Sprintf("%d", job.TotalRuns),
+			fmt.Sprintf("%d", job.FailureCount),
 			flakeRateColor(fmt.Sprintf("%.1f%%", job.FlakeRate)),
-			job.RecentFailures)
+			fmt.Sprintf("%d", job.RecentFailures),
+		)
 	}
+
+	fmt.Fprintln(w, t)
 
 	fmt.Fprintf(w, "\n%s Recommendations:\n", utils.BlueText("💡"))
 	fmt.Fprintf(w, "   • Investigate flaky jobs for race conditions or timing issues\n")
@@ -382,19 +410,31 @@ func renderQueueTimeStats(w io.Writer, stats analyzer.QueueTimeStats) {
 
 func renderRegressions(w io.Writer, regressions []analyzer.JobRegression) {
 	fmt.Fprintf(w, "\n%s Jobs that got significantly slower (>10%% increase):\n\n", utils.RedText("⚠️"))
-	fmt.Fprintf(w, "%-60s %12s %12s %12s\n", "Job Name", "Was", "Now", "Change")
-	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 100))
+
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(borderStyle).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			if row == table.HeaderRow {
+				return labelStyle.Bold(true)
+			}
+			if col == 0 {
+				return lipgloss.NewStyle()
+			}
+			return lipgloss.NewStyle().Align(lipgloss.Right)
+		}).
+		Headers("Job Name", "Was", "Now", "Change")
 
 	for _, reg := range regressions {
-		name := linkAndPad(reg.Name, reg.URLs, 60)
-
-		changeDisplay := fmt.Sprintf("+%.1f%%", reg.PercentIncrease)
-		fmt.Fprintf(w, "%s %12s %12s %s\n",
-			name,
+		t.Row(
+			linkName(reg.Name, reg.URLs, 58),
 			utils.HumanizeTime(reg.OldAvgDuration),
 			utils.HumanizeTime(reg.NewAvgDuration),
-			utils.RedText(changeDisplay))
+			failureStyle.Render(fmt.Sprintf("+%.1f%%", reg.PercentIncrease)),
+		)
 	}
+
+	fmt.Fprintln(w, t)
 
 	fmt.Fprintf(w, "\n%s Investigate these jobs for:\n", utils.BlueText("💡"))
 	fmt.Fprintf(w, "   • Recent code changes that may have added overhead\n")
@@ -405,19 +445,31 @@ func renderRegressions(w io.Writer, regressions []analyzer.JobRegression) {
 
 func renderImprovements(w io.Writer, improvements []analyzer.JobImprovement) {
 	fmt.Fprintf(w, "\n%s Jobs that got significantly faster (>10%% decrease):\n\n", utils.GreenText("✓"))
-	fmt.Fprintf(w, "%-60s %12s %12s %12s\n", "Job Name", "Was", "Now", "Change")
-	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 100))
+
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(borderStyle).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			if row == table.HeaderRow {
+				return labelStyle.Bold(true)
+			}
+			if col == 0 {
+				return lipgloss.NewStyle()
+			}
+			return lipgloss.NewStyle().Align(lipgloss.Right)
+		}).
+		Headers("Job Name", "Was", "Now", "Change")
 
 	for _, imp := range improvements {
-		name := linkAndPad(imp.Name, imp.URLs, 60)
-
-		changeDisplay := fmt.Sprintf("-%.1f%%", imp.PercentDecrease)
-		fmt.Fprintf(w, "%s %12s %12s %s\n",
-			name,
+		t.Row(
+			linkName(imp.Name, imp.URLs, 58),
 			utils.HumanizeTime(imp.OldAvgDuration),
 			utils.HumanizeTime(imp.NewAvgDuration),
-			utils.GreenText(changeDisplay))
+			successStyle.Render(fmt.Sprintf("-%.1f%%", imp.PercentDecrease)),
+		)
 	}
+
+	fmt.Fprintln(w, t)
 }
 
 func renderLegend(w io.Writer) {

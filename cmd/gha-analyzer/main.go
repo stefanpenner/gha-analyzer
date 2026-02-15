@@ -95,6 +95,7 @@ type config struct {
 	trendsFormat     string
 	trendsBranch     string
 	trendsWorkflow   string
+	trendsNoSample   bool
 }
 
 func parseArgs(args []string, terminal bool) (config, error) {
@@ -199,6 +200,10 @@ func parseArgs(args []string, terminal bool) (config, error) {
 			cfg.trendsWorkflow = strings.TrimPrefix(arg, "--workflow=")
 			continue
 		}
+		if arg == "--no-sample" {
+			cfg.trendsNoSample = true
+			continue
+		}
 
 		// For trends mode, first non-flag arg is the repo
 		if cfg.trendsMode && cfg.trendsRepo == "" && !strings.HasPrefix(arg, "-") {
@@ -269,7 +274,7 @@ func main() {
 		progress.StartURL(0, cfg.trendsRepo)
 
 		// Perform trend analysis
-		analysis, err := analyzer.AnalyzeTrends(ctx, client, owner, repo, cfg.trendsDays, cfg.trendsBranch, cfg.trendsWorkflow, progress)
+		analysis, err := analyzer.AnalyzeTrends(ctx, client, owner, repo, cfg.trendsDays, cfg.trendsBranch, cfg.trendsWorkflow, cfg.trendsNoSample, progress)
 
 		progress.Finish()
 		progress.Wait()
@@ -586,6 +591,7 @@ func printUsage() {
 	fmt.Println("  --format=<format>         Output format: 'terminal' or 'json' (default: terminal)")
 	fmt.Println("  --branch=<name>           Filter by branch name (e.g., main, master)")
 	fmt.Println("  --workflow=<file>         Filter by workflow file name (e.g., post-merge.yaml)")
+	fmt.Println("  --no-sample               Fetch job details for all runs (disables statistical sampling)")
 	fmt.Println("\nEnvironment Variables:")
 	fmt.Println("  GITHUB_TOKEN              GitHub PAT (alternatively pass as argument)")
 	fmt.Println("\nExamples:")

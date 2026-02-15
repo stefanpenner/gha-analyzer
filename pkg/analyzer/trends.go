@@ -3,7 +3,9 @@ package analyzer
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"math"
+	"math/rand"
 	"sort"
 	"time"
 
@@ -11,11 +13,21 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 )
 
+// SamplingInfo describes whether and how sampling was applied to job fetching
+type SamplingInfo struct {
+	Enabled     bool
+	SampleSize  int
+	TotalRuns   int
+	Confidence  float64
+	MarginOfError float64
+}
+
 // TrendAnalysis holds the result of analyzing historical workflow trends for a repository.
 type TrendAnalysis struct {
 	Owner            string
 	Repo             string
 	TimeRange        TimeRange
+	Sampling         SamplingInfo
 	Summary          TrendSummary
 	DurationTrend    []DataPoint
 	SuccessRateTrend []DataPoint
@@ -133,8 +145,11 @@ type JobData struct {
 	QueueTime   int64 // milliseconds
 }
 
-// AnalyzeTrends analyzes historical trends for a repository using GitHub API
-func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, repo string, days int, branch, workflow string, reporter ProgressReporter) (*TrendAnalysis, error) {
+// AnalyzeTrends analyzes historical trends for a repository using GitHub API.
+// When noSample is false (default), job details are fetched for a statistically
+// representative random sample of runs to reduce API calls. Run-level metrics
+// (duration trend, success rate) always use all runs.
+func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, repo string, days int, branch, workflow string, noSample bool, reporter ProgressReporter) (*TrendAnalysis, error) {
 	endTime := time.Now()
 	startTime := endTime.Add(-time.Duration(days) * 24 * time.Hour)
 
@@ -152,14 +167,35 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 		return nil, fmt.Errorf("no workflow runs found for %s/%s in the last %d days", owner, repo, days)
 	}
 
+	// Convert all runs to RunData (no job fetching yet)
+	runData := convertRuns(runs)
+
+	// Determine sampling
+	const confidence = 0.95
+	const marginOfError = 0.10
+	totalRuns := len(runData)
+	sampleSize := calculateSampleSize(totalRuns, confidence, marginOfError)
+	sampling := SamplingInfo{
+		TotalRuns:     totalRuns,
+		Confidence:    confidence,
+		MarginOfError: marginOfError,
+	}
+
+	if !noSample && sampleSize < totalRuns {
+		sampling.Enabled = true
+		sampling.SampleSize = sampleSize
+	} else {
+		sampling.SampleSize = totalRuns
+	}
+
 	if reporter != nil {
-		reporter.SetURLRuns(len(runs))
+		reporter.SetURLRuns(sampling.SampleSize)
 		reporter.SetPhase("Fetching job details")
 	}
 
-	// Convert to RunData and fetch jobs
-	runData, err := convertAndFetchJobs(ctx, client, runs, reporter)
-	if err != nil {
+	// Fetch jobs for sampled runs
+	sampleIndices := sampleRunIndices(runs, sampling.SampleSize)
+	if err := fetchJobsForRuns(ctx, client, runData, runs, sampleIndices, reporter); err != nil {
 		return nil, fmt.Errorf("failed to fetch job data: %w", err)
 	}
 
@@ -182,41 +218,105 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 			End:   endTime,
 			Days:  days,
 		},
+		Sampling: sampling,
 	}
 
-	// Calculate summary statistics
+	// Calculate summary statistics (uses all runs — run-level data)
 	analysis.Summary = calculateTrendSummary(runData)
 
-	// Generate duration trend
+	// Generate duration trend (uses all runs)
 	analysis.DurationTrend = generateDurationTrend(runData)
 
-	// Generate success rate trend
+	// Generate success rate trend (uses all runs)
 	analysis.SuccessRateTrend = generateSuccessRateTrend(runData)
 
-	// Analyze individual jobs
+	// Analyze individual jobs (uses sampled job data)
 	analysis.JobTrends = analyzeJobTrends(runData)
 
-	// Detect flaky jobs
+	// Detect flaky jobs (uses sampled job data)
 	analysis.FlakyJobs = detectFlakyJobs(runData)
 	analysis.Summary.MostFlakyJobsCount = len(analysis.FlakyJobs)
 
-	// Calculate regressions and improvements
+	// Calculate regressions and improvements (uses sampled job data)
 	analysis.TopRegressions, analysis.TopImprovements = calculateJobChanges(runData)
 
-	// Calculate queue time statistics
+	// Calculate queue time statistics (uses sampled job data)
 	analysis.QueueTimeStats = calculateQueueTimeStats(runData)
 
 	return analysis, nil
 }
 
-// convertAndFetchJobs converts workflow runs and fetches job details
-func convertAndFetchJobs(ctx context.Context, client githubapi.GitHubProvider, runs []githubapi.WorkflowRun, reporter ProgressReporter) ([]RunData, error) {
-	runData := make([]RunData, 0, len(runs))
+// calculateSampleSize computes the minimum sample size for a finite population
+// using the standard formula: n = n₀ / (1 + (n₀-1)/N)
+// where n₀ = Z² × p × (1-p) / E²
+func calculateSampleSize(totalRuns int, confidence, marginOfError float64) int {
+	if totalRuns <= 0 {
+		return 0
+	}
 
+	// Z-score lookup for common confidence levels
+	z := 1.96 // default 95%
+	switch {
+	case confidence >= 0.99:
+		z = 2.576
+	case confidence >= 0.98:
+		z = 2.326
+	case confidence >= 0.95:
+		z = 1.96
+	case confidence >= 0.90:
+		z = 1.645
+	}
+
+	p := 0.5 // maximum variance
+	n0 := (z * z * p * (1 - p)) / (marginOfError * marginOfError)
+	n := n0 / (1 + (n0-1)/float64(totalRuns))
+
+	size := int(math.Ceil(n))
+	if size > totalRuns {
+		size = totalRuns
+	}
+	return size
+}
+
+// sampleRunIndices returns indices of runs to fetch jobs for.
+// Uses a deterministic seed derived from run IDs for reproducibility.
+func sampleRunIndices(runs []githubapi.WorkflowRun, sampleSize int) []int {
+	total := len(runs)
+	if sampleSize >= total {
+		indices := make([]int, total)
+		for i := range indices {
+			indices[i] = i
+		}
+		return indices
+	}
+
+	// Deterministic seed from run IDs
+	h := fnv.New64a()
 	for _, run := range runs {
+		fmt.Fprintf(h, "%d", run.ID)
+	}
+	rng := rand.New(rand.NewSource(int64(h.Sum64())))
+
+	// Fisher-Yates partial shuffle to select sampleSize unique indices
+	indices := make([]int, total)
+	for i := range indices {
+		indices[i] = i
+	}
+	for i := 0; i < sampleSize; i++ {
+		j := i + rng.Intn(total-i)
+		indices[i], indices[j] = indices[j], indices[i]
+	}
+	selected := indices[:sampleSize]
+	sort.Ints(selected)
+	return selected
+}
+
+// convertRuns converts WorkflowRun data to RunData without fetching jobs
+func convertRuns(runs []githubapi.WorkflowRun) []RunData {
+	runData := make([]RunData, len(runs))
+	for i, run := range runs {
 		createdAt, _ := utils.ParseTime(run.CreatedAt)
 		updatedAt, _ := utils.ParseTime(run.UpdatedAt)
-
 		rd := RunData{
 			ID:         run.ID,
 			HeadSHA:    run.HeadSHA,
@@ -225,54 +325,57 @@ func convertAndFetchJobs(ctx context.Context, client githubapi.GitHubProvider, r
 			CreatedAt:  createdAt,
 			UpdatedAt:  updatedAt,
 		}
+		if !createdAt.IsZero() && !updatedAt.IsZero() {
+			rd.Duration = updatedAt.Sub(createdAt).Milliseconds()
+		}
+		runData[i] = rd
+	}
+	return runData
+}
 
-		// Fetch jobs for this run
+// fetchJobsForRuns fetches job details for runs at the given indices
+func fetchJobsForRuns(ctx context.Context, client githubapi.GitHubProvider, runData []RunData, runs []githubapi.WorkflowRun, indices []int, reporter ProgressReporter) error {
+	for _, idx := range indices {
+		run := runs[idx]
 		jobsURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs/%d/jobs",
 			run.Repository.Owner.Login, run.Repository.Name, run.ID)
 		jobs, err := client.FetchJobsPaginated(ctx, jobsURL)
 		if reporter != nil {
 			reporter.ProcessRun()
 		}
-		if err == nil {
-			for _, job := range jobs {
-				createdAt, _ := utils.ParseTime(job.CreatedAt)
-				startedAt, _ := utils.ParseTime(job.StartedAt)
-				completedAt, _ := utils.ParseTime(job.CompletedAt)
+		if err != nil {
+			continue
+		}
+		for _, job := range jobs {
+			createdAt, _ := utils.ParseTime(job.CreatedAt)
+			startedAt, _ := utils.ParseTime(job.StartedAt)
+			completedAt, _ := utils.ParseTime(job.CompletedAt)
 
-				duration := int64(0)
-				if !startedAt.IsZero() && !completedAt.IsZero() {
-					duration = completedAt.Sub(startedAt).Milliseconds()
-				}
-
-				queueTime := int64(0)
-				if !createdAt.IsZero() && !startedAt.IsZero() {
-					queueTime = startedAt.Sub(createdAt).Milliseconds()
-				}
-
-				rd.Jobs = append(rd.Jobs, JobData{
-					ID:          job.ID,
-					Name:        job.Name,
-					URL:         job.HTMLURL,
-					Status:      job.Status,
-					Conclusion:  job.Conclusion,
-					CreatedAt:   createdAt,
-					StartedAt:   startedAt,
-					CompletedAt: completedAt,
-					Duration:    duration,
-					QueueTime:   queueTime,
-				})
+			duration := int64(0)
+			if !startedAt.IsZero() && !completedAt.IsZero() {
+				duration = completedAt.Sub(startedAt).Milliseconds()
 			}
-		}
 
-		// Calculate run duration
-		if !createdAt.IsZero() && !updatedAt.IsZero() {
-			rd.Duration = updatedAt.Sub(createdAt).Milliseconds()
-		}
+			queueTime := int64(0)
+			if !createdAt.IsZero() && !startedAt.IsZero() {
+				queueTime = startedAt.Sub(createdAt).Milliseconds()
+			}
 
-		runData = append(runData, rd)
+			runData[idx].Jobs = append(runData[idx].Jobs, JobData{
+				ID:          job.ID,
+				Name:        job.Name,
+				URL:         job.HTMLURL,
+				Status:      job.Status,
+				Conclusion:  job.Conclusion,
+				CreatedAt:   createdAt,
+				StartedAt:   startedAt,
+				CompletedAt: completedAt,
+				Duration:    duration,
+				QueueTime:   queueTime,
+			})
+		}
 	}
-
-	return runData, nil
+	return nil
 }
 
 // calculateTrendSummary computes summary statistics

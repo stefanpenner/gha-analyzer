@@ -173,6 +173,12 @@ func TestParseArgs(t *testing.T) {
 			isTerminal: false,
 			wantErr:    true,
 		},
+		{
+			name:       "--no-sample flag in trends mode",
+			args:       []string{"trends", "owner/repo", "--no-sample"},
+			isTerminal: false,
+			want:       config{trendsMode: true, trendsRepo: "owner/repo", trendsNoSample: true},
+		},
 	}
 
 	for _, tt := range tests {
@@ -223,6 +229,9 @@ func TestParseArgs(t *testing.T) {
 			}
 			if got.outputFormat != tt.want.outputFormat {
 				t.Errorf("outputFormat = %q, want %q", got.outputFormat, tt.want.outputFormat)
+			}
+			if got.trendsNoSample != tt.want.trendsNoSample {
+				t.Errorf("trendsNoSample = %v, want %v", got.trendsNoSample, tt.want.trendsNoSample)
 			}
 		})
 	}

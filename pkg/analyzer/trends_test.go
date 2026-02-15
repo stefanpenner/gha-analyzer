@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -721,5 +722,161 @@ func TestAnalyzeJobTrends_ChronologicalOrder(t *testing.T) {
 		assert.Equal(t, "degrading", trends[0].TrendDirection)
 		assert.Equal(t, 6, trends[0].TotalRuns)
 		assert.Equal(t, 100.0, trends[0].SuccessRate)
+	})
+}
+
+func TestCalculateSampleSize(t *testing.T) {
+	t.Parallel()
+
+	t.Run("zero runs", func(t *testing.T) {
+		assert.Equal(t, 0, calculateSampleSize(0, 0.95, 0.10))
+	})
+
+	t.Run("small population returns all", func(t *testing.T) {
+		// For very small N, the sample size should equal N
+		size := calculateSampleSize(5, 0.95, 0.10)
+		assert.Equal(t, 5, size)
+	})
+
+	t.Run("known values at 95% confidence 10% margin", func(t *testing.T) {
+		// n₀ = 1.96² × 0.25 / 0.01 = 96.04
+		// n = 96.04 / (1 + 95.04/N)
+
+		// N=50: n = 96.04 / (1 + 95.04/50) = 96.04 / 2.9008 ≈ 33.1 -> 34
+		assert.Equal(t, 34, calculateSampleSize(50, 0.95, 0.10))
+
+		// N=100: n = 96.04 / (1 + 95.04/100) = 96.04 / 1.9504 ≈ 49.2 -> 50
+		assert.Equal(t, 50, calculateSampleSize(100, 0.95, 0.10))
+
+		// N=300: n = 96.04 / (1 + 95.04/300) = 96.04 / 1.3168 ≈ 72.9 -> 73
+		assert.Equal(t, 73, calculateSampleSize(300, 0.95, 0.10))
+
+		// N=1000: n = 96.04 / (1 + 95.04/1000) = 96.04 / 1.09504 ≈ 87.7 -> 88
+		assert.Equal(t, 88, calculateSampleSize(1000, 0.95, 0.10))
+	})
+
+	t.Run("sample never exceeds population", func(t *testing.T) {
+		for _, n := range []int{1, 2, 10, 50, 100, 1000} {
+			size := calculateSampleSize(n, 0.95, 0.10)
+			assert.LessOrEqual(t, size, n)
+			assert.Greater(t, size, 0)
+		}
+	})
+}
+
+func TestSampleRunIndices(t *testing.T) {
+	t.Parallel()
+
+	makeRuns := func(n int) []githubapi.WorkflowRun {
+		runs := make([]githubapi.WorkflowRun, n)
+		for i := range runs {
+			runs[i] = githubapi.WorkflowRun{ID: int64(1000 + i)}
+		}
+		return runs
+	}
+
+	t.Run("sample size equals total returns all indices", func(t *testing.T) {
+		runs := makeRuns(5)
+		indices := sampleRunIndices(runs, 5)
+		assert.Equal(t, []int{0, 1, 2, 3, 4}, indices)
+	})
+
+	t.Run("sample size greater than total returns all indices", func(t *testing.T) {
+		runs := makeRuns(3)
+		indices := sampleRunIndices(runs, 10)
+		assert.Equal(t, []int{0, 1, 2}, indices)
+	})
+
+	t.Run("correct count returned", func(t *testing.T) {
+		runs := makeRuns(100)
+		indices := sampleRunIndices(runs, 20)
+		assert.Len(t, indices, 20)
+	})
+
+	t.Run("no duplicate indices", func(t *testing.T) {
+		runs := makeRuns(100)
+		indices := sampleRunIndices(runs, 50)
+		seen := make(map[int]bool)
+		for _, idx := range indices {
+			assert.False(t, seen[idx], "duplicate index: %d", idx)
+			seen[idx] = true
+		}
+	})
+
+	t.Run("all indices are valid", func(t *testing.T) {
+		runs := makeRuns(100)
+		indices := sampleRunIndices(runs, 30)
+		for _, idx := range indices {
+			assert.GreaterOrEqual(t, idx, 0)
+			assert.Less(t, idx, 100)
+		}
+	})
+
+	t.Run("indices are sorted", func(t *testing.T) {
+		runs := makeRuns(100)
+		indices := sampleRunIndices(runs, 40)
+		for i := 1; i < len(indices); i++ {
+			assert.Less(t, indices[i-1], indices[i])
+		}
+	})
+
+	t.Run("deterministic for same input", func(t *testing.T) {
+		runs := makeRuns(100)
+		indices1 := sampleRunIndices(runs, 30)
+		indices2 := sampleRunIndices(runs, 30)
+		assert.Equal(t, indices1, indices2)
+	})
+
+	t.Run("different runs produce different samples", func(t *testing.T) {
+		runs1 := makeRuns(100)
+		runs2 := make([]githubapi.WorkflowRun, 100)
+		for i := range runs2 {
+			runs2[i] = githubapi.WorkflowRun{ID: int64(9000 + i)}
+		}
+		indices1 := sampleRunIndices(runs1, 30)
+		indices2 := sampleRunIndices(runs2, 30)
+		assert.NotEqual(t, indices1, indices2)
+	})
+}
+
+func TestConvertRuns(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty input", func(t *testing.T) {
+		result := convertRuns(nil)
+		assert.Empty(t, result)
+	})
+
+	t.Run("converts fields correctly", func(t *testing.T) {
+		runs := []githubapi.WorkflowRun{
+			{
+				ID:         42,
+				HeadSHA:    "abc123",
+				Status:     "completed",
+				Conclusion: "success",
+				CreatedAt:  "2026-01-15T10:00:00Z",
+				UpdatedAt:  "2026-01-15T10:05:00Z",
+			},
+		}
+		result := convertRuns(runs)
+		assert.Len(t, result, 1)
+		assert.Equal(t, int64(42), result[0].ID)
+		assert.Equal(t, "abc123", result[0].HeadSHA)
+		assert.Equal(t, "success", result[0].Conclusion)
+		assert.Equal(t, int64(300000), result[0].Duration) // 5 minutes in ms
+		assert.Empty(t, result[0].Jobs)
+	})
+
+	t.Run("preserves order", func(t *testing.T) {
+		runs := []githubapi.WorkflowRun{
+			{ID: 1, CreatedAt: "2026-01-15T10:00:00Z", UpdatedAt: "2026-01-15T10:00:00Z"},
+			{ID: 2, CreatedAt: "2026-01-15T11:00:00Z", UpdatedAt: "2026-01-15T11:00:00Z"},
+			{ID: 3, CreatedAt: "2026-01-15T12:00:00Z", UpdatedAt: "2026-01-15T12:00:00Z"},
+		}
+		result := convertRuns(runs)
+		assert.Len(t, result, 3)
+		assert.Equal(t, int64(1), result[0].ID)
+		assert.Equal(t, int64(2), result[1].ID)
+		assert.Equal(t, int64(3), result[2].ID)
 	})
 }
