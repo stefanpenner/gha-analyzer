@@ -69,7 +69,7 @@ Trend analysis provides:
 
 For large repositories, fetching job details for every workflow run is expensive (1 API call per run). Trend analysis uses **job-level statistical sampling** to reduce API usage while maintaining accuracy.
 
-**How it works**: All workflow runs are always fetched (cheap — 1 call per 100 runs), so run-level metrics (duration trends, success rates) are exact. Job detail fetching is then sampled using a finite-population formula at 95% confidence with ±10% margin of error. For example, a repo with 1,000 runs in 30 days will fetch job details for ~464 runs instead of all 1,000.
+**How it works**: All workflow runs are always fetched (cheap — 1 call per 100 runs), so run-level metrics (duration trends, success rates) are exact. Job detail fetching uses **stratified temporal sampling** — runs are bucketed into equal-width time intervals and samples are drawn proportionally from each bucket, guaranteeing even temporal coverage. Sample size is computed using a finite-population formula at 95% confidence with ±10% margin of error. For example, a repo with 1,000 runs in 30 days will fetch job details for ~88 runs instead of all 1,000.
 
 **What's affected**: Job-level analysis (per-job trends, regressions, improvements, flaky detection, queue times) uses the sampled subset. Rare jobs with only a few runs may not appear in sampled results. Trend directions for borderline jobs may vary between runs.
 

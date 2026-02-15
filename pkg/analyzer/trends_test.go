@@ -765,38 +765,45 @@ func TestCalculateSampleSize(t *testing.T) {
 	})
 }
 
-func TestSampleRunIndices(t *testing.T) {
+func TestStratifiedSampleIndices(t *testing.T) {
 	t.Parallel()
 
-	makeRuns := func(n int) []githubapi.WorkflowRun {
+	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// makeTimedRuns creates runs spanning the given number of days
+	makeTimedRuns := func(n int, days int) []githubapi.WorkflowRun {
 		runs := make([]githubapi.WorkflowRun, n)
 		for i := range runs {
-			runs[i] = githubapi.WorkflowRun{ID: int64(1000 + i)}
+			t := baseTime.Add(time.Duration(i) * time.Duration(days) * 24 * time.Hour / time.Duration(n))
+			runs[i] = githubapi.WorkflowRun{
+				ID:        int64(1000 + i),
+				CreatedAt: t.Format(time.RFC3339),
+			}
 		}
 		return runs
 	}
 
 	t.Run("sample size equals total returns all indices", func(t *testing.T) {
-		runs := makeRuns(5)
-		indices := sampleRunIndices(runs, 5)
+		runs := makeTimedRuns(5, 30)
+		indices := stratifiedSampleIndices(runs, 5)
 		assert.Equal(t, []int{0, 1, 2, 3, 4}, indices)
 	})
 
 	t.Run("sample size greater than total returns all indices", func(t *testing.T) {
-		runs := makeRuns(3)
-		indices := sampleRunIndices(runs, 10)
+		runs := makeTimedRuns(3, 30)
+		indices := stratifiedSampleIndices(runs, 10)
 		assert.Equal(t, []int{0, 1, 2}, indices)
 	})
 
 	t.Run("correct count returned", func(t *testing.T) {
-		runs := makeRuns(100)
-		indices := sampleRunIndices(runs, 20)
+		runs := makeTimedRuns(100, 30)
+		indices := stratifiedSampleIndices(runs, 20)
 		assert.Len(t, indices, 20)
 	})
 
 	t.Run("no duplicate indices", func(t *testing.T) {
-		runs := makeRuns(100)
-		indices := sampleRunIndices(runs, 50)
+		runs := makeTimedRuns(100, 30)
+		indices := stratifiedSampleIndices(runs, 50)
 		seen := make(map[int]bool)
 		for _, idx := range indices {
 			assert.False(t, seen[idx], "duplicate index: %d", idx)
@@ -805,8 +812,8 @@ func TestSampleRunIndices(t *testing.T) {
 	})
 
 	t.Run("all indices are valid", func(t *testing.T) {
-		runs := makeRuns(100)
-		indices := sampleRunIndices(runs, 30)
+		runs := makeTimedRuns(100, 30)
+		indices := stratifiedSampleIndices(runs, 30)
 		for _, idx := range indices {
 			assert.GreaterOrEqual(t, idx, 0)
 			assert.Less(t, idx, 100)
@@ -814,29 +821,109 @@ func TestSampleRunIndices(t *testing.T) {
 	})
 
 	t.Run("indices are sorted", func(t *testing.T) {
-		runs := makeRuns(100)
-		indices := sampleRunIndices(runs, 40)
+		runs := makeTimedRuns(100, 30)
+		indices := stratifiedSampleIndices(runs, 40)
 		for i := 1; i < len(indices); i++ {
 			assert.Less(t, indices[i-1], indices[i])
 		}
 	})
 
 	t.Run("deterministic for same input", func(t *testing.T) {
-		runs := makeRuns(100)
-		indices1 := sampleRunIndices(runs, 30)
-		indices2 := sampleRunIndices(runs, 30)
+		runs := makeTimedRuns(100, 30)
+		indices1 := stratifiedSampleIndices(runs, 30)
+		indices2 := stratifiedSampleIndices(runs, 30)
 		assert.Equal(t, indices1, indices2)
 	})
 
 	t.Run("different runs produce different samples", func(t *testing.T) {
-		runs1 := makeRuns(100)
+		runs1 := makeTimedRuns(100, 30)
 		runs2 := make([]githubapi.WorkflowRun, 100)
 		for i := range runs2 {
-			runs2[i] = githubapi.WorkflowRun{ID: int64(9000 + i)}
+			t := baseTime.Add(time.Duration(i) * 30 * 24 * time.Hour / 100)
+			runs2[i] = githubapi.WorkflowRun{
+				ID:        int64(9000 + i),
+				CreatedAt: t.Format(time.RFC3339),
+			}
 		}
-		indices1 := sampleRunIndices(runs1, 30)
-		indices2 := sampleRunIndices(runs2, 30)
+		indices1 := stratifiedSampleIndices(runs1, 30)
+		indices2 := stratifiedSampleIndices(runs2, 30)
 		assert.NotEqual(t, indices1, indices2)
+	})
+
+	t.Run("temporal spread across 30 days", func(t *testing.T) {
+		// Create 100 runs spanning 30 days
+		runs := makeTimedRuns(100, 30)
+		indices := stratifiedSampleIndices(runs, 20)
+
+		// Verify samples aren't clustered: no single week should have
+		// more than 60% of samples (with even distribution, each week
+		// of 4 would get ~25%)
+		weekCounts := make(map[int]int)
+		for _, idx := range indices {
+			t, _ := time.Parse(time.RFC3339, runs[idx].CreatedAt)
+			week := int(t.Sub(baseTime).Hours() / (7 * 24))
+			weekCounts[week]++
+		}
+		for week, count := range weekCounts {
+			assert.LessOrEqual(t, count, 12,
+				"week %d has %d samples (>60%% of 20), indicating temporal clustering", week, count)
+		}
+	})
+
+	t.Run("proportional allocation with uneven activity", func(t *testing.T) {
+		// Create runs with bursty activity: 60 runs in first 3 days,
+		// 40 runs in remaining 27 days
+		runs := make([]githubapi.WorkflowRun, 100)
+		for i := 0; i < 60; i++ {
+			t := baseTime.Add(time.Duration(i) * 3 * 24 * time.Hour / 60)
+			runs[i] = githubapi.WorkflowRun{
+				ID:        int64(1000 + i),
+				CreatedAt: t.Format(time.RFC3339),
+			}
+		}
+		for i := 60; i < 100; i++ {
+			t := baseTime.Add(3*24*time.Hour + time.Duration(i-60)*27*24*time.Hour/40)
+			runs[i] = githubapi.WorkflowRun{
+				ID:        int64(1000 + i),
+				CreatedAt: t.Format(time.RFC3339),
+			}
+		}
+		indices := stratifiedSampleIndices(runs, 20)
+		assert.Len(t, indices, 20)
+
+		// Verify samples are drawn from both early and late periods
+		earlyCount := 0 // indices in first 60 runs (first 3 days)
+		for _, idx := range indices {
+			if idx < 60 {
+				earlyCount++
+			}
+		}
+		lateCount := len(indices) - earlyCount
+		assert.Greater(t, earlyCount, 0, "should have samples from early burst period")
+		assert.Greater(t, lateCount, 0, "should have samples from later period")
+	})
+
+	t.Run("all runs at same timestamp", func(t *testing.T) {
+		// Edge case: all runs have identical timestamps (single bucket)
+		runs := make([]githubapi.WorkflowRun, 50)
+		sameTime := baseTime.Format(time.RFC3339)
+		for i := range runs {
+			runs[i] = githubapi.WorkflowRun{
+				ID:        int64(1000 + i),
+				CreatedAt: sameTime,
+			}
+		}
+		indices := stratifiedSampleIndices(runs, 10)
+		assert.Len(t, indices, 10)
+
+		// Still should have no duplicates and valid indices
+		seen := make(map[int]bool)
+		for _, idx := range indices {
+			assert.False(t, seen[idx], "duplicate index: %d", idx)
+			seen[idx] = true
+			assert.GreaterOrEqual(t, idx, 0)
+			assert.Less(t, idx, 50)
+		}
 	})
 }
 

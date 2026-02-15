@@ -230,14 +230,18 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 	runData := convertRuns(runs)
 
 	// Determine job-level sampling.
-	// The user's margin of error applies to population-level estimates, but
-	// per-job trend detection splits observations across many distinct jobs.
-	// Use a tighter effective margin (÷3) so that even medium-frequency jobs
-	// retain enough observations per half for reliable trend detection.
+	// Stratified temporal sampling guarantees even distribution across the
+	// time range, so the margin of error can be used directly without the
+	// extra tightening that uniform random sampling required.
 	totalRuns := len(runData)
 	sampling.TotalRuns = totalRuns
-	jobMargin := marginOfError / 3
+	jobMargin := marginOfError
 	sampleSize := calculateSampleSize(totalRuns, confidence, jobMargin)
+
+	// Ensure a minimum sample floor so rare jobs still get observations.
+	if sampleSize < 80 {
+		sampleSize = min(80, totalRuns)
+	}
 
 	// Only sample when it saves ≥25% of API calls; otherwise the marginal
 	// savings aren't worth the per-job accuracy loss on borderline trends.
@@ -265,7 +269,7 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 	}
 
 	// Fetch jobs for sampled runs
-	sampleIndices := sampleRunIndices(runs, sampling.SampleSize)
+	sampleIndices := stratifiedSampleIndices(runs, sampling.SampleSize)
 	if err := fetchJobsForRuns(ctx, client, runData, runs, sampleIndices, reporter); err != nil {
 		return nil, fmt.Errorf("failed to fetch job data: %w", err)
 	}
@@ -363,9 +367,11 @@ func calculateSampleSize(totalRuns int, confidence, marginOfError float64) int {
 	return size
 }
 
-// sampleRunIndices returns indices of runs to fetch jobs for.
-// Uses a deterministic seed derived from run IDs for reproducibility.
-func sampleRunIndices(runs []githubapi.WorkflowRun, sampleSize int) []int {
+// stratifiedSampleIndices selects indices spread evenly across time buckets.
+// Runs are bucketed by CreatedAt timestamp into equal-width time intervals,
+// then samples are drawn proportionally from each bucket using deterministic
+// Fisher-Yates selection. Returns sorted indices into the original runs slice.
+func stratifiedSampleIndices(runs []githubapi.WorkflowRun, sampleSize int) []int {
 	total := len(runs)
 	if sampleSize >= total {
 		indices := make([]int, total)
@@ -382,16 +388,116 @@ func sampleRunIndices(runs []githubapi.WorkflowRun, sampleSize int) []int {
 	}
 	rng := rand.New(rand.NewSource(int64(h.Sum64())))
 
-	// Fisher-Yates partial shuffle to select sampleSize unique indices
-	indices := make([]int, total)
-	for i := range indices {
-		indices[i] = i
+	// Build time-ordered index pairs: (parsedTime, originalIndex)
+	type indexedRun struct {
+		t   time.Time
+		idx int
 	}
-	for i := 0; i < sampleSize; i++ {
-		j := i + rng.Intn(total-i)
-		indices[i], indices[j] = indices[j], indices[i]
+	indexed := make([]indexedRun, total)
+	for i, run := range runs {
+		t, _ := utils.ParseTime(run.CreatedAt)
+		indexed[i] = indexedRun{t: t, idx: i}
 	}
-	selected := indices[:sampleSize]
+	sort.Slice(indexed, func(i, j int) bool {
+		return indexed[i].t.Before(indexed[j].t)
+	})
+
+	// Find time range
+	minT := indexed[0].t
+	maxT := indexed[total-1].t
+	timeSpan := maxT.Sub(minT)
+
+	// Divide into equal-width time buckets
+	numBuckets := sampleSize
+	if numBuckets > 10 {
+		numBuckets = 10
+	}
+	if numBuckets < 1 {
+		numBuckets = 1
+	}
+
+	// Assign runs to buckets. If all timestamps are identical (timeSpan==0),
+	// put everything in bucket 0.
+	buckets := make([][]int, numBuckets) // each bucket holds original indices
+	for _, ir := range indexed {
+		b := 0
+		if timeSpan > 0 {
+			b = int(float64(ir.t.Sub(minT)) / float64(timeSpan) * float64(numBuckets))
+			if b >= numBuckets {
+				b = numBuckets - 1
+			}
+		}
+		buckets[b] = append(buckets[b], ir.idx)
+	}
+
+	// Allocate samples per bucket proportionally
+	perBucket := make([]int, numBuckets)
+	allocated := 0
+	for i, bucket := range buckets {
+		perBucket[i] = int(math.Round(float64(len(bucket)) / float64(total) * float64(sampleSize)))
+		// Clamp to bucket size
+		if perBucket[i] > len(bucket) {
+			perBucket[i] = len(bucket)
+		}
+		allocated += perBucket[i]
+	}
+
+	// Adjust to hit exact sampleSize (rounding may over/under-allocate)
+	for allocated < sampleSize {
+		// Add to the largest under-sampled bucket
+		bestIdx := -1
+		bestSlack := 0
+		for i, bucket := range buckets {
+			slack := len(bucket) - perBucket[i]
+			if slack > bestSlack {
+				bestSlack = slack
+				bestIdx = i
+			}
+		}
+		if bestIdx < 0 {
+			break
+		}
+		perBucket[bestIdx]++
+		allocated++
+	}
+	for allocated > sampleSize {
+		// Remove from the bucket with the most samples (that has >0)
+		bestIdx := -1
+		bestCount := 0
+		for i := range buckets {
+			if perBucket[i] > bestCount {
+				bestCount = perBucket[i]
+				bestIdx = i
+			}
+		}
+		if bestIdx < 0 {
+			break
+		}
+		perBucket[bestIdx]--
+		allocated--
+	}
+
+	// Within each bucket, select deterministically using Fisher-Yates
+	var selected []int
+	for i, bucket := range buckets {
+		n := perBucket[i]
+		if n <= 0 || len(bucket) == 0 {
+			continue
+		}
+		if n >= len(bucket) {
+			selected = append(selected, bucket...)
+			continue
+		}
+		// Partial Fisher-Yates shuffle
+		perm := make([]int, len(bucket))
+		copy(perm, bucket)
+		for j := 0; j < n; j++ {
+			k := j + rng.Intn(len(perm)-j)
+			perm[j], perm[k] = perm[k], perm[j]
+		}
+		selected = append(selected, perm[:n]...)
+	}
+
 	sort.Ints(selected)
 	return selected
 }
