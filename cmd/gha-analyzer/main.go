@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,13 +97,17 @@ type config struct {
 	trendsBranch     string
 	trendsWorkflow   string
 	trendsNoSample   bool
+	trendsConfidence float64
+	trendsMargin     float64
 }
 
 func parseArgs(args []string, terminal bool) (config, error) {
 	cfg := config{
-		tuiMode:      terminal,
-		trendsDays:   30, // default to 30 days
-		trendsFormat: "terminal",
+		tuiMode:          terminal,
+		trendsDays:       30, // default to 30 days
+		trendsFormat:     "terminal",
+		trendsConfidence: 0.95,
+		trendsMargin:     0.10,
 	}
 
 	// Check if first arg is "trends" subcommand
@@ -204,6 +209,22 @@ func parseArgs(args []string, terminal bool) (config, error) {
 			cfg.trendsNoSample = true
 			continue
 		}
+		if strings.HasPrefix(arg, "--confidence=") {
+			val, err := strconv.ParseFloat(strings.TrimPrefix(arg, "--confidence="), 64)
+			if err != nil || val <= 0 || val >= 1 {
+				return cfg, fmt.Errorf("invalid --confidence value: must be between 0 and 1 (e.g., 0.95)")
+			}
+			cfg.trendsConfidence = val
+			continue
+		}
+		if strings.HasPrefix(arg, "--margin=") {
+			val, err := strconv.ParseFloat(strings.TrimPrefix(arg, "--margin="), 64)
+			if err != nil || val <= 0 || val >= 1 {
+				return cfg, fmt.Errorf("invalid --margin value: must be between 0 and 1 (e.g., 0.10)")
+			}
+			cfg.trendsMargin = val
+			continue
+		}
 
 		// For trends mode, first non-flag arg is the repo
 		if cfg.trendsMode && cfg.trendsRepo == "" && !strings.HasPrefix(arg, "-") {
@@ -274,7 +295,11 @@ func main() {
 		progress.StartURL(0, cfg.trendsRepo)
 
 		// Perform trend analysis
-		analysis, err := analyzer.AnalyzeTrends(ctx, client, owner, repo, cfg.trendsDays, cfg.trendsBranch, cfg.trendsWorkflow, cfg.trendsNoSample, progress)
+		analysis, err := analyzer.AnalyzeTrends(ctx, client, owner, repo, cfg.trendsDays, cfg.trendsBranch, cfg.trendsWorkflow, analyzer.TrendOptions{
+			NoSample:      cfg.trendsNoSample,
+			Confidence:    cfg.trendsConfidence,
+			MarginOfError: cfg.trendsMargin,
+		}, progress)
 
 		progress.Finish()
 		progress.Wait()
@@ -592,6 +617,8 @@ func printUsage() {
 	fmt.Println("  --branch=<name>           Filter by branch name (e.g., main, master)")
 	fmt.Println("  --workflow=<file>         Filter by workflow file name (e.g., post-merge.yaml)")
 	fmt.Println("  --no-sample               Fetch job details for all runs (disables statistical sampling)")
+	fmt.Println("  --confidence=<0-1>        Confidence level for sampling (default: 0.95)")
+	fmt.Println("  --margin=<0-1>            Margin of error for sampling (default: 0.10)")
 	fmt.Println("\nEnvironment Variables:")
 	fmt.Println("  GITHUB_TOKEN              GitHub PAT (alternatively pass as argument)")
 	fmt.Println("\nExamples:")

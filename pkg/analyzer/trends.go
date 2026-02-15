@@ -145,11 +145,18 @@ type JobData struct {
 	QueueTime   int64 // milliseconds
 }
 
+// TrendOptions configures the trend analysis behavior
+type TrendOptions struct {
+	NoSample    bool
+	Confidence  float64 // e.g. 0.95 for 95%
+	MarginOfError float64 // e.g. 0.10 for ±10%
+}
+
 // AnalyzeTrends analyzes historical trends for a repository using GitHub API.
-// When noSample is false (default), job details are fetched for a statistically
+// When opts.NoSample is false (default), job details are fetched for a statistically
 // representative random sample of runs to reduce API calls. Run-level metrics
 // (duration trend, success rate) always use all runs.
-func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, repo string, days int, branch, workflow string, noSample bool, reporter ProgressReporter) (*TrendAnalysis, error) {
+func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, repo string, days int, branch, workflow string, opts TrendOptions, reporter ProgressReporter) (*TrendAnalysis, error) {
 	endTime := time.Now()
 	startTime := endTime.Add(-time.Duration(days) * 24 * time.Hour)
 
@@ -171,8 +178,14 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 	runData := convertRuns(runs)
 
 	// Determine sampling
-	const confidence = 0.95
-	const marginOfError = 0.10
+	confidence := opts.Confidence
+	if confidence <= 0 {
+		confidence = 0.95
+	}
+	marginOfError := opts.MarginOfError
+	if marginOfError <= 0 {
+		marginOfError = 0.10
+	}
 	totalRuns := len(runData)
 	sampleSize := calculateSampleSize(totalRuns, confidence, marginOfError)
 	sampling := SamplingInfo{
@@ -181,7 +194,7 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 		MarginOfError: marginOfError,
 	}
 
-	if !noSample && sampleSize < totalRuns {
+	if !opts.NoSample && sampleSize < totalRuns {
 		sampling.Enabled = true
 		sampling.SampleSize = sampleSize
 	} else {
@@ -190,7 +203,14 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 
 	if reporter != nil {
 		reporter.SetURLRuns(sampling.SampleSize)
-		reporter.SetPhase("Fetching job details")
+		if sampling.Enabled {
+			reporter.SetPhase("Fetching job details")
+			reporter.SetDetail(fmt.Sprintf("sampling %d/%d runs — %.0f%% confidence, ±%.0f%% margin",
+				sampling.SampleSize, sampling.TotalRuns,
+				sampling.Confidence*100, sampling.MarginOfError*100))
+		} else {
+			reporter.SetPhase("Fetching job details")
+		}
 	}
 
 	// Fetch jobs for sampled runs

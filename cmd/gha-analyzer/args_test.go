@@ -179,6 +179,30 @@ func TestParseArgs(t *testing.T) {
 			isTerminal: false,
 			want:       config{trendsMode: true, trendsRepo: "owner/repo", trendsNoSample: true},
 		},
+		{
+			name:       "--confidence flag",
+			args:       []string{"trends", "owner/repo", "--confidence=0.99"},
+			isTerminal: false,
+			want:       config{trendsMode: true, trendsRepo: "owner/repo", trendsConfidence: 0.99},
+		},
+		{
+			name:       "--margin flag",
+			args:       []string{"trends", "owner/repo", "--margin=0.05"},
+			isTerminal: false,
+			want:       config{trendsMode: true, trendsRepo: "owner/repo", trendsMargin: 0.05},
+		},
+		{
+			name:       "--confidence=0 returns error",
+			args:       []string{"trends", "owner/repo", "--confidence=0"},
+			isTerminal: false,
+			wantErr:    true,
+		},
+		{
+			name:       "--margin=1.5 returns error",
+			args:       []string{"trends", "owner/repo", "--margin=1.5"},
+			isTerminal: false,
+			wantErr:    true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -232,6 +256,12 @@ func TestParseArgs(t *testing.T) {
 			}
 			if got.trendsNoSample != tt.want.trendsNoSample {
 				t.Errorf("trendsNoSample = %v, want %v", got.trendsNoSample, tt.want.trendsNoSample)
+			}
+			if tt.want.trendsConfidence != 0 && got.trendsConfidence != tt.want.trendsConfidence {
+				t.Errorf("trendsConfidence = %v, want %v", got.trendsConfidence, tt.want.trendsConfidence)
+			}
+			if tt.want.trendsMargin != 0 && got.trendsMargin != tt.want.trendsMargin {
+				t.Errorf("trendsMargin = %v, want %v", got.trendsMargin, tt.want.trendsMargin)
 			}
 		})
 	}
