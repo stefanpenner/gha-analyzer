@@ -273,3 +273,453 @@ func TestStatisticalFunctions(t *testing.T) {
 		assert.Equal(t, 10.0, p95)
 	})
 }
+
+// Tests covering the trend ordering bug fix.
+//
+// The bug: calculateTrendSummary, analyzeJobTrends, and calculateJobChanges
+// split the runs slice at the midpoint and compare "first half" vs "second half"
+// to determine trend direction. They assume chronological order (oldest first),
+// so the first half represents older data and the second half represents newer data.
+//
+// The GitHub API returns runs in newest-first order. If data was passed through
+// unsorted, the halves would be reversed, causing improving trends to be
+// reported as degrading and vice versa.
+//
+// The fix sorts runs chronologically in AnalyzeTrends before passing them to
+// these functions. These tests verify the functions produce correct results
+// when given properly chronologically-ordered data.
+
+// TestCalculateTrendSummary_ChronologicalOrder verifies that calculateTrendSummary
+// correctly identifies improving, degrading, and stable trends when runs are
+// provided in chronological order (oldest first), as the fix ensures.
+func TestCalculateTrendSummary_ChronologicalOrder(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+
+	t.Run("older runs slow newer runs fast is improving", func(t *testing.T) {
+		t.Parallel()
+		// Chronological order: oldest (slow) -> newest (fast)
+		// First half avg = (120+110)/2 = 115s, second half avg = (50+40)/2 = 45s
+		// Percent change = (45-115)/115 * 100 = -60.9% (< -5%, so improving)
+		runs := []RunData{
+			makeRunData("success", 120000, now.Add(-8*time.Hour), nil), // oldest, 120s
+			makeRunData("success", 110000, now.Add(-6*time.Hour), nil), // 110s
+			makeRunData("success", 50000, now.Add(-4*time.Hour), nil),  // 50s
+			makeRunData("success", 40000, now.Add(-2*time.Hour), nil),  // newest, 40s
+		}
+		summary := calculateTrendSummary(runs)
+		assert.Equal(t, "improving", summary.TrendDirection,
+			"runs getting faster over time should be 'improving'")
+		assert.Less(t, summary.PercentChange, -5.0,
+			"percent change should be significantly negative for improving trend")
+	})
+
+	t.Run("older runs fast newer runs slow is degrading", func(t *testing.T) {
+		t.Parallel()
+		// Chronological order: oldest (fast) -> newest (slow)
+		// First half avg = (40+50)/2 = 45s, second half avg = (110+120)/2 = 115s
+		// Percent change = (115-45)/45 * 100 = +155.6% (> 5%, so degrading)
+		runs := []RunData{
+			makeRunData("success", 40000, now.Add(-8*time.Hour), nil),  // oldest, 40s
+			makeRunData("success", 50000, now.Add(-6*time.Hour), nil),  // 50s
+			makeRunData("success", 110000, now.Add(-4*time.Hour), nil), // 110s
+			makeRunData("success", 120000, now.Add(-2*time.Hour), nil), // newest, 120s
+		}
+		summary := calculateTrendSummary(runs)
+		assert.Equal(t, "degrading", summary.TrendDirection,
+			"runs getting slower over time should be 'degrading'")
+		assert.Greater(t, summary.PercentChange, 5.0,
+			"percent change should be significantly positive for degrading trend")
+	})
+
+	t.Run("similar durations across time is stable", func(t *testing.T) {
+		t.Parallel()
+		// Chronological order with similar durations throughout
+		// First half avg = (60+62)/2 = 61s, second half avg = (58+60)/2 = 59s
+		// Percent change = (59-61)/61 * 100 = -3.3% (between -5% and 5%, so stable)
+		runs := []RunData{
+			makeRunData("success", 60000, now.Add(-8*time.Hour), nil), // oldest, 60s
+			makeRunData("success", 62000, now.Add(-6*time.Hour), nil), // 62s
+			makeRunData("success", 58000, now.Add(-4*time.Hour), nil), // 58s
+			makeRunData("success", 60000, now.Add(-2*time.Hour), nil), // newest, 60s
+		}
+		summary := calculateTrendSummary(runs)
+		assert.Equal(t, "stable", summary.TrendDirection,
+			"runs with similar durations across time should be 'stable'")
+	})
+
+	t.Run("six runs with gradual improvement", func(t *testing.T) {
+		t.Parallel()
+		// More data points to ensure the midpoint split works with larger sets.
+		// First half (indices 0-2): 180s, 170s, 160s -> avg 170s
+		// Second half (indices 3-5): 80s, 70s, 60s -> avg 70s
+		// Percent change = (70-170)/170 * 100 = -58.8% (improving)
+		runs := []RunData{
+			makeRunData("success", 180000, now.Add(-12*time.Hour), nil), // oldest
+			makeRunData("success", 170000, now.Add(-10*time.Hour), nil),
+			makeRunData("success", 160000, now.Add(-8*time.Hour), nil),
+			makeRunData("success", 80000, now.Add(-6*time.Hour), nil),
+			makeRunData("success", 70000, now.Add(-4*time.Hour), nil),
+			makeRunData("success", 60000, now.Add(-2*time.Hour), nil), // newest
+		}
+		summary := calculateTrendSummary(runs)
+		assert.Equal(t, "improving", summary.TrendDirection)
+		assert.Equal(t, 6, summary.TotalRuns)
+	})
+
+	t.Run("six runs with gradual degradation", func(t *testing.T) {
+		t.Parallel()
+		// First half (indices 0-2): 60s, 70s, 80s -> avg 70s
+		// Second half (indices 3-5): 160s, 170s, 180s -> avg 170s
+		// Percent change = (170-70)/70 * 100 = +142.9% (degrading)
+		runs := []RunData{
+			makeRunData("success", 60000, now.Add(-12*time.Hour), nil), // oldest
+			makeRunData("success", 70000, now.Add(-10*time.Hour), nil),
+			makeRunData("success", 80000, now.Add(-8*time.Hour), nil),
+			makeRunData("success", 160000, now.Add(-6*time.Hour), nil),
+			makeRunData("success", 170000, now.Add(-4*time.Hour), nil),
+			makeRunData("success", 180000, now.Add(-2*time.Hour), nil), // newest
+		}
+		summary := calculateTrendSummary(runs)
+		assert.Equal(t, "degrading", summary.TrendDirection)
+		assert.Equal(t, 6, summary.TotalRuns)
+	})
+
+	t.Run("trend description populated for improving", func(t *testing.T) {
+		t.Parallel()
+		runs := []RunData{
+			makeRunData("success", 120000, now.Add(-8*time.Hour), nil),
+			makeRunData("success", 110000, now.Add(-6*time.Hour), nil),
+			makeRunData("success", 50000, now.Add(-4*time.Hour), nil),
+			makeRunData("success", 40000, now.Add(-2*time.Hour), nil),
+		}
+		summary := calculateTrendSummary(runs)
+		assert.NotEmpty(t, summary.TrendDescription)
+		assert.Contains(t, summary.TrendDescription, "decreased")
+	})
+
+	t.Run("trend description populated for degrading", func(t *testing.T) {
+		t.Parallel()
+		runs := []RunData{
+			makeRunData("success", 40000, now.Add(-8*time.Hour), nil),
+			makeRunData("success", 50000, now.Add(-6*time.Hour), nil),
+			makeRunData("success", 110000, now.Add(-4*time.Hour), nil),
+			makeRunData("success", 120000, now.Add(-2*time.Hour), nil),
+		}
+		summary := calculateTrendSummary(runs)
+		assert.NotEmpty(t, summary.TrendDescription)
+		assert.Contains(t, summary.TrendDescription, "increased")
+	})
+
+	t.Run("trend description populated for stable", func(t *testing.T) {
+		t.Parallel()
+		runs := []RunData{
+			makeRunData("success", 60000, now.Add(-8*time.Hour), nil),
+			makeRunData("success", 62000, now.Add(-6*time.Hour), nil),
+			makeRunData("success", 58000, now.Add(-4*time.Hour), nil),
+			makeRunData("success", 60000, now.Add(-2*time.Hour), nil),
+		}
+		summary := calculateTrendSummary(runs)
+		assert.NotEmpty(t, summary.TrendDescription)
+		assert.Contains(t, summary.TrendDescription, "stable")
+	})
+}
+
+// TestCalculateJobChanges_ChronologicalOrder verifies that calculateJobChanges
+// correctly identifies regressions and improvements when runs are provided in
+// chronological order. The first half of the slice represents older runs and
+// the second half represents newer runs.
+func TestCalculateJobChanges_ChronologicalOrder(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+
+	t.Run("jobs getting slower over time are regressions", func(t *testing.T) {
+		t.Parallel()
+		// Chronological order: older runs have short job durations,
+		// newer runs have long job durations.
+		// First half (older): "build" at 10s, 12s -> avg 11s
+		// Second half (newer): "build" at 25s, 30s -> avg 27.5s
+		// Change = (27.5-11)/11 * 100 = +150% (regression, > 10% threshold)
+		runs := []RunData{
+			makeRunData("success", 15000, now.Add(-8*time.Hour), []JobData{
+				{Name: "build", Duration: 10000, Conclusion: "success"},
+			}),
+			makeRunData("success", 17000, now.Add(-6*time.Hour), []JobData{
+				{Name: "build", Duration: 12000, Conclusion: "success"},
+			}),
+			makeRunData("success", 30000, now.Add(-4*time.Hour), []JobData{
+				{Name: "build", Duration: 25000, Conclusion: "success"},
+			}),
+			makeRunData("success", 35000, now.Add(-2*time.Hour), []JobData{
+				{Name: "build", Duration: 30000, Conclusion: "success"},
+			}),
+		}
+		regressions, improvements := calculateJobChanges(runs)
+		assert.Len(t, regressions, 1, "should detect one regression")
+		assert.Equal(t, "build", regressions[0].Name)
+		assert.Greater(t, regressions[0].PercentIncrease, 10.0,
+			"percent increase should exceed the 10% significance threshold")
+		assert.Greater(t, regressions[0].NewAvgDuration, regressions[0].OldAvgDuration,
+			"new average should be higher than old average for a regression")
+		assert.Empty(t, improvements, "no improvements expected when jobs got slower")
+	})
+
+	t.Run("jobs getting faster over time are improvements", func(t *testing.T) {
+		t.Parallel()
+		// Chronological order: older runs have long job durations,
+		// newer runs have short job durations.
+		// First half (older): "test" at 60s, 55s -> avg 57.5s
+		// Second half (newer): "test" at 20s, 15s -> avg 17.5s
+		// Change = (17.5-57.5)/57.5 * 100 = -69.6% (improvement)
+		runs := []RunData{
+			makeRunData("success", 65000, now.Add(-8*time.Hour), []JobData{
+				{Name: "test", Duration: 60000, Conclusion: "success"},
+			}),
+			makeRunData("success", 60000, now.Add(-6*time.Hour), []JobData{
+				{Name: "test", Duration: 55000, Conclusion: "success"},
+			}),
+			makeRunData("success", 25000, now.Add(-4*time.Hour), []JobData{
+				{Name: "test", Duration: 20000, Conclusion: "success"},
+			}),
+			makeRunData("success", 20000, now.Add(-2*time.Hour), []JobData{
+				{Name: "test", Duration: 15000, Conclusion: "success"},
+			}),
+		}
+		regressions, improvements := calculateJobChanges(runs)
+		assert.Empty(t, regressions, "no regressions expected when jobs got faster")
+		assert.Len(t, improvements, 1, "should detect one improvement")
+		assert.Equal(t, "test", improvements[0].Name)
+		assert.Greater(t, improvements[0].PercentDecrease, 10.0,
+			"percent decrease should exceed the 10% significance threshold")
+		assert.Less(t, improvements[0].NewAvgDuration, improvements[0].OldAvgDuration,
+			"new average should be lower than old average for an improvement")
+	})
+
+	t.Run("multiple jobs with mixed changes", func(t *testing.T) {
+		t.Parallel()
+		// Chronological order with two jobs: "build" regresses, "lint" improves.
+		// build: first half 10s,12s (avg 11s) -> second half 25s,28s (avg 26.5s) = regression
+		// lint: first half 30s,28s (avg 29s) -> second half 10s,8s (avg 9s) = improvement
+		runs := []RunData{
+			makeRunData("success", 35000, now.Add(-8*time.Hour), []JobData{
+				{Name: "build", Duration: 10000, Conclusion: "success"},
+				{Name: "lint", Duration: 30000, Conclusion: "success"},
+			}),
+			makeRunData("success", 35000, now.Add(-6*time.Hour), []JobData{
+				{Name: "build", Duration: 12000, Conclusion: "success"},
+				{Name: "lint", Duration: 28000, Conclusion: "success"},
+			}),
+			makeRunData("success", 35000, now.Add(-4*time.Hour), []JobData{
+				{Name: "build", Duration: 25000, Conclusion: "success"},
+				{Name: "lint", Duration: 10000, Conclusion: "success"},
+			}),
+			makeRunData("success", 35000, now.Add(-2*time.Hour), []JobData{
+				{Name: "build", Duration: 28000, Conclusion: "success"},
+				{Name: "lint", Duration: 8000, Conclusion: "success"},
+			}),
+		}
+		regressions, improvements := calculateJobChanges(runs)
+		assert.Len(t, regressions, 1, "should detect build as a regression")
+		assert.Equal(t, "build", regressions[0].Name)
+		assert.Len(t, improvements, 1, "should detect lint as an improvement")
+		assert.Equal(t, "lint", improvements[0].Name)
+	})
+
+	t.Run("six runs regression detection", func(t *testing.T) {
+		t.Parallel()
+		// Larger dataset with 6 runs. The midpoint is at index 3.
+		// First half (indices 0-2): "deploy" at 5s, 6s, 5s -> avg 5.33s
+		// Second half (indices 3-5): "deploy" at 15s, 16s, 17s -> avg 16s
+		// Change = (16-5.33)/5.33 * 100 = +200% (regression)
+		runs := []RunData{
+			makeRunData("success", 10000, now.Add(-12*time.Hour), []JobData{
+				{Name: "deploy", Duration: 5000, Conclusion: "success"},
+			}),
+			makeRunData("success", 10000, now.Add(-10*time.Hour), []JobData{
+				{Name: "deploy", Duration: 6000, Conclusion: "success"},
+			}),
+			makeRunData("success", 10000, now.Add(-8*time.Hour), []JobData{
+				{Name: "deploy", Duration: 5000, Conclusion: "success"},
+			}),
+			makeRunData("success", 20000, now.Add(-6*time.Hour), []JobData{
+				{Name: "deploy", Duration: 15000, Conclusion: "success"},
+			}),
+			makeRunData("success", 20000, now.Add(-4*time.Hour), []JobData{
+				{Name: "deploy", Duration: 16000, Conclusion: "success"},
+			}),
+			makeRunData("success", 22000, now.Add(-2*time.Hour), []JobData{
+				{Name: "deploy", Duration: 17000, Conclusion: "success"},
+			}),
+		}
+		regressions, improvements := calculateJobChanges(runs)
+		assert.Len(t, regressions, 1)
+		assert.Equal(t, "deploy", regressions[0].Name)
+		assert.Greater(t, regressions[0].PercentIncrease, 100.0,
+			"a tripling of duration should show >100% increase")
+		assert.Empty(t, improvements)
+	})
+}
+
+// TestAnalyzeJobTrends_ChronologicalOrder verifies that analyzeJobTrends
+// correctly determines trend direction for individual jobs when runs are
+// provided in chronological order (oldest first).
+//
+// analyzeJobTrends collects all JobData instances for each job name across
+// all runs (preserving the order they appear in the runs slice), then splits
+// the collected durations at the midpoint to compare first half vs second half.
+func TestAnalyzeJobTrends_ChronologicalOrder(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+
+	t.Run("job duration increasing over time is degrading", func(t *testing.T) {
+		t.Parallel()
+		// Chronological order: "ci" job gets progressively slower.
+		// Job durations in order: 10s, 12s, 30s, 35s
+		// First half avg = (10+12)/2 = 11s, second half avg = (30+35)/2 = 32.5s
+		// Percent change = (32.5-11)/11 * 100 = +195.5% (degrading)
+		runs := []RunData{
+			makeRunData("success", 15000, now.Add(-8*time.Hour), []JobData{
+				{Name: "ci", Duration: 10000, Conclusion: "success"},
+			}),
+			makeRunData("success", 17000, now.Add(-6*time.Hour), []JobData{
+				{Name: "ci", Duration: 12000, Conclusion: "success"},
+			}),
+			makeRunData("success", 35000, now.Add(-4*time.Hour), []JobData{
+				{Name: "ci", Duration: 30000, Conclusion: "success"},
+			}),
+			makeRunData("success", 40000, now.Add(-2*time.Hour), []JobData{
+				{Name: "ci", Duration: 35000, Conclusion: "success"},
+			}),
+		}
+		trends := analyzeJobTrends(runs)
+		assert.Len(t, trends, 1)
+		assert.Equal(t, "ci", trends[0].Name)
+		assert.Equal(t, "degrading", trends[0].TrendDirection,
+			"job getting slower over time should be 'degrading'")
+		assert.Equal(t, 4, trends[0].TotalRuns)
+	})
+
+	t.Run("job duration decreasing over time is improving", func(t *testing.T) {
+		t.Parallel()
+		// Chronological order: "ci" job gets progressively faster.
+		// Job durations in order: 60s, 55s, 20s, 15s
+		// First half avg = (60+55)/2 = 57.5s, second half avg = (20+15)/2 = 17.5s
+		// Percent change = (17.5-57.5)/57.5 * 100 = -69.6% (improving)
+		runs := []RunData{
+			makeRunData("success", 65000, now.Add(-8*time.Hour), []JobData{
+				{Name: "ci", Duration: 60000, Conclusion: "success"},
+			}),
+			makeRunData("success", 60000, now.Add(-6*time.Hour), []JobData{
+				{Name: "ci", Duration: 55000, Conclusion: "success"},
+			}),
+			makeRunData("success", 25000, now.Add(-4*time.Hour), []JobData{
+				{Name: "ci", Duration: 20000, Conclusion: "success"},
+			}),
+			makeRunData("success", 20000, now.Add(-2*time.Hour), []JobData{
+				{Name: "ci", Duration: 15000, Conclusion: "success"},
+			}),
+		}
+		trends := analyzeJobTrends(runs)
+		assert.Len(t, trends, 1)
+		assert.Equal(t, "ci", trends[0].Name)
+		assert.Equal(t, "improving", trends[0].TrendDirection,
+			"job getting faster over time should be 'improving'")
+	})
+
+	t.Run("job with stable duration is stable", func(t *testing.T) {
+		t.Parallel()
+		// Chronological order with roughly constant job durations.
+		// Job durations: 30s, 31s, 29s, 30s
+		// First half avg = (30+31)/2 = 30.5s, second half avg = (29+30)/2 = 29.5s
+		// Percent change = (29.5-30.5)/30.5 * 100 = -3.3% (stable, within +/-5%)
+		runs := []RunData{
+			makeRunData("success", 35000, now.Add(-8*time.Hour), []JobData{
+				{Name: "ci", Duration: 30000, Conclusion: "success"},
+			}),
+			makeRunData("success", 35000, now.Add(-6*time.Hour), []JobData{
+				{Name: "ci", Duration: 31000, Conclusion: "success"},
+			}),
+			makeRunData("success", 34000, now.Add(-4*time.Hour), []JobData{
+				{Name: "ci", Duration: 29000, Conclusion: "success"},
+			}),
+			makeRunData("success", 35000, now.Add(-2*time.Hour), []JobData{
+				{Name: "ci", Duration: 30000, Conclusion: "success"},
+			}),
+		}
+		trends := analyzeJobTrends(runs)
+		assert.Len(t, trends, 1)
+		assert.Equal(t, "ci", trends[0].Name)
+		assert.Equal(t, "stable", trends[0].TrendDirection,
+			"job with roughly constant duration should be 'stable'")
+	})
+
+	t.Run("multiple jobs with different trends", func(t *testing.T) {
+		t.Parallel()
+		// Two jobs: "build" degrades, "lint" improves over time.
+		// build durations in order: 10s, 11s, 25s, 28s (degrading)
+		// lint durations in order: 40s, 38s, 15s, 12s (improving)
+		runs := []RunData{
+			makeRunData("success", 50000, now.Add(-8*time.Hour), []JobData{
+				{Name: "build", Duration: 10000, Conclusion: "success"},
+				{Name: "lint", Duration: 40000, Conclusion: "success"},
+			}),
+			makeRunData("success", 50000, now.Add(-6*time.Hour), []JobData{
+				{Name: "build", Duration: 11000, Conclusion: "success"},
+				{Name: "lint", Duration: 38000, Conclusion: "success"},
+			}),
+			makeRunData("success", 40000, now.Add(-4*time.Hour), []JobData{
+				{Name: "build", Duration: 25000, Conclusion: "success"},
+				{Name: "lint", Duration: 15000, Conclusion: "success"},
+			}),
+			makeRunData("success", 40000, now.Add(-2*time.Hour), []JobData{
+				{Name: "build", Duration: 28000, Conclusion: "success"},
+				{Name: "lint", Duration: 12000, Conclusion: "success"},
+			}),
+		}
+		trends := analyzeJobTrends(runs)
+		assert.Len(t, trends, 2)
+
+		// Find each job's trend (sorted by avg duration descending)
+		trendMap := make(map[string]string)
+		for _, jt := range trends {
+			trendMap[jt.Name] = jt.TrendDirection
+		}
+		assert.Equal(t, "degrading", trendMap["build"],
+			"build job getting slower should be 'degrading'")
+		assert.Equal(t, "improving", trendMap["lint"],
+			"lint job getting faster should be 'improving'")
+	})
+
+	t.Run("six runs with gradual job degradation", func(t *testing.T) {
+		t.Parallel()
+		// 6 runs, midpoint at index 3.
+		// "test" durations: 10s, 11s, 12s | 30s, 32s, 35s
+		// First half avg = 11s, second half avg = 32.3s (degrading)
+		runs := []RunData{
+			makeRunData("success", 15000, now.Add(-12*time.Hour), []JobData{
+				{Name: "test", Duration: 10000, Conclusion: "success"},
+			}),
+			makeRunData("success", 15000, now.Add(-10*time.Hour), []JobData{
+				{Name: "test", Duration: 11000, Conclusion: "success"},
+			}),
+			makeRunData("success", 15000, now.Add(-8*time.Hour), []JobData{
+				{Name: "test", Duration: 12000, Conclusion: "success"},
+			}),
+			makeRunData("success", 35000, now.Add(-6*time.Hour), []JobData{
+				{Name: "test", Duration: 30000, Conclusion: "success"},
+			}),
+			makeRunData("success", 37000, now.Add(-4*time.Hour), []JobData{
+				{Name: "test", Duration: 32000, Conclusion: "success"},
+			}),
+			makeRunData("success", 40000, now.Add(-2*time.Hour), []JobData{
+				{Name: "test", Duration: 35000, Conclusion: "success"},
+			}),
+		}
+		trends := analyzeJobTrends(runs)
+		assert.Len(t, trends, 1)
+		assert.Equal(t, "test", trends[0].Name)
+		assert.Equal(t, "degrading", trends[0].TrendDirection)
+		assert.Equal(t, 6, trends[0].TotalRuns)
+		assert.Equal(t, 100.0, trends[0].SuccessRate)
+	})
+}

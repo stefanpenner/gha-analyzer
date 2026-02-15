@@ -155,6 +155,24 @@ func TestParseArgs(t *testing.T) {
 			isTerminal: false,
 			want:       config{urls: []string{"url"}, clearCache: true},
 		},
+		{
+			name:       "--output=stdout sets outputFormat and disables TUI",
+			args:       []string{"url", "--output=stdout"},
+			isTerminal: true,
+			want:       config{urls: []string{"url"}, outputFormat: "stdout"},
+		},
+		{
+			name:       "--output=markdown sets outputFormat and disables TUI",
+			args:       []string{"url", "--output=markdown"},
+			isTerminal: true,
+			want:       config{urls: []string{"url"}, outputFormat: "markdown"},
+		},
+		{
+			name:       "--output=invalid returns error",
+			args:       []string{"url", "--output=invalid"},
+			isTerminal: false,
+			wantErr:    true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -202,6 +220,9 @@ func TestParseArgs(t *testing.T) {
 			}
 			if got.showHelp != tt.want.showHelp {
 				t.Errorf("showHelp = %v, want %v", got.showHelp, tt.want.showHelp)
+			}
+			if got.outputFormat != tt.want.outputFormat {
+				t.Errorf("outputFormat = %q, want %q", got.outputFormat, tt.want.outputFormat)
 			}
 		})
 	}

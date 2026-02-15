@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +20,12 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+)
+
+const (
+	maxRetries          = 5
+	maxRetryDelay       = 2 * time.Minute
+	defaultMaxConcurrency = 5
 )
 
 // getTracer returns the current tracer from the global provider.
@@ -86,7 +93,7 @@ func NewClient(context Context, opts ...Option) *Client {
 	}
 
 	if client.semaphore == nil {
-		client.semaphore = make(chan struct{}, 10)
+		client.semaphore = make(chan struct{}, defaultMaxConcurrency)
 	}
 
 	if client.httpClient == nil {
@@ -305,12 +312,13 @@ func (t *RateLimitedTransport) RoundTrip(req *http.Request) (*http.Response, err
 	if err != nil {
 		return nil, err
 	}
-
 	t.Limiter.updateFromHeaders(resp.Header)
 
-	if shouldRetryRateLimit(resp) {
-		waitForRateLimit(resp)
+	for attempt := 0; attempt < maxRetries && shouldRetry(resp); attempt++ {
+		delay := retryDelay(attempt, resp)
+		fmt.Fprintf(os.Stderr, "Rate limited by GitHub API, retrying in %s (attempt %d/%d)\n", delay.Round(time.Millisecond), attempt+1, maxRetries)
 		_ = resp.Body.Close()
+		time.Sleep(delay)
 		t.Limiter.waitIfNeeded()
 		resp, err = t.Base.RoundTrip(req)
 		if err != nil {
@@ -326,34 +334,52 @@ func doRequest(ctx context.Context, client *Client, req *http.Request) (*http.Re
 	return client.httpClient.Do(req.WithContext(ctx))
 }
 
-func shouldRetryRateLimit(resp *http.Response) bool {
-	if resp.StatusCode != http.StatusForbidden {
-		return false
-	}
-	if resp.Header.Get("x-ratelimit-remaining") == "0" {
+func shouldRetry(resp *http.Response) bool {
+	if resp.StatusCode == http.StatusTooManyRequests {
 		return true
 	}
-	if resp.Header.Get("Retry-After") != "" {
-		return true
+	if resp.StatusCode == http.StatusForbidden {
+		if resp.Header.Get("x-ratelimit-remaining") == "0" {
+			return true
+		}
+		if resp.Header.Get("Retry-After") != "" {
+			return true
+		}
 	}
 	return false
 }
 
-func waitForRateLimit(resp *http.Response) {
+func waitDurationFromHeaders(resp *http.Response) time.Duration {
 	if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
 		if seconds, err := strconv.Atoi(retryAfter); err == nil && seconds > 0 {
-			time.Sleep(time.Duration(seconds) * time.Second)
-			return
+			return time.Duration(seconds) * time.Second
 		}
 	}
 	if reset := resp.Header.Get("x-ratelimit-reset"); reset != "" {
 		if seconds, err := strconv.ParseInt(reset, 10, 64); err == nil {
 			resetTime := time.Unix(seconds, 0)
-			if time.Until(resetTime) > 0 {
-				time.Sleep(time.Until(resetTime) + time.Second)
+			if d := time.Until(resetTime) + time.Second; d > 0 {
+				return d
 			}
 		}
 	}
+	return 0
+}
+
+func retryDelay(attempt int, resp *http.Response) time.Duration {
+	if resp != nil {
+		if d := waitDurationFromHeaders(resp); d > 0 {
+			return d
+		}
+	}
+	// Exponential backoff: 1s, 2s, 4s, 8s, 16s capped at maxRetryDelay
+	base := time.Second * time.Duration(1<<uint(attempt))
+	if base > maxRetryDelay {
+		base = maxRetryDelay
+	}
+	// Add jitter: 0-25% of base
+	jitter := time.Duration(rand.Int63n(int64(base / 4)))
+	return base + jitter
 }
 
 func fetchWithAuth(ctx context.Context, client *Client, urlValue string, accept string) (*http.Response, error) {

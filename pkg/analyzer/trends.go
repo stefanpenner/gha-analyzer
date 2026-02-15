@@ -29,6 +29,7 @@ type TrendAnalysis struct {
 // JobRegression represents a job that got slower
 type JobRegression struct {
 	Name            string
+	URLs            []string // sample recent job URLs (newest first)
 	OldAvgDuration  float64
 	NewAvgDuration  float64
 	PercentIncrease float64
@@ -38,6 +39,7 @@ type JobRegression struct {
 // JobImprovement represents a job that got faster
 type JobImprovement struct {
 	Name            string
+	URLs            []string // sample recent job URLs (newest first)
 	OldAvgDuration  float64
 	NewAvgDuration  float64
 	PercentDecrease float64
@@ -69,6 +71,7 @@ type TrendSummary struct {
 	P95Duration        float64
 	AvgSuccessRate     float64
 	TrendDirection     string // "improving", "stable", "degrading"
+	TrendDescription   string // human-readable explanation of the trend
 	PercentChange      float64
 	MostFlakyJobsCount int
 }
@@ -83,6 +86,7 @@ type DataPoint struct {
 // JobTrend contains trend data for a specific job
 type JobTrend struct {
 	Name           string
+	URLs           []string // sample recent job URLs (newest first)
 	AvgDuration    float64
 	MedianDuration float64
 	SuccessRate    float64
@@ -94,6 +98,7 @@ type JobTrend struct {
 // FlakyJob represents a job with inconsistent outcomes
 type FlakyJob struct {
 	Name           string
+	URLs           []string // sample recent failure URLs (newest first)
 	TotalRuns      int
 	SuccessCount   int
 	FailureCount   int
@@ -118,6 +123,7 @@ type RunData struct {
 type JobData struct {
 	ID          int64
 	Name        string
+	URL         string
 	Status      string
 	Conclusion  string
 	CreatedAt   time.Time
@@ -128,9 +134,13 @@ type JobData struct {
 }
 
 // AnalyzeTrends analyzes historical trends for a repository using GitHub API
-func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, repo string, days int, branch, workflow string) (*TrendAnalysis, error) {
+func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, repo string, days int, branch, workflow string, reporter ProgressReporter) (*TrendAnalysis, error) {
 	endTime := time.Now()
 	startTime := endTime.Add(-time.Duration(days) * 24 * time.Hour)
+
+	if reporter != nil {
+		reporter.SetPhase("Fetching workflow runs")
+	}
 
 	// Fetch workflow runs from GitHub
 	runs, err := client.FetchRecentWorkflowRuns(ctx, owner, repo, days, branch, workflow)
@@ -142,11 +152,27 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 		return nil, fmt.Errorf("no workflow runs found for %s/%s in the last %d days", owner, repo, days)
 	}
 
+	if reporter != nil {
+		reporter.SetURLRuns(len(runs))
+		reporter.SetPhase("Fetching job details")
+	}
+
 	// Convert to RunData and fetch jobs
-	runData, err := convertAndFetchJobs(ctx, client, runs)
+	runData, err := convertAndFetchJobs(ctx, client, runs, reporter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch job data: %w", err)
 	}
+
+	if reporter != nil {
+		reporter.SetPhase("Analyzing trends")
+	}
+
+	// Sort runs chronologically (oldest first) so first-half/second-half
+	// comparisons correctly treat early data as "before" and recent data as "after".
+	// The GitHub API returns runs newest-first by default.
+	sort.Slice(runData, func(i, j int) bool {
+		return runData[i].CreatedAt.Before(runData[j].CreatedAt)
+	})
 
 	analysis := &TrendAnalysis{
 		Owner: owner,
@@ -184,7 +210,7 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 }
 
 // convertAndFetchJobs converts workflow runs and fetches job details
-func convertAndFetchJobs(ctx context.Context, client githubapi.GitHubProvider, runs []githubapi.WorkflowRun) ([]RunData, error) {
+func convertAndFetchJobs(ctx context.Context, client githubapi.GitHubProvider, runs []githubapi.WorkflowRun, reporter ProgressReporter) ([]RunData, error) {
 	runData := make([]RunData, 0, len(runs))
 
 	for _, run := range runs {
@@ -204,6 +230,9 @@ func convertAndFetchJobs(ctx context.Context, client githubapi.GitHubProvider, r
 		jobsURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs/%d/jobs",
 			run.Repository.Owner.Login, run.Repository.Name, run.ID)
 		jobs, err := client.FetchJobsPaginated(ctx, jobsURL)
+		if reporter != nil {
+			reporter.ProcessRun()
+		}
 		if err == nil {
 			for _, job := range jobs {
 				createdAt, _ := utils.ParseTime(job.CreatedAt)
@@ -223,6 +252,7 @@ func convertAndFetchJobs(ctx context.Context, client githubapi.GitHubProvider, r
 				rd.Jobs = append(rd.Jobs, JobData{
 					ID:          job.ID,
 					Name:        job.Name,
+					URL:         job.HTMLURL,
 					Status:      job.Status,
 					Conclusion:  job.Conclusion,
 					CreatedAt:   createdAt,
@@ -287,14 +317,26 @@ func calculateTrendSummary(runs []RunData) TrendSummary {
 		}
 	}
 
+	// Generate human-readable trend description
+	trendDescription := ""
+	switch trendDirection {
+	case "improving":
+		trendDescription = fmt.Sprintf("Workflow durations decreased by %.1f%% over this period. Runs are completing faster in the more recent half of the analysis window.", -percentChange)
+	case "degrading":
+		trendDescription = fmt.Sprintf("Workflow durations increased by %.1f%% over this period. Runs are taking longer in the more recent half of the analysis window. Investigate recent changes for added overhead, cache issues, or resource contention.", percentChange)
+	case "stable":
+		trendDescription = "Workflow durations are stable (within 5% variation) over this period."
+	}
+
 	return TrendSummary{
-		TotalRuns:      len(runs),
-		AvgDuration:    avgDuration,
-		MedianDuration: medianDuration,
-		P95Duration:    p95Duration,
-		AvgSuccessRate: avgSuccessRate,
-		TrendDirection: trendDirection,
-		PercentChange:  percentChange,
+		TotalRuns:        len(runs),
+		AvgDuration:      avgDuration,
+		MedianDuration:   medianDuration,
+		P95Duration:      p95Duration,
+		AvgSuccessRate:   avgSuccessRate,
+		TrendDirection:   trendDirection,
+		TrendDescription: trendDescription,
+		PercentChange:    percentChange,
 	}
 }
 
@@ -408,8 +450,17 @@ func analyzeJobTrends(runs []RunData) []JobTrend {
 			}
 		}
 
+		// Collect up to 5 most recent URLs (jobs are oldest-first)
+		var urls []string
+		for i := len(jobs) - 1; i >= 0 && len(urls) < 5; i-- {
+			if jobs[i].URL != "" {
+				urls = append(urls, jobs[i].URL)
+			}
+		}
+
 		trends = append(trends, JobTrend{
 			Name:           name,
+			URLs:           urls,
 			AvgDuration:    avgDuration,
 			MedianDuration: medianDuration,
 			SuccessRate:    successRate,
@@ -446,6 +497,7 @@ func detectFlakyJobs(runs []RunData) []FlakyJob {
 		successCount := 0
 		failureCount := 0
 		var lastFailure time.Time
+		var failureURLs []string
 
 		// Sort jobs by time (most recent first)
 		sort.Slice(jobs, func(i, j int) bool {
@@ -466,6 +518,9 @@ func detectFlakyJobs(runs []RunData) []FlakyJob {
 				if lastFailure.IsZero() || job.CompletedAt.After(lastFailure) {
 					lastFailure = job.CompletedAt
 				}
+				if job.URL != "" && len(failureURLs) < 5 {
+					failureURLs = append(failureURLs, job.URL)
+				}
 
 				if i < recentLimit {
 					recentFailures++
@@ -483,6 +538,7 @@ func detectFlakyJobs(runs []RunData) []FlakyJob {
 		if flakeRate > 10 {
 			flakyJobs = append(flakyJobs, FlakyJob{
 				Name:           name,
+				URLs:           failureURLs,
 				TotalRuns:      len(jobs),
 				SuccessCount:   successCount,
 				FailureCount:   failureCount,
@@ -558,8 +614,9 @@ func calculateJobChanges(runs []RunData) ([]JobRegression, []JobImprovement) {
 
 	// Group jobs by name and split into first/second half
 	jobMap := make(map[string]struct {
-		firstHalf  []float64
-		secondHalf []float64
+		firstHalf      []float64
+		secondHalf     []float64
+		secondHalfURLs []string
 	})
 
 	midpoint := len(runs) / 2
@@ -574,6 +631,9 @@ func calculateJobChanges(runs []RunData) ([]JobRegression, []JobImprovement) {
 				entry.firstHalf = append(entry.firstHalf, durationSec)
 			} else {
 				entry.secondHalf = append(entry.secondHalf, durationSec)
+				if job.URL != "" {
+					entry.secondHalfURLs = append(entry.secondHalfURLs, job.URL)
+				}
 			}
 			jobMap[job.Name] = entry
 		}
@@ -597,10 +657,17 @@ func calculateJobChanges(runs []RunData) ([]JobRegression, []JobImprovement) {
 			continue
 		}
 
+		// Take up to 5 most recent second-half URLs (newest first)
+		var urls []string
+		for i := len(data.secondHalfURLs) - 1; i >= 0 && len(urls) < 5; i-- {
+			urls = append(urls, data.secondHalfURLs[i])
+		}
+
 		if change > 0 {
 			// Regression (got slower)
 			regressions = append(regressions, JobRegression{
 				Name:            name,
+				URLs:            urls,
 				OldAvgDuration:  oldAvg,
 				NewAvgDuration:  newAvg,
 				PercentIncrease: percentChange,
@@ -610,6 +677,7 @@ func calculateJobChanges(runs []RunData) ([]JobRegression, []JobImprovement) {
 			// Improvement (got faster)
 			improvements = append(improvements, JobImprovement{
 				Name:            name,
+				URLs:            urls,
 				OldAvgDuration:  oldAvg,
 				NewAvgDuration:  newAvg,
 				PercentDecrease: -percentChange,

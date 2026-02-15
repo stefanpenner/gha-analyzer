@@ -85,6 +85,7 @@ type config struct {
 	otelStdout       bool
 	otelGRPCEndpoint string
 	tuiMode          bool
+	outputFormat     string // "stdout" or "markdown"
 	clearCache       bool
 	window           time.Duration
 	showHelp         bool
@@ -157,6 +158,14 @@ func parseArgs(args []string, terminal bool) (config, error) {
 			continue
 		}
 		if arg == "--no-tui" || arg == "--notui" {
+			cfg.tuiMode = false
+			continue
+		}
+		if strings.HasPrefix(arg, "--output=") {
+			cfg.outputFormat = strings.TrimPrefix(arg, "--output=")
+			if cfg.outputFormat != "stdout" && cfg.outputFormat != "markdown" {
+				return cfg, fmt.Errorf("invalid --output value: %s (must be 'stdout' or 'markdown')", cfg.outputFormat)
+			}
 			cfg.tuiMode = false
 			continue
 		}
@@ -254,18 +263,17 @@ func main() {
 		ctx := context.Background()
 		client := githubapi.NewClient(githubapi.NewContext(token))
 
-		// Build filter description for user feedback
-		filterDesc := fmt.Sprintf("Analyzing trends for %s/%s over the last %d days", owner, repo, cfg.trendsDays)
-		if cfg.trendsBranch != "" {
-			filterDesc += fmt.Sprintf(" (branch: %s)", cfg.trendsBranch)
-		}
-		if cfg.trendsWorkflow != "" {
-			filterDesc += fmt.Sprintf(" (workflow: %s)", cfg.trendsWorkflow)
-		}
-		fmt.Fprintf(os.Stderr, "%s...\n", filterDesc)
+		// Setup progress spinner for trends mode
+		progress := tui.NewProgress(1, os.Stderr)
+		progress.Start()
+		progress.StartURL(0, cfg.trendsRepo)
 
 		// Perform trend analysis
-		analysis, err := analyzer.AnalyzeTrends(ctx, client, owner, repo, cfg.trendsDays, cfg.trendsBranch, cfg.trendsWorkflow)
+		analysis, err := analyzer.AnalyzeTrends(ctx, client, owner, repo, cfg.trendsDays, cfg.trendsBranch, cfg.trendsWorkflow, progress)
+
+		progress.Finish()
+		progress.Wait()
+
 		if err != nil {
 			printError(err, "trend analysis failed")
 			os.Exit(1)
@@ -503,13 +511,23 @@ func main() {
 		return
 	}
 
-	// Restore rich CLI report
+	// Non-TUI output
 	combined := analyzer.CalculateCombinedMetrics(results, sumRuns(results), collectStarts(results), collectEnds(results))
 	var allTraceEvents []analyzer.TraceEvent
 	for _, res := range results {
 		allTraceEvents = append(allTraceEvents, res.TraceEvents...)
 	}
-	output.OutputCombinedResults(os.Stderr, results, combined, allTraceEvents, globalEarliest, globalLatest, perfettoFile, cfg.openInPerfetto, spans)
+
+	switch cfg.outputFormat {
+	case "markdown":
+		output.OutputCombinedResultsMarkdown(os.Stdout, results, combined, allTraceEvents, globalEarliest, globalLatest, perfettoFile, cfg.openInPerfetto, spans)
+	default:
+		output.OutputStyledResults(os.Stderr, results, combined, allTraceEvents, globalEarliest, globalLatest, spans)
+		// Handle perfetto export for styled output
+		if perfettoFile != "" {
+			perfetto.WriteTrace(os.Stderr, results, combined, allTraceEvents, globalEarliest, perfettoFile, cfg.openInPerfetto, spans)
+		}
+	}
 
 	if err := pipeline.Finish(ctx); err != nil {
 		printError(err, "finalizing pipeline failed")
@@ -553,6 +571,7 @@ func printUsage() {
 	fmt.Println("\nFlags:")
 	fmt.Println("  --tui                     Force interactive TUI mode (default when terminal is available)")
 	fmt.Println("  --no-tui                  Disable interactive TUI, use CLI output instead")
+	fmt.Println("  --output=<format>         Output format: 'stdout' (styled terminal) or 'markdown' (implies --no-tui)")
 	fmt.Println("  --perfetto=<file.json>    Save trace for Perfetto.dev analysis")
 	fmt.Println("  --open-in-perfetto        Automatically open the generated trace in Perfetto UI")
 	fmt.Println("  --otel                    Write OTel spans as JSON to stdout")
@@ -573,6 +592,8 @@ func printUsage() {
 	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123")
 	fmt.Println("  gha-analyzer https://github.com/owner/repo/commit/sha --perfetto=trace.json")
 	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123 --no-tui")
+	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123 --output=stdout")
+	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123 --output=markdown > report.md")
 	fmt.Println("  gha-analyzer trends owner/repo")
 	fmt.Println("  gha-analyzer trends owner/repo --days=7 --format=json")
 	fmt.Println("  gha-analyzer trends owner/repo --branch=main --workflow=post-merge.yaml")

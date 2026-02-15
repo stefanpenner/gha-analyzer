@@ -4,11 +4,58 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 )
+
+// formatSampleLinks renders sample URLs as clickable numbered links: " (1,2,3...)".
+// The entire suffix is rendered in gray. Returns the styled string and its visible width.
+func formatSampleLinks(urls []string) (string, int) {
+	if len(urls) == 0 {
+		return "", 0
+	}
+	limit := 4
+	if len(urls) < limit {
+		limit = len(urls)
+	}
+	parts := make([]string, limit)
+	for i := 0; i < limit; i++ {
+		parts[i] = utils.MakeClickableLink(urls[i], fmt.Sprintf("%d", i+1))
+	}
+	inner := strings.Join(parts, ",")
+	if len(urls) > limit {
+		inner += "..."
+	}
+	// visible width: space + ( + digits + commas + optional "..." + )
+	// digits: limit, commas: limit-1, parens: 2, space: 1
+	visibleWidth := 2*limit + 2
+	if len(urls) > limit {
+		visibleWidth += 3 // "..."
+	}
+	return " " + utils.GrayText("("+inner+")"), visibleWidth
+}
+
+// linkAndPad truncates a name, appends clickable numbered sample links,
+// and right-pads to colWidth visible characters so table columns align.
+func linkAndPad(name string, urls []string, colWidth int) string {
+	suffix, suffixWidth := formatSampleLinks(urls)
+	nameMax := colWidth - suffixWidth
+	if nameMax < 4 {
+		nameMax = 4
+	}
+	if len(name) > nameMax {
+		name = name[:nameMax-3] + "..."
+	}
+	visibleLen := len(name) + suffixWidth
+	result := name + suffix
+	if pad := colWidth - visibleLen; pad > 0 {
+		result += strings.Repeat(" ", pad)
+	}
+	return result
+}
 
 // OutputTrends displays historical trend analysis
 func OutputTrends(w io.Writer, analysis *analyzer.TrendAnalysis, format string) error {
@@ -109,6 +156,10 @@ func renderTrendSummary(w io.Writer, summary analyzer.TrendSummary) {
 
 	fmt.Fprintf(w, "%-25s %20s %s\n", "Trend Direction", trendDisplay, percentDisplay)
 
+	if summary.TrendDescription != "" {
+		fmt.Fprintf(w, "\n%s\n", summary.TrendDescription)
+	}
+
 	if summary.MostFlakyJobsCount > 0 {
 		fmt.Fprintf(w, "%-25s %20d\n", "Flaky Jobs Detected", summary.MostFlakyJobsCount)
 	}
@@ -151,11 +202,7 @@ func renderJobTrends(w io.Writer, trends []analyzer.JobTrend) {
 	for i := 0; i < limit; i++ {
 		job := trends[i]
 
-		// Truncate long names
-		name := job.Name
-		if len(name) > 48 {
-			name = name[:45] + "..."
-		}
+		name := linkAndPad(job.Name, job.URLs, 50)
 
 		trendIcon := "→"
 		trendColor := utils.BlueText
@@ -168,7 +215,7 @@ func renderJobTrends(w io.Writer, trends []analyzer.JobTrend) {
 			trendColor = utils.RedText
 		}
 
-		fmt.Fprintf(w, "%-50s %15s %15s %11.1f%% %10s\n",
+		fmt.Fprintf(w, "%s %15s %15s %11.1f%% %10s\n",
 			name,
 			utils.HumanizeTime(job.AvgDuration),
 			utils.HumanizeTime(job.MedianDuration),
@@ -191,18 +238,14 @@ func renderFlakyJobs(w io.Writer, flakyJobs []analyzer.FlakyJob) {
 	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 105))
 
 	for _, job := range flakyJobs {
-		// Truncate long names
-		name := job.Name
-		if len(name) > 48 {
-			name = name[:45] + "..."
-		}
+		name := linkAndPad(job.Name, job.URLs, 50)
 
 		flakeRateColor := utils.YellowText
 		if job.FlakeRate > 30 {
 			flakeRateColor = utils.RedText
 		}
 
-		fmt.Fprintf(w, "%-50s %10d %10d %12s %15d\n",
+		fmt.Fprintf(w, "%s %10d %10d %12s %15d\n",
 			name,
 			job.TotalRuns,
 			job.FailureCount,
@@ -257,7 +300,7 @@ func generateASCIIChart(points []analyzer.DataPoint, width, height int, valueTyp
 		// Plot points
 		for col := 0; col < width; col++ {
 			// Map column to data point
-			pointIdx := int(float64(col) / float64(width-1) * float64(len(points)-1))
+			pointIdx := int(math.Round(float64(col) / float64(width-1) * float64(len(points)-1)))
 			if pointIdx >= len(points) {
 				pointIdx = len(points) - 1
 			}
@@ -343,13 +386,10 @@ func renderRegressions(w io.Writer, regressions []analyzer.JobRegression) {
 	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 100))
 
 	for _, reg := range regressions {
-		name := reg.Name
-		if len(name) > 60 {
-			name = name[:57] + "..."
-		}
+		name := linkAndPad(reg.Name, reg.URLs, 60)
 
 		changeDisplay := fmt.Sprintf("+%.1f%%", reg.PercentIncrease)
-		fmt.Fprintf(w, "%-60s %12s %12s %s\n",
+		fmt.Fprintf(w, "%s %12s %12s %s\n",
 			name,
 			utils.HumanizeTime(reg.OldAvgDuration),
 			utils.HumanizeTime(reg.NewAvgDuration),
@@ -369,13 +409,10 @@ func renderImprovements(w io.Writer, improvements []analyzer.JobImprovement) {
 	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 100))
 
 	for _, imp := range improvements {
-		name := imp.Name
-		if len(name) > 60 {
-			name = name[:57] + "..."
-		}
+		name := linkAndPad(imp.Name, imp.URLs, 60)
 
 		changeDisplay := fmt.Sprintf("-%.1f%%", imp.PercentDecrease)
-		fmt.Fprintf(w, "%-60s %12s %12s %s\n",
+		fmt.Fprintf(w, "%s %12s %12s %s\n",
 			name,
 			utils.HumanizeTime(imp.OldAvgDuration),
 			utils.HumanizeTime(imp.NewAvgDuration),

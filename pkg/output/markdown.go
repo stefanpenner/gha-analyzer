@@ -63,11 +63,16 @@ func OutputCombinedResultsMarkdown(w io.Writer, urlResults []analyzer.URLResult,
 	}
 	fmt.Fprintln(w, "")
 
-	if len(urlResults) > 1 {
-		fmt.Fprintln(w, "## Combined Timeline")
-		fmt.Fprintln(w, "")
-		fmt.Fprintln(w, "_Timeline visualization is available in text output._")
-		fmt.Fprintln(w, "")
+	if len(spans) > 0 {
+		timelineStr := RenderTimelineToBuffer(spans, globalEarliestTime, globalLatestTime)
+		if timelineStr != "" {
+			fmt.Fprintln(w, "## Pipeline Timeline")
+			fmt.Fprintln(w, "")
+			fmt.Fprintln(w, "```")
+			fmt.Fprint(w, utils.StripANSI(timelineStr))
+			fmt.Fprintln(w, "```")
+			fmt.Fprintln(w, "")
+		}
 	}
 
 	if len(urlResults) > 0 {
@@ -94,6 +99,16 @@ func OutputCombinedResultsMarkdown(w io.Writer, urlResults []analyzer.URLResult,
 	if len(urlResults) > 0 {
 		fmt.Fprintln(w, "## Slowest Jobs")
 		fmt.Fprintln(w, "")
+
+		// Collect bottleneck keys across all results
+		bottleneckKeys := map[string]struct{}{}
+		for _, result := range sortedResults {
+			for _, job := range analyzer.FindBottleneckJobs(result.Metrics.JobTimeline) {
+				key := fmt.Sprintf("%s-%d-%d", job.Name, job.StartTime, job.EndTime)
+				bottleneckKeys[key] = struct{}{}
+			}
+		}
+
 		grouped := map[string][]analyzer.CombinedTimelineJob{}
 		for _, job := range combined.JobTimeline {
 			grouped[job.SourceURL] = append(grouped[job.SourceURL], job)
@@ -111,7 +126,12 @@ func OutputCombinedResultsMarkdown(w io.Writer, urlResults []analyzer.URLResult,
 			fmt.Fprintf(w, "### %s\n", markdownLink(result.DisplayURL, result.DisplayName))
 			for _, job := range jobs {
 				duration := float64(job.EndTime-job.StartTime) / 1000
-				jobText := fmt.Sprintf("%s — %s%s", utils.HumanizeTime(duration), job.Name, requiredEmoji(job.IsRequired))
+				key := fmt.Sprintf("%s-%d-%d", job.Name, job.StartTime, job.EndTime)
+				bottleneck := ""
+				if _, ok := bottleneckKeys[key]; ok {
+					bottleneck = " \U0001F525" // 🔥
+				}
+				jobText := fmt.Sprintf("%s — %s%s%s", utils.HumanizeTime(duration), job.Name, bottleneck, requiredEmoji(job.IsRequired))
 				if job.URL != "" {
 					jobText = markdownLink(job.URL, jobText)
 				}
@@ -119,6 +139,28 @@ func OutputCombinedResultsMarkdown(w io.Writer, urlResults []analyzer.URLResult,
 			}
 			fmt.Fprintln(w, "")
 		}
+	}
+
+	// Commit aggregates
+	commitAggregates := []CommitAggregate{}
+	for _, result := range urlResults {
+		if result.Type == "commit" {
+			commitAggregates = append(commitAggregates, CommitAggregate{
+				Name:                    result.DisplayName,
+				URLIndex:                result.URLIndex,
+				TotalRunsForCommit:      result.AllCommitRunsCount,
+				TotalComputeMsForCommit: result.AllCommitRunsComputeMs,
+			})
+		}
+	}
+	if len(commitAggregates) > 0 {
+		fmt.Fprintln(w, "## Commit Runs (All Runs for Commit SHA)")
+		fmt.Fprintln(w, "")
+		for _, agg := range commitAggregates {
+			computeDisplay := utils.HumanizeTime(float64(agg.TotalComputeMsForCommit) / 1000)
+			fmt.Fprintf(w, "- **%s**: %d runs, compute %s\n", agg.Name, agg.TotalRunsForCommit, computeDisplay)
+		}
+		fmt.Fprintln(w, "")
 	}
 
 	if perfettoFile != "" {

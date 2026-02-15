@@ -3,9 +3,11 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "output",
     srcs = [
+        "colors.go",
         "helpers.go",
         "markdown.go",
         "output.go",
+        "styled.go",
         "timeline.go",
         "trends.go",
     ],
@@ -15,6 +17,7 @@ go_library(
         "//pkg/analyzer",
         "//pkg/perfetto",
         "//pkg/utils",
+        "@com_github_charmbracelet_lipgloss//:lipgloss",
         "@io_opentelemetry_go_otel_sdk//trace",
     ],
 )

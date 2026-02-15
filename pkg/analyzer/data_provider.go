@@ -275,10 +275,10 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 			reporter.SetDetail(fmt.Sprintf("%d runs", len(allRunsForHead)))
 		}
 
-		// Parallelize fetching jobs for all runs to calculate total compute time
+		// Parallelize fetching jobs for all runs to calculate total compute time.
+		// Concurrency is controlled by the HTTP client's semaphore.
 		var computeMu sync.Mutex
 		var computeWg sync.WaitGroup
-		computeSemaphore := make(chan struct{}, 10) // Higher concurrency for this part
 
 		for _, run := range allRunsForHead {
 			if run.Status != "completed" {
@@ -287,8 +287,6 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 			computeWg.Add(1)
 			go func(r githubapi.WorkflowRun) {
 				defer computeWg.Done()
-				computeSemaphore <- struct{}{}
-				defer func() { <-computeSemaphore }()
 
 				jobsURL := fmt.Sprintf("%s/actions/runs/%d/jobs?per_page=100", baseURL, r.ID)
 				jobs, err := p.client.FetchJobsPaginated(ctx, jobsURL)
