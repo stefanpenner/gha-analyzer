@@ -125,6 +125,7 @@ func NewClient(context Context, opts ...Option) *Client {
 }
 
 type WorkflowRunsResponse struct {
+	TotalCount   int           `json:"total_count"`
 	WorkflowRuns []WorkflowRun `json:"workflow_runs"`
 }
 
@@ -549,11 +550,12 @@ func (c *Client) FetchWorkflowRuns(ctx context.Context, baseURL, headSHA string,
 		params.Set("event", event)
 	}
 	runsURL := fmt.Sprintf("%s/actions/runs?%s", baseURL, params.Encode())
-	return fetchWorkflowRunsPaginated(ctx, c, runsURL)
+	return fetchWorkflowRunsPaginated(ctx, c, runsURL, nil)
 }
 
-// FetchRecentWorkflowRuns fetches workflow runs for a repository from the last N days
-func (c *Client) FetchRecentWorkflowRuns(ctx context.Context, owner, repo string, days int, branch, workflow string) ([]WorkflowRun, error) {
+// FetchRecentWorkflowRuns fetches workflow runs for a repository from the last N days.
+// The optional onPage callback is called after each page with (fetchedSoFar, totalCount).
+func (c *Client) FetchRecentWorkflowRuns(ctx context.Context, owner, repo string, days int, branch, workflow string, onPage func(fetched, total int)) ([]WorkflowRun, error) {
 	ctx, span := getTracer().Start(ctx, "FetchRecentWorkflowRuns", trace.WithAttributes(
 		attribute.String("github.owner", owner),
 		attribute.String("github.repo", repo),
@@ -580,7 +582,7 @@ func (c *Client) FetchRecentWorkflowRuns(ctx context.Context, owner, repo string
 	baseURL := fmt.Sprintf("https://api.github.com/repos/%s/%s", owner, repo)
 	runsURL := fmt.Sprintf("%s/actions/runs?%s", baseURL, params.Encode())
 
-	runs, err := fetchWorkflowRunsPaginated(ctx, c, runsURL)
+	runs, err := fetchWorkflowRunsPaginated(ctx, c, runsURL, onPage)
 	if err != nil {
 		return nil, err
 	}
@@ -723,7 +725,7 @@ func (c *Client) FetchJobsPaginated(ctx context.Context, urlValue string) ([]Job
 	return all, nil
 }
 
-func fetchWorkflowRunsPaginated(ctx context.Context, c *Client, urlValue string) ([]WorkflowRun, error) {
+func fetchWorkflowRunsPaginated(ctx context.Context, c *Client, urlValue string, onPage func(fetched, total int)) ([]WorkflowRun, error) {
 	ctx, span := getTracer().Start(ctx, "fetchWorkflowRunsPaginated", trace.WithAttributes(
 		attribute.String("github.url", urlValue),
 	))
@@ -741,6 +743,9 @@ func fetchWorkflowRunsPaginated(ctx context.Context, c *Client, urlValue string)
 			return nil, err
 		}
 		all = append(all, data.WorkflowRuns...)
+		if onPage != nil {
+			onPage(len(all), data.TotalCount)
+		}
 		nextURL = parseNextLink(resp.Header.Get("Link"))
 	}
 	return all, nil

@@ -160,20 +160,27 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 	endTime := time.Now()
 	startTime := endTime.Add(-time.Duration(days) * 24 * time.Hour)
 
+	// Fetch workflow runs from GitHub
+	var onPage func(fetched, total int)
+	fetchDetail := fmt.Sprintf("%s/%s, last %d days", owner, repo, days)
+	if branch != "" {
+		fetchDetail += fmt.Sprintf(", branch: %s", branch)
+	}
+	if workflow != "" {
+		fetchDetail += fmt.Sprintf(", workflow: %s", workflow)
+	}
 	if reporter != nil {
 		reporter.SetPhase("Fetching workflow runs")
-		detail := fmt.Sprintf("%s/%s, last %d days", owner, repo, days)
-		if branch != "" {
-			detail += fmt.Sprintf(", branch: %s", branch)
+		reporter.SetDetail(fetchDetail)
+		onPage = func(fetched, total int) {
+			if total > 0 {
+				reporter.SetDetail(fmt.Sprintf("%s — %d/%d runs", fetchDetail, fetched, total))
+			} else {
+				reporter.SetDetail(fmt.Sprintf("%s — %d runs", fetchDetail, fetched))
+			}
 		}
-		if workflow != "" {
-			detail += fmt.Sprintf(", workflow: %s", workflow)
-		}
-		reporter.SetDetail(detail)
 	}
-
-	// Fetch workflow runs from GitHub
-	runs, err := client.FetchRecentWorkflowRuns(ctx, owner, repo, days, branch, workflow)
+	runs, err := client.FetchRecentWorkflowRuns(ctx, owner, repo, days, branch, workflow, onPage)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch workflow runs: %w", err)
 	}
