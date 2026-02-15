@@ -1,10 +1,6 @@
 package output
 
 import (
-	"fmt"
-	"io"
-	"strings"
-
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 )
 
@@ -41,7 +37,3 @@ func maxInt64(a, b int64) int64 {
 	return b
 }
 
-func section(w io.Writer, title string) {
-	fmt.Fprintf(w, "\n%s\n", title)
-	fmt.Fprintf(w, "%s\n", strings.Repeat("-", len(title)))
-}

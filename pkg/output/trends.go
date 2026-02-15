@@ -54,116 +54,151 @@ func linkName(name string, urls []string, maxVisible int) string {
 	return name + suffix
 }
 
+// trendSection prints a styled section heading for trends output.
+func trendSection(w io.Writer, title string) {
+	fmt.Fprintln(w)
+	line := borderStyle.Render(strings.Repeat("─", 80))
+	fmt.Fprintln(w, line)
+	fmt.Fprintf(w, "  %s\n", titleStyle.Render(title))
+}
+
 // OutputTrends displays historical trend analysis
 func OutputTrends(w io.Writer, analysis *analyzer.TrendAnalysis, format string) error {
 	if format == "json" {
 		return outputTrendsJSON(w, analysis)
 	}
 
-	// Default: formatted terminal output
-	fmt.Fprintf(w, "\n%s\n", strings.Repeat("=", 80))
-	fmt.Fprintf(w, "📈 Historical Trend Analysis: %s/%s\n", analysis.Owner, analysis.Repo)
-	fmt.Fprintf(w, "%s\n", strings.Repeat("=", 80))
+	// Header box
+	width := 80
+	topBorder := borderStyle.Render("╭" + strings.Repeat("─", width-2) + "╮")
+	botBorder := borderStyle.Render("╰" + strings.Repeat("─", width-2) + "╯")
+	contentWidth := width - 4 // minus "│ " and " │"
 
-	// Time range
-	section(w, "Analysis Period")
-	fmt.Fprintf(w, "Period: %s to %s (%d days)\n",
-		analysis.TimeRange.Start.Format("Jan 02, 2006"),
-		analysis.TimeRange.End.Format("Jan 02, 2006"),
-		analysis.TimeRange.Days)
-	fmt.Fprintf(w, "Total runs analyzed: %d\n", analysis.Summary.TotalRuns)
-	if analysis.Sampling.Enabled {
-		fmt.Fprintf(w, "Job details sampled: %d/%d runs (%.0f%% confidence, ±%.0f%% margin)\n",
-			analysis.Sampling.SampleSize, analysis.Sampling.TotalRuns,
-			analysis.Sampling.Confidence*100, analysis.Sampling.MarginOfError*100)
+	headerLine := func(content string) string {
+		w := lipgloss.Width(content)
+		pad := contentWidth - w
+		if pad < 0 {
+			pad = 0
+		}
+		return borderStyle.Render("│") + " " + content + strings.Repeat(" ", pad) + " " + borderStyle.Render("│")
 	}
 
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, topBorder)
+	fmt.Fprintln(w, headerLine(titleStyle.Render(fmt.Sprintf("Historical Trend Analysis: %s/%s", analysis.Owner, analysis.Repo))))
+
+	periodText := labelStyle.Render("Period: ") +
+		valueStyle.Render(fmt.Sprintf("%s to %s",
+			analysis.TimeRange.Start.Format("Jan 02, 2006"),
+			analysis.TimeRange.End.Format("Jan 02, 2006"))) +
+		labelStyle.Render(fmt.Sprintf(" (%d days)", analysis.TimeRange.Days))
+	fmt.Fprintln(w, headerLine(periodText))
+
+	runsText := labelStyle.Render("Total runs: ") + numStyle.Render(fmt.Sprintf("%d", analysis.Summary.TotalRuns))
+	if analysis.Sampling.Enabled {
+		runsText += labelStyle.Render("  •  Job details sampled: ") +
+			numStyle.Render(fmt.Sprintf("%d/%d", analysis.Sampling.SampleSize, analysis.Sampling.TotalRuns)) +
+			dimStyle.Render(fmt.Sprintf(" (%.0f%% confidence, ±%.0f%% margin)",
+				analysis.Sampling.Confidence*100, analysis.Sampling.MarginOfError*100))
+	}
+	fmt.Fprintln(w, headerLine(runsText))
+	fmt.Fprintln(w, botBorder)
+
 	// Summary statistics
-	section(w, "Summary Statistics")
+	trendSection(w, "Summary Statistics")
 	renderTrendSummary(w, analysis.Summary)
 
 	// Duration trend chart
 	if len(analysis.DurationTrend) > 0 {
-		section(w, "Workflow Duration Trend")
+		trendSection(w, "Workflow Duration Trend")
 		renderDurationChart(w, analysis.DurationTrend)
 	}
 
 	// Success rate trend
 	if len(analysis.SuccessRateTrend) > 0 {
-		section(w, "Success Rate Trend")
+		trendSection(w, "Success Rate Trend")
 		renderSuccessRateChart(w, analysis.SuccessRateTrend)
 	}
 
 	// Top jobs by duration
 	if len(analysis.JobTrends) > 0 {
-		section(w, "Job Performance Summary")
+		trendSection(w, "Job Performance Summary")
 		renderJobTrends(w, analysis.JobTrends)
 	}
 
 	// Queue time analysis
 	if analysis.QueueTimeStats.AvgQueueTime > 0 {
-		section(w, "Queue Time Analysis")
+		trendSection(w, "Queue Time Analysis")
 		renderQueueTimeStats(w, analysis.QueueTimeStats)
 	}
 
 	// Top regressions
 	if len(analysis.TopRegressions) > 0 {
-		section(w, "Top Performance Regressions")
+		trendSection(w, "Top Performance Regressions")
 		renderRegressions(w, analysis.TopRegressions)
 	}
 
 	// Top improvements
 	if len(analysis.TopImprovements) > 0 {
-		section(w, "Top Performance Improvements")
+		trendSection(w, "Top Performance Improvements")
 		renderImprovements(w, analysis.TopImprovements)
 	}
 
 	// Flaky jobs
 	if len(analysis.FlakyJobs) > 0 {
-		section(w, "Flaky Jobs Detected")
+		trendSection(w, "Flaky Jobs Detected")
 		renderFlakyJobs(w, analysis.FlakyJobs)
 	}
 
 	// Legend
-	section(w, "Legend")
+	trendSection(w, "Legend")
 	renderLegend(w)
 
 	return nil
 }
 
 func renderTrendSummary(w io.Writer, summary analyzer.TrendSummary) {
-	fmt.Fprintf(w, "\n%-25s %20s\n", "Metric", "Value")
-	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 50))
+	fmt.Fprintln(w)
 
-	fmt.Fprintf(w, "%-25s %20s\n", "Average Duration", utils.HumanizeTime(summary.AvgDuration))
-	fmt.Fprintf(w, "%-25s %20s\n", "Median Duration", utils.HumanizeTime(summary.MedianDuration))
-	fmt.Fprintf(w, "%-25s %20s\n", "95th Percentile", utils.HumanizeTime(summary.P95Duration))
-	fmt.Fprintf(w, "%-25s %19.1f%%\n", "Average Success Rate", summary.AvgSuccessRate)
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(borderStyle).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			if row == table.HeaderRow {
+				return labelStyle.Bold(true)
+			}
+			if col == 0 {
+				return lipgloss.NewStyle()
+			}
+			return lipgloss.NewStyle().Align(lipgloss.Right)
+		}).
+		Headers("Metric", "Value")
+
+	t.Row("Average Duration", utils.HumanizeTime(summary.AvgDuration))
+	t.Row("Median Duration", utils.HumanizeTime(summary.MedianDuration))
+	t.Row("95th Percentile", utils.HumanizeTime(summary.P95Duration))
+	t.Row("Average Success Rate", colorForSuccessRate(summary.AvgSuccessRate).Render(fmt.Sprintf("%.1f%%", summary.AvgSuccessRate)))
 
 	// Trend direction with color
 	trendDisplay := summary.TrendDirection
-	percentDisplay := fmt.Sprintf("(%.1f%%)", summary.PercentChange)
-
 	switch summary.TrendDirection {
 	case "improving":
-		trendDisplay = utils.GreenText("✓ Improving")
-		percentDisplay = utils.GreenText(percentDisplay)
+		trendDisplay = successStyle.Render("✓ Improving") + " " + successStyle.Render(fmt.Sprintf("(%.1f%%)", summary.PercentChange))
 	case "degrading":
-		trendDisplay = utils.RedText("⚠ Degrading")
-		percentDisplay = utils.RedText(percentDisplay)
+		trendDisplay = failureStyle.Render("⚠ Degrading") + " " + failureStyle.Render(fmt.Sprintf("(%.1f%%)", summary.PercentChange))
 	case "stable":
-		trendDisplay = utils.BlueText("→ Stable")
-		percentDisplay = utils.BlueText(percentDisplay)
+		trendDisplay = dimStyle.Render("→ Stable") + " " + dimStyle.Render(fmt.Sprintf("(%.1f%%)", summary.PercentChange))
 	}
-
-	fmt.Fprintf(w, "%-25s %20s %s\n", "Trend Direction", trendDisplay, percentDisplay)
-
-	if summary.TrendDescription != "" {
-		fmt.Fprintf(w, "\n%s\n", summary.TrendDescription)
-	}
+	t.Row("Trend Direction", trendDisplay)
 
 	if summary.MostFlakyJobsCount > 0 {
-		fmt.Fprintf(w, "%-25s %20d\n", "Flaky Jobs Detected", summary.MostFlakyJobsCount)
+		t.Row("Flaky Jobs Detected", warningStyle.Render(fmt.Sprintf("%d", summary.MostFlakyJobsCount)))
+	}
+
+	fmt.Fprintln(w, t)
+
+	if summary.TrendDescription != "" {
+		fmt.Fprintf(w, "\n  %s\n", dimStyle.Render(summary.TrendDescription))
 	}
 }
 
@@ -246,8 +281,8 @@ func renderJobTrends(w io.Writer, trends []analyzer.JobTrend) {
 }
 
 func renderFlakyJobs(w io.Writer, flakyJobs []analyzer.FlakyJob) {
-	fmt.Fprintf(w, "\n%s Found %d flaky jobs (>10%% failure rate):\n\n",
-		utils.YellowText("⚠️"),
+	fmt.Fprintf(w, "\n  %s Found %d flaky jobs (>10%% failure rate):\n\n",
+		warningStyle.Render("!"),
 		len(flakyJobs))
 
 	t := table.New().
@@ -281,10 +316,10 @@ func renderFlakyJobs(w io.Writer, flakyJobs []analyzer.FlakyJob) {
 
 	fmt.Fprintln(w, t)
 
-	fmt.Fprintf(w, "\n%s Recommendations:\n", utils.BlueText("💡"))
-	fmt.Fprintf(w, "   • Investigate flaky jobs for race conditions or timing issues\n")
-	fmt.Fprintf(w, "   • Consider adding retries or improving test stability\n")
-	fmt.Fprintf(w, "   • Review recent failures for common patterns\n")
+	fmt.Fprintf(w, "\n  %s Recommendations:\n", subheaderStyle.Render("i"))
+	fmt.Fprintf(w, "     %s Investigate flaky jobs for race conditions or timing issues\n", dimStyle.Render("•"))
+	fmt.Fprintf(w, "     %s Consider adding retries or improving test stability\n", dimStyle.Render("•"))
+	fmt.Fprintf(w, "     %s Review recent failures for common patterns\n", dimStyle.Render("•"))
 }
 
 // generateASCIIChart creates a simple ASCII line chart
@@ -385,31 +420,53 @@ func outputTrendsJSON(w io.Writer, analysis *analyzer.TrendAnalysis) error {
 }
 
 func renderQueueTimeStats(w io.Writer, stats analyzer.QueueTimeStats) {
-	fmt.Fprintf(w, "\n%-25s %20s\n", "Metric", "Value")
-	fmt.Fprintf(w, "%s\n", strings.Repeat("-", 50))
+	fmt.Fprintln(w)
 
-	fmt.Fprintf(w, "%-25s %20s\n", "Average Queue Time", utils.HumanizeTime(stats.AvgQueueTime))
-	fmt.Fprintf(w, "%-25s %20s\n", "Median Queue Time", utils.HumanizeTime(stats.MedianQueueTime))
-	fmt.Fprintf(w, "%-25s %20s\n", "95th Percentile Queue", utils.HumanizeTime(stats.P95QueueTime))
-	fmt.Fprintf(w, "%-25s %20s\n", "Average Run Time", utils.HumanizeTime(stats.AvgRunTime))
-	fmt.Fprintf(w, "%-25s %20s\n", "Median Run Time", utils.HumanizeTime(stats.MedianRunTime))
-	fmt.Fprintf(w, "%-25s %19.1f%%\n", "Queue Time Ratio", stats.QueueTimeRatio)
+	t := table.New().
+		Border(lipgloss.RoundedBorder()).
+		BorderStyle(borderStyle).
+		StyleFunc(func(row, col int) lipgloss.Style {
+			if row == table.HeaderRow {
+				return labelStyle.Bold(true)
+			}
+			if col == 0 {
+				return lipgloss.NewStyle()
+			}
+			return lipgloss.NewStyle().Align(lipgloss.Right)
+		}).
+		Headers("Metric", "Value")
+
+	t.Row("Average Queue Time", utils.HumanizeTime(stats.AvgQueueTime))
+	t.Row("Median Queue Time", utils.HumanizeTime(stats.MedianQueueTime))
+	t.Row("95th Percentile Queue", utils.HumanizeTime(stats.P95QueueTime))
+	t.Row("Average Run Time", utils.HumanizeTime(stats.AvgRunTime))
+	t.Row("Median Run Time", utils.HumanizeTime(stats.MedianRunTime))
+
+	ratioStyle := successStyle
+	if stats.QueueTimeRatio > 50 {
+		ratioStyle = failureStyle
+	} else if stats.QueueTimeRatio > 25 {
+		ratioStyle = warningStyle
+	}
+	t.Row("Queue Time Ratio", ratioStyle.Render(fmt.Sprintf("%.1f%%", stats.QueueTimeRatio)))
+
+	fmt.Fprintln(w, t)
 
 	// Provide context on queue time
 	if stats.QueueTimeRatio > 50 {
-		fmt.Fprintf(w, "\n%s Jobs spend more time waiting than running. Consider:\n", utils.YellowText("⚠️"))
-		fmt.Fprintf(w, "   • Adding more runners\n")
-		fmt.Fprintf(w, "   • Using self-hosted runners for faster startup\n")
-		fmt.Fprintf(w, "   • Optimizing job concurrency limits\n")
+		fmt.Fprintf(w, "\n  %s Jobs spend more time waiting than running. Consider:\n", warningStyle.Render("!"))
+		fmt.Fprintf(w, "     %s Adding more runners\n", dimStyle.Render("•"))
+		fmt.Fprintf(w, "     %s Using self-hosted runners for faster startup\n", dimStyle.Render("•"))
+		fmt.Fprintf(w, "     %s Optimizing job concurrency limits\n", dimStyle.Render("•"))
 	} else if stats.QueueTimeRatio > 25 {
-		fmt.Fprintf(w, "\n%s Queue time is moderate. Monitor for spikes during peak hours.\n", utils.BlueText("💡"))
+		fmt.Fprintf(w, "\n  %s Queue time is moderate. Monitor for spikes during peak hours.\n", dimStyle.Render("i"))
 	} else {
-		fmt.Fprintf(w, "\n%s Queue time is healthy. Jobs start quickly.\n", utils.GreenText("✓"))
+		fmt.Fprintf(w, "\n  %s Queue time is healthy. Jobs start quickly.\n", successStyle.Render("✓"))
 	}
 }
 
 func renderRegressions(w io.Writer, regressions []analyzer.JobRegression) {
-	fmt.Fprintf(w, "\n%s Jobs that got significantly slower (>10%% increase):\n\n", utils.RedText("⚠️"))
+	fmt.Fprintf(w, "\n  %s Jobs that got significantly slower (>10%% increase):\n\n", failureStyle.Render("!"))
 
 	t := table.New().
 		Border(lipgloss.RoundedBorder()).
@@ -436,15 +493,15 @@ func renderRegressions(w io.Writer, regressions []analyzer.JobRegression) {
 
 	fmt.Fprintln(w, t)
 
-	fmt.Fprintf(w, "\n%s Investigate these jobs for:\n", utils.BlueText("💡"))
-	fmt.Fprintf(w, "   • Recent code changes that may have added overhead\n")
-	fmt.Fprintf(w, "   • Missing or invalid caches\n")
-	fmt.Fprintf(w, "   • Resource contention or runner performance issues\n")
-	fmt.Fprintf(w, "   • Dependencies that need updating or optimization\n")
+	fmt.Fprintf(w, "\n  %s Investigate these jobs for:\n", subheaderStyle.Render("i"))
+	fmt.Fprintf(w, "     %s Recent code changes that may have added overhead\n", dimStyle.Render("•"))
+	fmt.Fprintf(w, "     %s Missing or invalid caches\n", dimStyle.Render("•"))
+	fmt.Fprintf(w, "     %s Resource contention or runner performance issues\n", dimStyle.Render("•"))
+	fmt.Fprintf(w, "     %s Dependencies that need updating or optimization\n", dimStyle.Render("•"))
 }
 
 func renderImprovements(w io.Writer, improvements []analyzer.JobImprovement) {
-	fmt.Fprintf(w, "\n%s Jobs that got significantly faster (>10%% decrease):\n\n", utils.GreenText("✓"))
+	fmt.Fprintf(w, "\n  %s Jobs that got significantly faster (>10%% decrease):\n\n", successStyle.Render("✓"))
 
 	t := table.New().
 		Border(lipgloss.RoundedBorder()).
@@ -473,8 +530,8 @@ func renderImprovements(w io.Writer, improvements []analyzer.JobImprovement) {
 }
 
 func renderLegend(w io.Writer) {
-	fmt.Fprintf(w, "\n%s Trend Indicators:\n", utils.BlueText("ℹ️"))
-	fmt.Fprintf(w, "   %s  Job got faster (>5%% improvement)\n", utils.GreenText("✓"))
-	fmt.Fprintf(w, "   %s  Job got slower (>5%% regression)\n", utils.RedText("⚠"))
-	fmt.Fprintf(w, "   %s  Job performance is stable (<5%% change)\n", utils.BlueText("→"))
+	fmt.Fprintf(w, "\n  %s Trend Indicators:\n", subheaderStyle.Render("Legend"))
+	fmt.Fprintf(w, "     %s  Job got faster (>5%% improvement)\n", successStyle.Render("✓"))
+	fmt.Fprintf(w, "     %s  Job got slower (>5%% regression)\n", failureStyle.Render("⚠"))
+	fmt.Fprintf(w, "     %s  Job performance is stable (<5%% change)\n", dimStyle.Render("→"))
 }
