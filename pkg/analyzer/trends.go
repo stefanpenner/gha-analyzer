@@ -162,6 +162,14 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 
 	if reporter != nil {
 		reporter.SetPhase("Fetching workflow runs")
+		detail := fmt.Sprintf("%s/%s, last %d days", owner, repo, days)
+		if branch != "" {
+			detail += fmt.Sprintf(", branch: %s", branch)
+		}
+		if workflow != "" {
+			detail += fmt.Sprintf(", workflow: %s", workflow)
+		}
+		reporter.SetDetail(detail)
 	}
 
 	// Fetch workflow runs from GitHub
@@ -210,6 +218,7 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 				sampling.Confidence*100, sampling.MarginOfError*100))
 		} else {
 			reporter.SetPhase("Fetching job details")
+			reporter.SetDetail(fmt.Sprintf("%d runs", totalRuns))
 		}
 	}
 
