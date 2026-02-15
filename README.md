@@ -65,6 +65,27 @@ Trend analysis provides:
 - **Flaky Job Detection**: Automatically detect jobs with inconsistent outcomes (>10% failure rate)
 - **Trend Direction**: See if performance is improving, stable, or degrading
 
+### Sampling
+
+For large repositories, fetching job details for every workflow run is expensive (1 API call per run). Trend analysis uses **job-level statistical sampling** to reduce API usage while maintaining accuracy.
+
+**How it works**: All workflow runs are always fetched (cheap — 1 call per 100 runs), so run-level metrics (duration trends, success rates) are exact. Job detail fetching is then sampled using a finite-population formula at 95% confidence with ±10% margin of error. For example, a repo with 1,000 runs in 30 days will fetch job details for ~464 runs instead of all 1,000.
+
+**What's affected**: Job-level analysis (per-job trends, regressions, improvements, flaky detection, queue times) uses the sampled subset. Rare jobs with only a few runs may not appear in sampled results. Trend directions for borderline jobs may vary between runs.
+
+**What's not affected**: Total run count, average/median/p95 duration, success rate, and overall trend direction are always computed from the full dataset.
+
+```bash
+# Default: sampling enabled (95% confidence, ±10% margin)
+gha-analyzer trends owner/repo --days=30
+
+# Disable sampling for exact results (more API calls)
+gha-analyzer trends owner/repo --days=30 --no-sample
+
+# Tune confidence and margin
+gha-analyzer trends owner/repo --confidence=0.99 --margin=0.05
+```
+
 ### Sample Output
 
 ```

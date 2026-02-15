@@ -18,11 +18,7 @@ import (
 type SamplingInfo struct {
 	Enabled        bool
 	SampleSize     int     // job-level sample count
-	TotalRuns      int     // runs used for analysis (after run sampling)
-	TotalAvailable int     // total runs from API (before run sampling)
-	RunSampled     bool    // was run-level page sampling applied
-	PagesFetched   int     // pages fetched (when run-sampled)
-	TotalPages     int     // total pages available
+	TotalRuns      int     // total runs fetched from API
 	Confidence     float64
 	MarginOfError  float64
 	Rationale      string  // human-readable "why we think" explanation
@@ -51,6 +47,7 @@ type Changepoint struct {
 	AfterSHA     string    // first commit SHA after the changepoint
 	BeforeRunURL string    // URL of the last run before the changepoint
 	AfterRunURL  string    // URL of the first run after the changepoint
+	DiffURL      string    // GitHub compare URL: BeforeSHA...AfterSHA
 	BeforeAvg    float64   // average duration (seconds) before the changepoint
 	AfterAvg     float64   // average duration (seconds) after the changepoint
 	Index        int       // index of the first observation after the shift
@@ -174,8 +171,9 @@ type TrendOptions struct {
 }
 
 // AnalyzeTrends analyzes historical trends for a repository using GitHub API.
-// When opts.NoSample is false (default), both run fetching and job detail fetching
-// use statistical sampling to reduce API calls. Run-level metrics use all fetched runs.
+// All run pages are always fetched to ensure accurate trend detection.
+// When opts.NoSample is false (default), job detail fetching uses statistical
+// sampling to reduce API calls. Run-level metrics use all fetched runs.
 func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, repo string, days int, branch, workflow string, opts TrendOptions, reporter ProgressReporter) (*TrendAnalysis, error) {
 	endTime := time.Now()
 	startTime := endTime.Add(-time.Duration(days) * 24 * time.Hour)
@@ -202,90 +200,26 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 		reporter.SetDetail(fetchDetail)
 	}
 
-	// Decide whether run-level page sampling is possible.
-	// We cannot sample pages when a workflow filter is active because TotalCount
-	// includes ALL workflows and we filter client-side.
-	canSampleRuns := !opts.NoSample && workflow == ""
-
-	var runs []githubapi.WorkflowRun
 	sampling := SamplingInfo{
 		Confidence:    confidence,
 		MarginOfError: marginOfError,
 	}
 
-	if canSampleRuns {
-		// Fetch page 1 to get TotalCount
-		page1, err := client.FetchWorkflowRunsPage(ctx, owner, repo, days, branch, 1)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch workflow runs: %w", err)
-		}
-		runs = append(runs, page1.WorkflowRuns...)
-
-		totalCount := page1.TotalCount
-		totalPages := int(math.Ceil(float64(totalCount) / 100.0))
-		sampling.TotalAvailable = totalCount
-		sampling.TotalPages = totalPages
-
-		if reporter != nil {
-			reporter.SetDetail(fmt.Sprintf("%s — %d/%d runs", fetchDetail, len(runs), totalCount))
-		}
-
-		// Determine if page sampling is worthwhile
-		runSampleSize := calculateSampleSize(totalCount, confidence, marginOfError)
-		pagesNeeded := int(math.Ceil(float64(runSampleSize) / 100.0))
-		if pagesNeeded < 5 {
-			pagesNeeded = 5 // minimum for temporal coverage
-		}
-
-		if totalPages > 5 && pagesNeeded < totalPages {
-			// Apply stratified page sampling
-			sampling.RunSampled = true
-			seed := int64(totalCount) + int64(days)
-			selectedPages := selectSamplePages(totalPages, pagesNeeded, seed)
-			sampling.PagesFetched = len(selectedPages) + 1 // +1 for page 1
-
-			for i, page := range selectedPages {
-				pageResp, err := client.FetchWorkflowRunsPage(ctx, owner, repo, days, branch, page)
-				if err != nil {
-					return nil, fmt.Errorf("failed to fetch workflow runs page %d: %w", page, err)
-				}
-				runs = append(runs, pageResp.WorkflowRuns...)
-				if reporter != nil {
-					reporter.SetDetail(fmt.Sprintf("%s — page %d/%d, %d runs", fetchDetail, i+2, sampling.PagesFetched, len(runs)))
-				}
-			}
-		} else {
-			// Not enough pages to benefit from sampling, fetch remaining
-			sampling.PagesFetched = totalPages
-			for page := 2; page <= totalPages; page++ {
-				pageResp, err := client.FetchWorkflowRunsPage(ctx, owner, repo, days, branch, page)
-				if err != nil {
-					return nil, fmt.Errorf("failed to fetch workflow runs page %d: %w", page, err)
-				}
-				runs = append(runs, pageResp.WorkflowRuns...)
-				if reporter != nil {
-					reporter.SetDetail(fmt.Sprintf("%s — %d/%d runs", fetchDetail, len(runs), totalCount))
-				}
+	// Fetch all run pages — run listing is cheap (1 API call per 100 runs)
+	// and complete data is needed for accurate trend detection.
+	var onPage func(fetched, total int)
+	if reporter != nil {
+		onPage = func(fetched, total int) {
+			if total > 0 {
+				reporter.SetDetail(fmt.Sprintf("%s — %d/%d runs", fetchDetail, fetched, total))
+			} else {
+				reporter.SetDetail(fmt.Sprintf("%s — %d runs", fetchDetail, fetched))
 			}
 		}
-	} else {
-		// Fetch all pages (no run sampling — either disabled or workflow filter active)
-		var onPage func(fetched, total int)
-		if reporter != nil {
-			onPage = func(fetched, total int) {
-				if total > 0 {
-					reporter.SetDetail(fmt.Sprintf("%s — %d/%d runs", fetchDetail, fetched, total))
-				} else {
-					reporter.SetDetail(fmt.Sprintf("%s — %d runs", fetchDetail, fetched))
-				}
-			}
-		}
-		var err error
-		runs, err = client.FetchRecentWorkflowRuns(ctx, owner, repo, days, branch, workflow, onPage)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch workflow runs: %w", err)
-		}
-		sampling.TotalAvailable = len(runs)
+	}
+	runs, err := client.FetchRecentWorkflowRuns(ctx, owner, repo, days, branch, workflow, onPage)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch workflow runs: %w", err)
 	}
 
 	if len(runs) == 0 {
@@ -295,12 +229,19 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 	// Convert all runs to RunData (no job fetching yet)
 	runData := convertRuns(runs)
 
-	// Determine job-level sampling
+	// Determine job-level sampling.
+	// The user's margin of error applies to population-level estimates, but
+	// per-job trend detection splits observations across many distinct jobs.
+	// Use a tighter effective margin (÷3) so that even medium-frequency jobs
+	// retain enough observations per half for reliable trend detection.
 	totalRuns := len(runData)
 	sampling.TotalRuns = totalRuns
-	sampleSize := calculateSampleSize(totalRuns, confidence, marginOfError)
+	jobMargin := marginOfError / 3
+	sampleSize := calculateSampleSize(totalRuns, confidence, jobMargin)
 
-	if !opts.NoSample && sampleSize < totalRuns {
+	// Only sample when it saves ≥25% of API calls; otherwise the marginal
+	// savings aren't worth the per-job accuracy loss on borderline trends.
+	if !opts.NoSample && sampleSize < totalRuns*3/4 {
 		sampling.Enabled = true
 		sampling.SampleSize = sampleSize
 	} else {
@@ -369,6 +310,20 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 
 	// Calculate regressions and improvements (uses sampled job data)
 	analysis.TopRegressions, analysis.TopImprovements = calculateJobChanges(runData)
+
+	// Populate diff URLs on changepoints
+	for i, reg := range analysis.TopRegressions {
+		if reg.Changepoint != nil {
+			analysis.TopRegressions[i].Changepoint.DiffURL = fmt.Sprintf(
+				"https://github.com/%s/%s/compare/%s...%s", owner, repo, reg.Changepoint.BeforeSHA, reg.Changepoint.AfterSHA)
+		}
+	}
+	for i, imp := range analysis.TopImprovements {
+		if imp.Changepoint != nil {
+			analysis.TopImprovements[i].Changepoint.DiffURL = fmt.Sprintf(
+				"https://github.com/%s/%s/compare/%s...%s", owner, repo, imp.Changepoint.BeforeSHA, imp.Changepoint.AfterSHA)
+		}
+	}
 
 	// Calculate queue time statistics (uses sampled job data)
 	analysis.QueueTimeStats = calculateQueueTimeStats(runData)
@@ -441,60 +396,9 @@ func sampleRunIndices(runs []githubapi.WorkflowRun, sampleSize int) []int {
 	return selected
 }
 
-// selectSamplePages selects page numbers using stratified random sampling.
-// It divides pages [2, totalPages] into (pagesNeeded-1) equal buckets and
-// picks one page per bucket. Page 1 is excluded (already fetched by caller).
-// Returns sorted page numbers.
-func selectSamplePages(totalPages, pagesNeeded int, seed int64) []int {
-	if pagesNeeded <= 1 || totalPages <= 1 {
-		return nil
-	}
-
-	// We need pagesNeeded-1 additional pages (page 1 already fetched)
-	needed := pagesNeeded - 1
-	available := totalPages - 1 // pages 2..totalPages
-
-	if needed >= available {
-		// Fetch all remaining pages
-		pages := make([]int, available)
-		for i := range pages {
-			pages[i] = i + 2
-		}
-		return pages
-	}
-
-	rng := rand.New(rand.NewSource(seed))
-
-	// Stratified sampling: divide available pages into equal buckets
-	pages := make([]int, needed)
-	bucketSize := float64(available) / float64(needed)
-	for i := range pages {
-		bucketStart := int(float64(i) * bucketSize)
-		bucketEnd := int(float64(i+1) * bucketSize)
-		if bucketEnd > available {
-			bucketEnd = available
-		}
-		if bucketEnd <= bucketStart {
-			bucketEnd = bucketStart + 1
-		}
-		// Pick a random page within this bucket (page numbers start at 2)
-		pages[i] = bucketStart + rng.Intn(bucketEnd-bucketStart) + 2
-	}
-
-	sort.Ints(pages)
-	return pages
-}
-
 // generateRationale produces a human-readable explanation of sampling decisions.
 func generateRationale(s SamplingInfo) string {
-	parts := []string{}
-
-	if s.RunSampled {
-		parts = append(parts, fmt.Sprintf("%s runs available; %d fetched across %d of %d pages (stratified sampling for temporal coverage).",
-			formatCount(s.TotalAvailable), s.TotalRuns, s.PagesFetched, s.TotalPages))
-	} else {
-		parts = append(parts, fmt.Sprintf("%s runs analyzed.", formatCount(s.TotalRuns)))
-	}
+	parts := []string{fmt.Sprintf("%s runs analyzed.", formatCount(s.TotalRuns))}
 
 	if s.Enabled {
 		parts = append(parts, fmt.Sprintf("%d sampled for job details (%.0f%% confidence, ±%.0f%% margin).",

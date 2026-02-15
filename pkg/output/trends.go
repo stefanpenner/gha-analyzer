@@ -94,15 +94,8 @@ func OutputTrends(w io.Writer, analysis *analyzer.TrendAnalysis, format string) 
 		labelStyle.Render(fmt.Sprintf(" (%d days)", analysis.TimeRange.Days))
 	fmt.Fprintln(w, headerLine(periodText))
 
-	if analysis.Sampling.RunSampled {
-		runsText := labelStyle.Render("Runs fetched: ") +
-			numStyle.Render(fmt.Sprintf("%d/%d", analysis.Sampling.TotalRuns, analysis.Sampling.TotalAvailable)) +
-			dimStyle.Render(fmt.Sprintf(" (%d of %d pages)", analysis.Sampling.PagesFetched, analysis.Sampling.TotalPages))
-		fmt.Fprintln(w, headerLine(runsText))
-	} else {
-		runsText := labelStyle.Render("Total runs: ") + numStyle.Render(fmt.Sprintf("%d", analysis.Summary.TotalRuns))
-		fmt.Fprintln(w, headerLine(runsText))
-	}
+	runsText := labelStyle.Render("Total runs: ") + numStyle.Render(fmt.Sprintf("%d", analysis.Summary.TotalRuns))
+	fmt.Fprintln(w, headerLine(runsText))
 	if analysis.Sampling.Enabled {
 		jobText := labelStyle.Render("Job details sampled: ") +
 			numStyle.Render(fmt.Sprintf("%d/%d", analysis.Sampling.SampleSize, analysis.Sampling.TotalRuns)) +
@@ -539,6 +532,11 @@ func renderRegressions(w io.Writer, regressions []analyzer.JobRegression) {
 			beforeSHA,
 			dimStyle.Render("->"),
 			afterSHA)
+		if cp.DiffURL != "" {
+			fmt.Fprintf(w, "     %s  %s\n",
+				labelStyle.Render("Diff:    "),
+				utils.MakeClickableLink(cp.DiffURL, shortSHA(cp.BeforeSHA)+"..."+shortSHA(cp.AfterSHA)))
+		}
 		fmt.Fprintf(w, "     %s  %s\n",
 			labelStyle.Render("Position:"),
 			dimStyle.Render(fmt.Sprintf("observation %d of %d", cp.Index, cp.TotalPoints)))
@@ -606,6 +604,11 @@ func renderImprovements(w io.Writer, improvements []analyzer.JobImprovement) {
 			beforeSHA,
 			dimStyle.Render("->"),
 			afterSHA)
+		if cp.DiffURL != "" {
+			fmt.Fprintf(w, "     %s  %s\n",
+				labelStyle.Render("Diff:    "),
+				utils.MakeClickableLink(cp.DiffURL, shortSHA(cp.BeforeSHA)+"..."+shortSHA(cp.AfterSHA)))
+		}
 		fmt.Fprintf(w, "     %s  %s\n",
 			labelStyle.Render("Position:"),
 			dimStyle.Render(fmt.Sprintf("observation %d of %d", cp.Index, cp.TotalPoints)))

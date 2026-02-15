@@ -602,40 +602,6 @@ func (c *Client) FetchRecentWorkflowRuns(ctx context.Context, owner, repo string
 	return runs, nil
 }
 
-// FetchWorkflowRunsPage fetches a single page of workflow runs for a repository.
-// The page parameter is 1-indexed. Returns the full response including TotalCount.
-func (c *Client) FetchWorkflowRunsPage(ctx context.Context, owner, repo string, days int, branch string, page int) (*WorkflowRunsResponse, error) {
-	ctx, span := getTracer().Start(ctx, "FetchWorkflowRunsPage", trace.WithAttributes(
-		attribute.String("github.owner", owner),
-		attribute.String("github.repo", repo),
-		attribute.Int("days", days),
-		attribute.String("github.branch", branch),
-		attribute.Int("page", page),
-	))
-	defer span.End()
-
-	since := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
-
-	params := url.Values{}
-	params.Set("per_page", "100")
-	params.Set("created", ">="+since)
-	params.Set("page", strconv.Itoa(page))
-	if branch != "" {
-		params.Set("branch", branch)
-	}
-
-	runsURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs?%s", owner, repo, params.Encode())
-	resp, err := fetchWithAuth(ctx, c, runsURL, "")
-	if err != nil {
-		return nil, err
-	}
-	var data WorkflowRunsResponse
-	if err := decodeJSON(resp, &data); err != nil {
-		return nil, err
-	}
-	return &data, nil
-}
-
 func (c *Client) FetchRepository(ctx context.Context, baseURL string) (*RepoMeta, error) {
 	ctx, span := getTracer().Start(ctx, "FetchRepository", trace.WithAttributes(
 		attribute.String("github.baseURL", baseURL),

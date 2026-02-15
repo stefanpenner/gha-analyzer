@@ -18,6 +18,7 @@ go_library(
         "//pkg/perfetto",
         "//pkg/utils",
         "@com_github_charmbracelet_lipgloss//:lipgloss",
+        "@com_github_charmbracelet_lipgloss//table",
         "@io_opentelemetry_go_otel_sdk//trace",
     ],
 )

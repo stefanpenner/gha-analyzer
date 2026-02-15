@@ -993,109 +993,16 @@ func TestCalculateJobChanges_Changepoint(t *testing.T) {
 	})
 }
 
-func TestSelectSamplePages(t *testing.T) {
-	t.Parallel()
-
-	t.Run("returns nil for single page", func(t *testing.T) {
-		pages := selectSamplePages(1, 1, 42)
-		assert.Nil(t, pages)
-	})
-
-	t.Run("returns nil for pagesNeeded <= 1", func(t *testing.T) {
-		pages := selectSamplePages(10, 1, 42)
-		assert.Nil(t, pages)
-	})
-
-	t.Run("returns all remaining pages when needed >= available", func(t *testing.T) {
-		pages := selectSamplePages(5, 10, 42)
-		assert.Equal(t, []int{2, 3, 4, 5}, pages) // pages 2-5 (page 1 excluded)
-	})
-
-	t.Run("correct count returned", func(t *testing.T) {
-		pages := selectSamplePages(50, 10, 42)
-		assert.Len(t, pages, 9) // pagesNeeded-1 = 9 (page 1 already fetched)
-	})
-
-	t.Run("pages are in valid range", func(t *testing.T) {
-		pages := selectSamplePages(100, 10, 42)
-		for _, p := range pages {
-			assert.GreaterOrEqual(t, p, 2, "page should be >= 2")
-			assert.LessOrEqual(t, p, 100, "page should be <= totalPages")
-		}
-	})
-
-	t.Run("pages are sorted", func(t *testing.T) {
-		pages := selectSamplePages(100, 20, 42)
-		for i := 1; i < len(pages); i++ {
-			assert.LessOrEqual(t, pages[i-1], pages[i])
-		}
-	})
-
-	t.Run("no duplicate pages", func(t *testing.T) {
-		pages := selectSamplePages(224, 10, 42)
-		seen := make(map[int]bool)
-		for _, p := range pages {
-			assert.False(t, seen[p], "duplicate page: %d", p)
-			seen[p] = true
-		}
-	})
-
-	t.Run("deterministic for same seed", func(t *testing.T) {
-		pages1 := selectSamplePages(100, 10, 42)
-		pages2 := selectSamplePages(100, 10, 42)
-		assert.Equal(t, pages1, pages2)
-	})
-
-	t.Run("different seeds produce different selections", func(t *testing.T) {
-		pages1 := selectSamplePages(100, 10, 42)
-		pages2 := selectSamplePages(100, 10, 999)
-		assert.NotEqual(t, pages1, pages2)
-	})
-
-	t.Run("stratified distribution covers range", func(t *testing.T) {
-		// With 224 pages and 10 needed, pages should be spread across the range
-		pages := selectSamplePages(224, 10, 42)
-		assert.Len(t, pages, 9)
-		// First selected page should be from the early range
-		assert.Less(t, pages[0], 50)
-		// Last selected page should be from the late range
-		assert.Greater(t, pages[len(pages)-1], 150)
-	})
-}
-
 func TestGenerateRationale(t *testing.T) {
 	t.Parallel()
 
-	t.Run("run and job sampling", func(t *testing.T) {
+	t.Run("job sampling", func(t *testing.T) {
 		s := SamplingInfo{
-			Enabled:        true,
-			SampleSize:     94,
-			TotalRuns:       500,
-			TotalAvailable: 22354,
-			RunSampled:     true,
-			PagesFetched:   5,
-			TotalPages:     224,
-			Confidence:     0.95,
-			MarginOfError:  0.10,
-		}
-		r := generateRationale(s)
-		assert.Contains(t, r, "22,354")
-		assert.Contains(t, r, "500 fetched")
-		assert.Contains(t, r, "5 of 224 pages")
-		assert.Contains(t, r, "94 sampled for job details")
-		assert.Contains(t, r, "95% confidence")
-		assert.Contains(t, r, "±10% margin")
-	})
-
-	t.Run("job-only sampling", func(t *testing.T) {
-		s := SamplingInfo{
-			Enabled:        true,
-			SampleSize:     73,
-			TotalRuns:       150,
-			TotalAvailable: 150,
-			RunSampled:     false,
-			Confidence:     0.95,
-			MarginOfError:  0.10,
+			Enabled:       true,
+			SampleSize:    73,
+			TotalRuns:     150,
+			Confidence:    0.95,
+			MarginOfError: 0.10,
 		}
 		r := generateRationale(s)
 		assert.Contains(t, r, "150 runs analyzed")
@@ -1105,13 +1012,11 @@ func TestGenerateRationale(t *testing.T) {
 
 	t.Run("no sampling", func(t *testing.T) {
 		s := SamplingInfo{
-			Enabled:        false,
-			SampleSize:     42,
-			TotalRuns:       42,
-			TotalAvailable: 42,
-			RunSampled:     false,
-			Confidence:     0.95,
-			MarginOfError:  0.10,
+			Enabled:       false,
+			SampleSize:    42,
+			TotalRuns:     42,
+			Confidence:    0.95,
+			MarginOfError: 0.10,
 		}
 		r := generateRationale(s)
 		assert.Contains(t, r, "42 runs analyzed")
