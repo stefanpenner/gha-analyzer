@@ -555,6 +555,8 @@ func (c *Client) FetchWorkflowRuns(ctx context.Context, baseURL, headSHA string,
 
 // FetchRecentWorkflowRuns fetches workflow runs for a repository from the last N days.
 // The optional onPage callback is called after each page with (fetchedSoFar, totalCount).
+// When the GitHub API's 1000-result pagination cap is hit, older runs are
+// automatically backfilled using narrower date-range queries.
 func (c *Client) FetchRecentWorkflowRuns(ctx context.Context, owner, repo string, days int, branch, workflow string, onPage func(fetched, total int)) ([]WorkflowRun, error) {
 	ctx, span := getTracer().Start(ctx, "FetchRecentWorkflowRuns", trace.WithAttributes(
 		attribute.String("github.owner", owner),
@@ -587,6 +589,55 @@ func (c *Client) FetchRecentWorkflowRuns(ctx context.Context, owner, repo string
 		return nil, err
 	}
 
+	// The GitHub API caps paginated results at 1000. If we hit this limit,
+	// the returned runs may only cover the most recent few days. Backfill
+	// older runs using narrower date-range queries to cover the full period.
+	if len(runs) >= 1000 {
+		oldestDate := oldestRunDate(runs)
+		if oldestDate > since {
+			seen := make(map[int64]bool, len(runs))
+			for _, r := range runs {
+				seen[r.ID] = true
+			}
+
+			for oldestDate > since {
+				endT, err := time.Parse("2006-01-02", oldestDate)
+				if err != nil {
+					break
+				}
+				endDate := endT.AddDate(0, 0, -1).Format("2006-01-02")
+				if endDate < since {
+					break
+				}
+
+				p := url.Values{}
+				p.Set("per_page", "100")
+				p.Set("created", since+".."+endDate)
+				if branch != "" {
+					p.Set("branch", branch)
+				}
+
+				u := fmt.Sprintf("%s/actions/runs?%s", baseURL, p.Encode())
+				older, err := fetchWorkflowRunsPaginated(ctx, c, u, onPage)
+				if err != nil || len(older) == 0 {
+					break
+				}
+
+				for _, r := range older {
+					if !seen[r.ID] {
+						seen[r.ID] = true
+						runs = append(runs, r)
+					}
+				}
+
+				oldestDate = oldestRunDate(older)
+				if len(older) < 1000 {
+					break // got all remaining data
+				}
+			}
+		}
+	}
+
 	// Client-side workflow filtering (more reliable than API parameter)
 	if workflow != "" {
 		filtered := make([]WorkflowRun, 0, len(runs))
@@ -600,6 +651,20 @@ func (c *Client) FetchRecentWorkflowRuns(ctx context.Context, owner, repo string
 	}
 
 	return runs, nil
+}
+
+// oldestRunDate returns the earliest CreatedAt date (YYYY-MM-DD) among the runs.
+func oldestRunDate(runs []WorkflowRun) string {
+	oldest := ""
+	for _, r := range runs {
+		if len(r.CreatedAt) >= 10 {
+			d := r.CreatedAt[:10]
+			if oldest == "" || d < oldest {
+				oldest = d
+			}
+		}
+	}
+	return oldest
 }
 
 func (c *Client) FetchRepository(ctx context.Context, baseURL string) (*RepoMeta, error) {
@@ -747,6 +812,9 @@ func fetchWorkflowRunsPaginated(ctx context.Context, c *Client, urlValue string,
 			onPage(len(all), data.TotalCount)
 		}
 		nextURL = parseNextLink(resp.Header.Get("Link"))
+	}
+	if onPage != nil && len(all) > 0 {
+		onPage(len(all), len(all))
 	}
 	return all, nil
 }

@@ -18,7 +18,14 @@
       "Bash(id=%s)",
       "Bash(python3:*)",
       "Bash(bazel build:*)",
-      "Bash(bazel test:*)"
+      "Bash(bazel test:*)",
+      "Bash(bd sync:*)",
+      "Bash(bd create:*)",
+      "Bash(bd update:*)",
+      "Bash(bd close:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(find:*)",
+      "Bash(margin\" while job details are being fetched.\n\nCo-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }

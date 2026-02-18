@@ -210,10 +210,10 @@ func AnalyzeTrends(ctx context.Context, client githubapi.GitHubProvider, owner, 
 	var onPage func(fetched, total int)
 	if reporter != nil {
 		onPage = func(fetched, total int) {
-			if total > 0 {
-				reporter.SetDetail(fmt.Sprintf("%s — %d/%d runs", fetchDetail, fetched, total))
+			if total > 0 && fetched < total {
+				reporter.SetDetail(fmt.Sprintf("%s — %d/~%s runs", fetchDetail, fetched, formatCount(total)))
 			} else {
-				reporter.SetDetail(fmt.Sprintf("%s — %d runs", fetchDetail, fetched))
+				reporter.SetDetail(fmt.Sprintf("%s — %s runs", fetchDetail, formatCount(fetched)))
 			}
 		}
 	}
