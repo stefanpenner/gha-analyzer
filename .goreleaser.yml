@@ -1,0 +1,59 @@
+version: 2
+
+builds:
+  - id: gha-analyzer
+    main: ./cmd/gha-analyzer
+    binary: gha-analyzer
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: gha-analyzer
+    builds: [gha-analyzer]
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - none*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+release:
+  github:
+    owner: stefanpenner
+    name: gha-analyzer
+  draft: false
+  prerelease: auto
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+brews:
+  - name: gha-analyzer
+    repository:
+      owner: stefanpenner
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/stefanpenner/gha-analyzer"
+    description: "Analyze GitHub Actions workflow runs to identify performance bottlenecks and flaky tests"
+    license: ""
+    install: |
+      bin.install "gha-analyzer"
+    test: |
+      system "#{bin}/gha-analyzer", "--help"
