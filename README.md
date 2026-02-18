@@ -10,7 +10,7 @@ Analyze GitHub Actions performance and visualize workflow timelines directly in 
 go install github.com/stefanpenner/gha-analyzer/cmd/gha-analyzer@latest
 ```
 
-## Authentication
+## Auth
 
 If you have the [GitHub CLI](https://cli.github.com/) installed and authenticated (`gh auth login`), the token is picked up automatically — no extra setup needed.
 
