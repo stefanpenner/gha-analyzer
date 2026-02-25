@@ -6,6 +6,14 @@ Analyze GitHub Actions performance and visualize workflow timelines directly in 
 
 ## Install
 
+### Homebrew
+
+```bash
+brew install stefanpenner/tap/gha-analyzer
+```
+
+### Go
+
 ```bash
 go install github.com/stefanpenner/gha-analyzer/cmd/gha-analyzer@latest
 ```
