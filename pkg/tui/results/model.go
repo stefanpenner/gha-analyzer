@@ -1233,12 +1233,12 @@ func (m *Model) toggleExpandAll() {
 	}
 }
 
-// hideActivityGroups hides all Activity groups and their children from the chart by default
+// hideActivityGroups hides Activity groups (not artifact groups) from the chart by default
 func (m *Model) hideActivityGroups() {
 	var walk func(items []*TreeItem)
 	walk = func(items []*TreeItem) {
 		for _, item := range items {
-			if item.ItemType == ItemTypeActivityGroup {
+			if item.ItemType == ItemTypeActivityGroup && item.Hints.Category != "artifact" {
 				m.hiddenState[item.ID] = true
 				m.toggleDescendants(item.Children, true)
 			}
