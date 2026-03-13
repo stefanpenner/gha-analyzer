@@ -3,6 +3,7 @@ package results
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
@@ -79,7 +80,7 @@ func BuildTreeItems(roots []*analyzer.TreeNode, expandedState map[string]bool, i
 	for urlIdx, inputURL := range inputURLs {
 		children := grouped[urlIdx]
 
-		// Build display name from parsed URL
+		// Build display name from parsed URL or file path
 		displayName := inputURL
 		if parsed, err := utils.ParseGitHubURL(inputURL); err == nil {
 			if parsed.Type == "pr" {
@@ -91,6 +92,9 @@ func BuildTreeItems(roots []*analyzer.TreeNode, expandedState map[string]bool, i
 				}
 				displayName = fmt.Sprintf("commit %s (%s/%s)", id, parsed.Owner, parsed.Repo)
 			}
+		} else if !strings.HasPrefix(inputURL, "http") {
+			// Not a URL — treat as a trace file name
+			displayName = fmt.Sprintf("📄 %s", inputURL)
 		}
 
 		groupID := fmt.Sprintf("url-group/%d", urlIdx)
@@ -236,10 +240,61 @@ func convertNode(node *analyzer.TreeNode, parentID string, index, depth int, exp
 		sourceNode:  node,
 	}
 
-	// Convert children
-	for i, child := range node.Children {
+	// Partition children into regular and artifact groups
+	var regularChildren []*analyzer.TreeNode
+	var artifactChildren []*analyzer.TreeNode
+	for _, child := range node.Children {
+		if child.Hints.GroupKey == "artifact" {
+			artifactChildren = append(artifactChildren, child)
+		} else {
+			regularChildren = append(regularChildren, child)
+		}
+	}
+
+	// Convert regular children
+	for i, child := range regularChildren {
 		childItem := convertNode(child, id, i, depth+1, expandedState)
 		item.Children = append(item.Children, childItem)
+	}
+
+	// Group artifact children under a synthetic "Trace Artifacts" node
+	if len(artifactChildren) > 0 {
+		groupID := makeNodeID(id, "Trace Artifacts", 0)
+
+		var earliest, latest time.Time
+		var groupChildren []*TreeItem
+		for i, ac := range artifactChildren {
+			child := convertNode(ac, groupID, i, depth+2, expandedState)
+			groupChildren = append(groupChildren, child)
+			if !ac.StartTime.IsZero() && (earliest.IsZero() || ac.StartTime.Before(earliest)) {
+				earliest = ac.StartTime
+			}
+			if !ac.EndTime.IsZero() && (latest.IsZero() || ac.EndTime.After(latest)) {
+				latest = ac.EndTime
+			}
+		}
+
+		artifactGroup := &TreeItem{
+			ID:          groupID,
+			Name:        "Trace Artifacts",
+			DisplayName: "Trace Artifacts",
+			StartTime:   earliest,
+			EndTime:     latest,
+			Depth:       depth + 1,
+			HasChildren: true,
+			IsExpanded:  expandedState[groupID],
+			ItemType:    ItemTypeActivityGroup,
+			ParentID:    id,
+			Children:    groupChildren,
+			Hints: enrichment.SpanHints{
+				Category: "artifact",
+				Icon:     "📦 ",
+				BarChar:  "█",
+				Color:    "blue",
+			},
+		}
+		item.Children = append(item.Children, artifactGroup)
+		item.HasChildren = true
 	}
 
 	return item

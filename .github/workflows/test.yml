@@ -31,9 +31,6 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Record trace start
-      run: echo "TRACE_START=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" >> "$GITHUB_ENV"
-
     - name: Setup Bazel
       uses: bazel-contrib/setup-bazel@0.14.0
       with:
@@ -42,16 +39,10 @@ jobs:
         repository-cache: true
 
     - name: Run tests
-      run: bazel test //...
-
-    - name: Record test end
-      run: echo "TEST_END=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" >> "$GITHUB_ENV"
+      run: bazel test //... --profile="$RUNNER_TEMP/bazel-test-profile.json"
 
     - name: Build
-      run: bazel build //cmd/...
-
-    - name: Record build end
-      run: echo "BUILD_END=$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" >> "$GITHUB_ENV"
+      run: bazel build //cmd/... --profile="$RUNNER_TEMP/bazel-build-profile.json"
 
     - name: Setup Go
       uses: actions/setup-go@v5
@@ -77,27 +68,13 @@ jobs:
     - name: Verify Stack Status
       run: ./run.sh status
 
-    - name: Generate OTel trace artifact
-      if: always()
-      run: |
-        TRACE_ID="$(openssl rand -hex 16)"
-        JOB_SPAN="$(openssl rand -hex 8)"
-        TEST_SPAN="$(openssl rand -hex 8)"
-        BUILD_SPAN="$(openssl rand -hex 8)"
-        NOW="$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)"
-        TEST_END="${TEST_END:-$NOW}"
-        BUILD_END="${BUILD_END:-$NOW}"
-
-        printf '{"Name":"bazel test","SpanContext":{"TraceID":"%s","SpanID":"%s","TraceFlags":"01"},"Parent":{"TraceID":"%s","SpanID":"%s","TraceFlags":"01"},"SpanKind":1,"StartTime":"%s","EndTime":"%s","Attributes":[{"Key":"type","Value":{"Type":"STRING","Value":"test"}},{"Key":"tool","Value":{"Type":"STRING","Value":"bazel"}}],"Events":null,"Links":null,"Status":{"Code":"Ok","Description":""}}\n' \
-          "$TRACE_ID" "$TEST_SPAN" "$TRACE_ID" "$JOB_SPAN" "$TRACE_START" "$TEST_END" > "$RUNNER_TEMP/gha-trace.json"
-
-        printf '{"Name":"bazel build","SpanContext":{"TraceID":"%s","SpanID":"%s","TraceFlags":"01"},"Parent":{"TraceID":"%s","SpanID":"%s","TraceFlags":"01"},"SpanKind":1,"StartTime":"%s","EndTime":"%s","Attributes":[{"Key":"type","Value":{"Type":"STRING","Value":"build"}},{"Key":"tool","Value":{"Type":"STRING","Value":"bazel"}}],"Events":null,"Links":null,"Status":{"Code":"Ok","Description":""}}\n' \
-          "$TRACE_ID" "$BUILD_SPAN" "$TRACE_ID" "$JOB_SPAN" "$TEST_END" "$BUILD_END" >> "$RUNNER_TEMP/gha-trace.json"
-
-    - name: Upload trace artifact
+    - name: Upload trace artifacts
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: gha-trace-test
-        path: ${{ runner.temp }}/gha-trace.json
+        name: gha-trace-bazel
+        path: |
+          ${{ runner.temp }}/bazel-test-profile.json
+          ${{ runner.temp }}/bazel-build-profile.json
         retention-days: 30
+        if-no-files-found: ignore

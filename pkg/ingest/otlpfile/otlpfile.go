@@ -9,12 +9,14 @@ package otlpfile
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"time"
 
+	"github.com/klauspost/compress/zstd"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -81,7 +83,8 @@ func ParseFile(path string) ([]sdktrace.ReadOnlySpan, error) {
 
 // Parse reads OTel span JSON from a reader and returns ReadOnlySpans.
 // Auto-detects format: OTLP protobuf-JSON ("resourceSpans"), Chrome Tracing
-// ("traceEvents"/"ph"), flat JSON ("ParentSpanID" with map-style attributes),
+// ("traceEvents"/"ph"), Zipkin v2 JSON ("localEndpoint"),
+// flat JSON ("ParentSpanID" with map-style attributes),
 // or stdouttrace (newline-delimited/array).
 func Parse(r io.Reader) ([]sdktrace.ReadOnlySpan, error) {
 	// Read all content so we can inspect it for format detection.
@@ -90,9 +93,21 @@ func Parse(r io.Reader) ([]sdktrace.ReadOnlySpan, error) {
 		return nil, fmt.Errorf("reading trace data: %w", err)
 	}
 
+	// Transparently decompress gzip or zstd content.
+	data, err = maybeDecompress(data)
+	if err != nil {
+		return nil, fmt.Errorf("decompressing trace data: %w", err)
+	}
+
+	// Detect binary protobuf (length-prefixed) before JSON-based detection.
+	if looksLikeProtobuf(data) {
+		return ParseProtobuf(bytes.NewReader(data))
+	}
+
 	// Detect OTLP protobuf-JSON format by looking for "resourceSpans" key.
+	// Handles both single-object and JSONL (newline-delimited) formats.
 	if bytes.Contains(data, []byte(`"resourceSpans"`)) {
-		return ParseProto(bytes.NewReader(data))
+		return parseProtoJSONL(data)
 	}
 
 	// Detect Chrome Tracing format by looking for "traceEvents" key or
@@ -101,12 +116,47 @@ func Parse(r io.Reader) ([]sdktrace.ReadOnlySpan, error) {
 		return ParseChrome(bytes.NewReader(data))
 	}
 
+	// Detect Zipkin v2 JSON format by looking for "localEndpoint" key.
+	if bytes.Contains(data, []byte(`"localEndpoint"`)) {
+		return ParseZipkin(bytes.NewReader(data))
+	}
+
 	// Detect flat JSON format: has "ParentSpanID" (stdouttrace uses "Parent").
 	if bytes.Contains(data, []byte(`"ParentSpanID"`)) {
 		return parseFlatJSON(data)
 	}
 
 	return parseStdout(bytes.NewReader(data))
+}
+
+// parseProtoJSONL handles OTLP protobuf-JSON data that may be a single object
+// or newline-delimited (JSONL) where each line is a TracesData object with
+// "resourceSpans". It splits on newlines, parses each non-empty line with
+// ParseProto, and concatenates all spans.
+func parseProtoJSONL(data []byte) ([]sdktrace.ReadOnlySpan, error) {
+	var allSpans []sdktrace.ReadOnlySpan
+
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+
+		spans, err := ParseProto(bytes.NewReader(line))
+		if err != nil {
+			return nil, fmt.Errorf("parsing OTLP JSONL line: %w", err)
+		}
+		allSpans = append(allSpans, spans...)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scanning OTLP JSONL: %w", err)
+	}
+
+	return allSpans, nil
 }
 
 // parseStdout reads OTel stdouttrace JSON (newline-delimited or array).
@@ -272,6 +322,37 @@ func looksLikeChromeTrace(data []byte) bool {
 		}
 	}
 	return false
+}
+
+// maybeDecompress detects gzip or zstd compression by checking magic bytes
+// and decompresses the data. Returns the original data unchanged if no
+// compression is detected.
+func maybeDecompress(data []byte) ([]byte, error) {
+	if len(data) < 2 {
+		return data, nil
+	}
+
+	// gzip: magic bytes 0x1f 0x8b
+	if data[0] == 0x1f && data[1] == 0x8b {
+		gr, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("gzip reader: %w", err)
+		}
+		defer gr.Close()
+		return io.ReadAll(gr)
+	}
+
+	// zstd: magic bytes 0x28 0xb5 0x2f 0xfd
+	if len(data) >= 4 && data[0] == 0x28 && data[1] == 0xb5 && data[2] == 0x2f && data[3] == 0xfd {
+		dec, err := zstd.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("zstd reader: %w", err)
+		}
+		defer dec.Close()
+		return io.ReadAll(dec)
+	}
+
+	return data, nil
 }
 
 func trimSpace(b []byte) []byte {

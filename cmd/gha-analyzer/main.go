@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -25,7 +26,9 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/tui"
 	tuiresults "github.com/stefanpenner/gha-analyzer/pkg/tui/results"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 // ANSI color codes
@@ -447,14 +450,18 @@ func main() {
 	pipeline := core.NewPipeline(exporters...)
 
 	// 4. Load trace files if provided
+	// Each trace file gets its own url_index (offset after GitHub URLs)
+	// so the TUI can group and label them separately.
 	var traceSpans []sdktrace.ReadOnlySpan
-	for _, tf := range cfg.traceFiles {
+	for i, tf := range cfg.traceFiles {
 		fileSpans, err := otlpfile.ParseFile(tf)
 		if err != nil {
 			printError(err, fmt.Sprintf("failed to load trace file %s", tf))
 			os.Exit(1)
 		}
-		traceSpans = append(traceSpans, fileSpans...)
+		urlIndex := len(args) + i
+		taggedSpans := tagSpansWithIndex(fileSpans, urlIndex)
+		traceSpans = append(traceSpans, taggedSpans...)
 		fmt.Fprintf(os.Stderr, "Loaded %d spans from %s\n", len(fileSpans), tf)
 	}
 
@@ -552,12 +559,13 @@ func main() {
 				if reporter != nil {
 					reporter.SetPhase("Loading trace files")
 				}
-				for _, tf := range cfg.traceFiles {
+				for i, tf := range cfg.traceFiles {
 					fileSpans, err := otlpfile.ParseFile(tf)
 					if err != nil {
 						return nil, time.Time{}, time.Time{}, fmt.Errorf("failed to load trace file %s: %w", tf, err)
 					}
-					allSpans = append(allSpans, fileSpans...)
+					urlIdx := len(args) + i
+					allSpans = append(allSpans, tagSpansWithIndex(fileSpans, urlIdx)...)
 				}
 				for _, s := range allSpans {
 					startMs := s.StartTime().UnixMilli()
@@ -624,7 +632,14 @@ func main() {
 			_ = perfetto.WriteTrace(io.Discard, results, combined, allTraceEvents, globalEarliest, tmpFile.Name(), true, spans)
 		}
 
-		if err := tuiresults.Run(spans, globalStartTime, globalEndTime, args, reloadFunc, openPerfettoFunc); err != nil {
+		// Build input sources: GitHub URLs + trace file basenames
+		inputSources := make([]string, 0, len(args)+len(cfg.traceFiles))
+		inputSources = append(inputSources, args...)
+		for _, tf := range cfg.traceFiles {
+			inputSources = append(inputSources, filepath.Base(tf))
+		}
+
+		if err := tuiresults.Run(spans, globalStartTime, globalEndTime, inputSources, reloadFunc, openPerfettoFunc); err != nil {
 			fmt.Fprintf(os.Stderr, "%sError: TUI failed: %v%s\n", colorRed, err, colorReset)
 			os.Exit(1)
 		}
@@ -681,6 +696,16 @@ func collectEnds(results []analyzer.URLResult) []analyzer.JobEvent {
 		events = append(events, result.JobEndTimes...)
 	}
 	return events
+}
+
+// tagSpansWithIndex wraps ReadOnlySpans with a github.url_index attribute
+// so the TUI can group spans by their source file.
+func tagSpansWithIndex(spans []sdktrace.ReadOnlySpan, urlIndex int) []sdktrace.ReadOnlySpan {
+	stubs := tracetest.SpanStubsFromReadOnlySpans(spans)
+	for i := range stubs {
+		stubs[i].Attributes = append(stubs[i].Attributes, attribute.Int("github.url_index", urlIndex))
+	}
+	return stubs.Snapshots()
 }
 
 func printUsage() {

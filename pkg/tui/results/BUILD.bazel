@@ -37,5 +37,6 @@ go_test(
         "//pkg/enrichment",
         "@com_github_charmbracelet_bubbletea//:bubbletea",
         "@com_github_stretchr_testify//assert",
+        "@io_opentelemetry_go_otel_sdk//trace",
     ],
 )
