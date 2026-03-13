@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "otlpfile",
+    srcs = [
+        "otlpfile.go",
+        "proto.go",
+        "span.go",
+    ],
+    importpath = "github.com/stefanpenner/gha-analyzer/pkg/ingest/otlpfile",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk//trace/tracetest",
+        "@io_opentelemetry_go_otel_trace//:trace",
+    ],
+)
+
+go_test(
+    name = "otlpfile_test",
+    srcs = ["otlpfile_test.go"],
+    embed = [":otlpfile"],
+)

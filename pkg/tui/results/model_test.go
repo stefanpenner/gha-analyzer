@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,48 +35,35 @@ func createTestModel() Model {
 	m.roots = []*analyzer.TreeNode{
 		{
 			Name:      "CI",
-			Type:      analyzer.NodeTypeWorkflow,
+			Hints:     enrichment.SpanHints{Category: "workflow", IsRoot: true, Outcome: "success", Color: "green", BarChar: "█", URL: "https://github.com/test/repo/actions/runs/123"},
 			StartTime: globalStart,
 			EndTime:   globalEnd,
-			URL:       "https://github.com/test/repo/actions/runs/123",
-			Status:    "completed",
-			Conclusion:    "success",
 			Children: []*analyzer.TreeNode{
 				{
 					Name:      "build",
-					Type:      analyzer.NodeTypeJob,
+					Hints:     enrichment.SpanHints{Category: "job", Outcome: "success", Color: "green", BarChar: "█", URL: "https://github.com/test/repo/actions/runs/123/jobs/456"},
 					StartTime: globalStart,
 					EndTime:   globalStart.Add(2 * time.Minute),
-					URL:       "https://github.com/test/repo/actions/runs/123/jobs/456",
-					Status:    "completed",
-					Conclusion:    "success",
 					Children: []*analyzer.TreeNode{
 						{
 							Name:      "Checkout",
-							Type:      analyzer.NodeTypeStep,
+							Hints:     enrichment.SpanHints{Category: "step", IsLeaf: true, Outcome: "success", Color: "green", BarChar: "▒"},
 							StartTime: globalStart,
 							EndTime:   globalStart.Add(10 * time.Second),
-							Status:    "completed",
-							Conclusion:    "success",
 						},
 						{
 							Name:      "Build",
-							Type:      analyzer.NodeTypeStep,
+							Hints:     enrichment.SpanHints{Category: "step", IsLeaf: true, Outcome: "success", Color: "green", BarChar: "▒"},
 							StartTime: globalStart.Add(10 * time.Second),
 							EndTime:   globalStart.Add(2 * time.Minute),
-							Status:    "completed",
-							Conclusion:    "success",
 						},
 					},
 				},
 				{
 					Name:      "test",
-					Type:      analyzer.NodeTypeJob,
+					Hints:     enrichment.SpanHints{Category: "job", Outcome: "failure", Color: "red", BarChar: "█", URL: "https://github.com/test/repo/actions/runs/123/jobs/789"},
 					StartTime: globalStart.Add(2 * time.Minute),
 					EndTime:   globalEnd,
-					URL:       "https://github.com/test/repo/actions/runs/123/jobs/789",
-					Status:    "completed",
-					Conclusion:    "failure",
 				},
 			},
 		},
@@ -506,7 +494,7 @@ func TestRenderItem(t *testing.T) {
 
 		assert.Contains(t, result, item.DisplayName)
 		// Should contain hyperlink if item has URL
-		if item.URL != "" {
+		if item.Hints.URL != "" {
 			assert.Contains(t, result, "\x1b]8;")
 		}
 	})
@@ -519,7 +507,7 @@ func TestRenderItem(t *testing.T) {
 
 		assert.Contains(t, result, item.DisplayName)
 		// Selected items should still have hyperlinks
-		if item.URL != "" {
+		if item.Hints.URL != "" {
 			assert.Contains(t, result, "\x1b]8;")
 		}
 	})
@@ -597,62 +585,50 @@ func createMultiURLTestModel() Model {
 
 	m.roots = []*analyzer.TreeNode{
 		{
-			Name:       "CI",
-			Type:       analyzer.NodeTypeWorkflow,
-			StartTime:  globalStart,
-			EndTime:    globalStart.Add(5 * time.Minute),
-			Status:     "completed",
-			Conclusion: "success",
-			URLIndex:   0,
+			Name:      "CI",
+			Hints:     enrichment.SpanHints{Category: "workflow", IsRoot: true, Outcome: "success", Color: "green", BarChar: "█"},
+			StartTime: globalStart,
+			EndTime:   globalStart.Add(5 * time.Minute),
+			URLIndex:  0,
 			Children: []*analyzer.TreeNode{
 				{
-					Name:       "build",
-					Type:       analyzer.NodeTypeJob,
-					StartTime:  globalStart,
-					EndTime:    globalStart.Add(2 * time.Minute),
-					Status:     "completed",
-					Conclusion: "success",
-					URLIndex:   0,
+					Name:      "build",
+					Hints:     enrichment.SpanHints{Category: "job", Outcome: "success", Color: "green", BarChar: "█"},
+					StartTime: globalStart,
+					EndTime:   globalStart.Add(2 * time.Minute),
+					URLIndex:  0,
 					Children: []*analyzer.TreeNode{
 						{
-							Name:       "Checkout",
-							Type:       analyzer.NodeTypeStep,
-							StartTime:  globalStart,
-							EndTime:    globalStart.Add(10 * time.Second),
-							Status:     "completed",
-							Conclusion: "success",
-							URLIndex:   0,
+							Name:      "Checkout",
+							Hints:     enrichment.SpanHints{Category: "step", IsLeaf: true, Outcome: "success", Color: "green", BarChar: "▒"},
+							StartTime: globalStart,
+							EndTime:   globalStart.Add(10 * time.Second),
+							URLIndex:  0,
 						},
 					},
 				},
 			},
 		},
 		{
-			Name:       "Review: APPROVED",
-			Type:       analyzer.NodeTypeMarker,
-			StartTime:  globalStart.Add(3 * time.Minute),
-			EndTime:    globalStart.Add(3 * time.Minute),
-			EventType:  "approved",
-			User:       "reviewer",
-			URLIndex:   0,
+			Name:      "Review: APPROVED",
+			Hints:     enrichment.SpanHints{Category: "marker", IsMarker: true, GroupKey: "activity", EventType: "approved", User: "reviewer", Icon: "✓", BarChar: "✓", Color: "green"},
+			StartTime: globalStart.Add(3 * time.Minute),
+			EndTime:   globalStart.Add(3 * time.Minute),
+			URLIndex:  0,
 		},
 		{
-			Name:       "Deploy",
-			Type:       analyzer.NodeTypeWorkflow,
-			StartTime:  globalStart.Add(5 * time.Minute),
-			EndTime:    globalEnd,
-			Status:     "completed",
-			Conclusion: "failure",
-			URLIndex:   1,
+			Name:      "Deploy",
+			Hints:     enrichment.SpanHints{Category: "workflow", IsRoot: true, Outcome: "failure", Color: "red", BarChar: "█"},
+			StartTime: globalStart.Add(5 * time.Minute),
+			EndTime:   globalEnd,
+			URLIndex:  1,
 			Children: []*analyzer.TreeNode{
 				{
-					Name:       "deploy-prod",
-					Type:       analyzer.NodeTypeJob,
-					StartTime:  globalStart.Add(5 * time.Minute),
-					EndTime:    globalEnd,
-					Status:     "completed",
-					Conclusion: "failure",
-					URLIndex:   1,
+					Name:      "deploy-prod",
+					Hints:     enrichment.SpanHints{Category: "job", Outcome: "failure", Color: "red", BarChar: "█"},
+					StartTime: globalStart.Add(5 * time.Minute),
+					EndTime:   globalEnd,
+					URLIndex:  1,
 				},
 			},
 		},

@@ -4,7 +4,7 @@ import (
 	"sort"
 	"time"
 
-	"go.opentelemetry.io/otel/attribute"
+	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -18,75 +18,81 @@ type Summary struct {
 }
 
 // CalculateSummary analyzes OTel spans to produce a high-level summary.
-func CalculateSummary(spans []trace.ReadOnlySpan) Summary {
+// It uses the provided enricher to classify spans as root/child and determine outcome.
+func CalculateSummary(spans []trace.ReadOnlySpan, enricher enrichment.Enricher) Summary {
 	s := Summary{}
-	var workflowSpans []trace.ReadOnlySpan
-	
+
 	for _, span := range spans {
-		attrs := make(map[string]attribute.Value)
+		attrs := make(map[string]string)
 		for _, a := range span.Attributes() {
-			attrs[string(a.Key)] = a.Value
+			attrs[string(a.Key)] = a.Value.AsString()
 		}
 
-		if attrs["type"].AsString() == "workflow" {
+		isZeroDuration := span.EndTime().Before(span.StartTime()) || span.EndTime().Equal(span.StartTime())
+		hints := enricher.Enrich(span.Name(), attrs, isZeroDuration)
+
+		if hints.Category == "" {
+			continue
+		}
+
+		if hints.IsRoot {
 			s.TotalRuns++
-			if attrs["github.conclusion"].AsString() == "success" {
+			if hints.Outcome == "success" {
 				s.SuccessfulRuns++
 			}
-			workflowSpans = append(workflowSpans, span)
-		} else if attrs["type"].AsString() == "job" {
+		} else if !hints.IsMarker && !hints.IsLeaf {
+			// Non-root, non-marker, non-leaf = "job"-level span
 			s.TotalJobs++
-			if attrs["github.conclusion"].AsString() == "failure" {
+			if hints.Outcome == "failure" {
 				s.FailedJobs++
 			}
 		}
 	}
-	
-	s.MaxConcurrency = CalculateConcurrency(spans, "job")
+
+	s.MaxConcurrency = CalculateConcurrency(spans, enricher)
 	return s
 }
 
-// CalculateConcurrency calculates the maximum number of overlapping spans of a certain type.
-func CalculateConcurrency(spans []trace.ReadOnlySpan, spanType string) int {
+// CalculateConcurrency calculates the maximum number of overlapping non-root,
+// non-marker, non-leaf spans (i.e. "job"-level concurrency).
+func CalculateConcurrency(spans []trace.ReadOnlySpan, enricher enrichment.Enricher) int {
 	type event struct {
-		ts   time.Time
-		type_ int // +1 for start, -1 for end
+		ts    time.Time
+		delta int // +1 for start, -1 for end
 	}
-	
+
 	var events []event
 	for _, s := range spans {
-		// Filter by type if provided
-		if spanType != "" {
-			found := false
-			for _, attr := range s.Attributes() {
-				if attr.Key == "type" && attr.Value.AsString() == spanType {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
+		attrs := make(map[string]string)
+		for _, a := range s.Attributes() {
+			attrs[string(a.Key)] = a.Value.AsString()
 		}
-		
+
+		isZeroDuration := s.EndTime().Before(s.StartTime()) || s.EndTime().Equal(s.StartTime())
+		hints := enricher.Enrich(s.Name(), attrs, isZeroDuration)
+
+		if hints.Category == "" || hints.IsRoot || hints.IsMarker || hints.IsLeaf {
+			continue
+		}
+
 		events = append(events, event{s.StartTime(), 1})
 		events = append(events, event{s.EndTime(), -1})
 	}
-	
+
 	sort.Slice(events, func(i, j int) bool {
 		if events[i].ts.Equal(events[j].ts) {
-			return events[i].type_ < events[j].type_ // End before start if same time
+			return events[i].delta < events[j].delta // End before start if same time
 		}
 		return events[i].ts.Before(events[j].ts)
 	})
-	
-	max := 0
+
+	maxConcurrency := 0
 	curr := 0
 	for _, e := range events {
-		curr += e.type_
-		if curr > max {
-			max = curr
+		curr += e.delta
+		if curr > maxConcurrency {
+			maxConcurrency = curr
 		}
 	}
-	return max
+	return maxConcurrency
 }

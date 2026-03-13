@@ -10,15 +10,29 @@ import (
 
 	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 )
 
-// getTracer returns the current tracer from the global provider.
-// This must be called at runtime (not package init) to pick up the correct provider.
-func getTracer() trace.Tracer {
-	return otel.Tracer("analyzer")
+// SpanBuilder accumulates tracetest.SpanStubs and converts them to ReadOnlySpans.
+// Thread-safe for concurrent use by processWorkflowRun goroutines.
+type SpanBuilder struct {
+	mu    sync.Mutex
+	stubs tracetest.SpanStubs
+}
+
+func (b *SpanBuilder) Add(stub tracetest.SpanStub) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stubs = append(b.stubs, stub)
+}
+
+func (b *SpanBuilder) Spans() []sdktrace.ReadOnlySpan {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.stubs.Snapshots()
 }
 
 type ProgressReporter interface {
@@ -43,7 +57,7 @@ type AnalyzeOptions struct {
 	Window time.Duration
 }
 
-func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProvider, reporter ProgressReporter, opts AnalyzeOptions) ([]URLResult, []TraceEvent, int64, int64, []URLError) {
+func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProvider, reporter ProgressReporter, opts AnalyzeOptions) ([]URLResult, []TraceEvent, int64, int64, []sdktrace.ReadOnlySpan, []URLError) {
 	allTraceEvents := []TraceEvent{}
 	allJobStartTimes := []JobEvent{}
 	allJobEndTimes := []JobEvent{}
@@ -52,8 +66,9 @@ func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProv
 	globalLatestTime := int64(0)
 	urlErrors := []URLError{}
 
+	builder := &SpanBuilder{}
 	provider := NewDataProvider(client)
-	emitter := NewTraceEmitter(getTracer())
+	emitter := NewTraceEmitter(builder)
 
 	for urlIndex, githubURL := range urls {
 		if reporter != nil {
@@ -69,8 +84,8 @@ func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProv
 			continue
 		}
 
-		// Emit markers before processing runs to ensure chronological order in collector
-		emitter.EmitMarkers(ctx, rawData, urlIndex)
+		// Emit marker spans for review/merge events
+		emitter.EmitMarkers(rawData, urlIndex)
 
 		// Calculate urlEarliestTime here to ensure it's consistent
 		urlEarliestTime := FindEarliestTimestamp(rawData.Runs)
@@ -87,7 +102,7 @@ func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProv
 			}
 		}
 
-		result, err := buildURLResult(ctx, rawData.Parsed, urlIndex, rawData.HeadSHA, rawData.BranchName, rawData.DisplayName, rawData.DisplayURL, rawData.ReviewEvents, rawData.MergedAtMs, rawData.CommitTimeMs, rawData.CommitPushedAtMs, rawData.AllCommitRunsCount, rawData.AllCommitRunsComputeMs, rawData.Runs, rawData.RequiredContexts, client, reporter, urlEarliestTime)
+		result, err := buildURLResult(ctx, rawData.Parsed, urlIndex, rawData.HeadSHA, rawData.BranchName, rawData.DisplayName, rawData.DisplayURL, rawData.ReviewEvents, rawData.MergedAtMs, rawData.CommitTimeMs, rawData.CommitPushedAtMs, rawData.AllCommitRunsCount, rawData.AllCommitRunsComputeMs, rawData.Runs, rawData.RequiredContexts, client, reporter, urlEarliestTime, builder)
 		if err != nil {
 			urlErrors = append(urlErrors, URLError{URL: githubURL, Err: err})
 			continue
@@ -126,7 +141,7 @@ func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProv
 	}
 
 	if len(urlResults) == 0 {
-		return nil, nil, 0, 0, urlErrors
+		return nil, nil, 0, 0, nil, urlErrors
 	}
 
 	GenerateConcurrencyCounters(allJobStartTimes, allJobEndTimes, &allTraceEvents, globalEarliestTime)
@@ -134,10 +149,10 @@ func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProv
 
 	combinedTrace := append([]TraceEvent{}, allTraceEvents...)
 	allTraceEvents = combinedTrace
-	return urlResults, allTraceEvents, globalEarliestTime, globalLatestTime, urlErrors
+	return urlResults, allTraceEvents, globalEarliestTime, globalLatestTime, builder.Spans(), urlErrors
 }
 
-func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchName, displayName, displayURL string, reviewEvents []ReviewEvent, mergedAtMs, commitTimeMs, commitPushedAtMs *int64, allCommitRunsCount int, allCommitRunsComputeMs int64, runs []githubapi.WorkflowRun, requiredContexts []string, client githubapi.GitHubProvider, reporter ProgressReporter, urlEarliestTime int64) (*URLResult, error) {
+func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchName, displayName, displayURL string, reviewEvents []ReviewEvent, mergedAtMs, commitTimeMs, commitPushedAtMs *int64, allCommitRunsCount int, allCommitRunsComputeMs int64, runs []githubapi.WorkflowRun, requiredContexts []string, client githubapi.GitHubProvider, reporter ProgressReporter, urlEarliestTime int64, builder *SpanBuilder) (*URLResult, error) {
 	if reporter != nil {
 		reporter.SetURLRuns(len(runs))
 		reporter.SetPhase("Processing workflow runs")
@@ -174,7 +189,7 @@ func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex 
 			defer wg.Done()
 			for job := range jobsCh {
 				processID := (urlIndex+1)*1000 + job.index + 1
-				runMetrics, runTrace, runStarts, runEnds, err := processWorkflowRun(ctx, job.run, job.index, processID, urlEarliestTime, parsed.Owner, parsed.Repo, parsed.Identifier, urlIndex, displayURL, parsed.Type, requiredContexts, client, reporter)
+				runMetrics, runTrace, runStarts, runEnds, err := processWorkflowRun(ctx, job.run, job.index, processID, urlEarliestTime, parsed.Owner, parsed.Repo, parsed.Identifier, urlIndex, displayURL, parsed.Type, requiredContexts, client, reporter, builder)
 				resultsCh <- runResult{
 					metrics:     runMetrics,
 					traceEvents: runTrace,
@@ -235,7 +250,7 @@ func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex 
 	return &result, nil
 }
 
-func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex, processID int, earliestTime int64, owner, repo, identifier string, urlIndex int, displayURL, sourceType string, requiredContexts []string, client githubapi.GitHubProvider, reporter ProgressReporter) (Metrics, []TraceEvent, []JobEvent, []JobEvent, error) {
+func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex, processID int, earliestTime int64, owner, repo, identifier string, urlIndex int, displayURL, sourceType string, requiredContexts []string, client githubapi.GitHubProvider, reporter ProgressReporter, builder *SpanBuilder) (Metrics, []TraceEvent, []JobEvent, []JobEvent, error) {
 	metrics := InitializeMetrics()
 	traceEvents := []TraceEvent{}
 	jobStartTimes := []JobEvent{}
@@ -271,22 +286,12 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 	workflowURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID)
 
 	tid := githubapi.NewTraceID(run.ID, run.RunAttempt)
-	sid := githubapi.NewSpanID(run.ID)
-	ctx = githubapi.ContextWithIDs(ctx, tid, sid)
-
-	ctx, span := getTracer().Start(ctx, defaultRunName(run),
-		trace.WithTimestamp(runStart),
-		trace.WithAttributes(
-			attribute.String("type", "workflow"),
-			attribute.Int64("github.run_id", run.ID),
-			attribute.String("github.status", run.Status),
-			attribute.String("github.conclusion", run.Conclusion),
-			attribute.String("github.repo", fmt.Sprintf("%s/%s", owner, repo)),
-			attribute.String("github.url", workflowURL),
-			attribute.Int("github.url_index", urlIndex),
-		),
-	)
-	defer span.End(trace.WithTimestamp(runEnd))
+	wfSID := githubapi.NewSpanID(run.ID)
+	wfSC := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    tid,
+		SpanID:     wfSID,
+		TraceFlags: trace.FlagsSampled,
+	})
 
 	runEndTs := runEnd.UnixMilli()
 	runStartTs := runStart.UnixMilli()
@@ -388,12 +393,30 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 
 	for jobIndex, job := range jobs {
 		jobThreadID := jobIndex + 10
-		processJob(ctx, job, jobIndex, run, jobThreadID, processID, earliestTime, &metrics, &traceEvents, &jobStartTimes, &jobEndTimes, prURL, urlIndex, displayURL, sourceType, identifier, requiredContexts)
+		processJob(job, jobIndex, run, jobThreadID, processID, earliestTime, &metrics, &traceEvents, &jobStartTimes, &jobEndTimes, prURL, urlIndex, displayURL, sourceType, identifier, requiredContexts, builder, tid, wfSC)
 	}
+
+	// Build workflow span stub (after processing jobs so runEnd may be adjusted)
+	builder.Add(tracetest.SpanStub{
+		Name:        defaultRunName(run),
+		SpanContext: wfSC,
+		StartTime:   runStart,
+		EndTime:     runEnd,
+		Attributes: []attribute.KeyValue{
+			attribute.String("type", "workflow"),
+			attribute.Int64("github.run_id", run.ID),
+			attribute.String("github.status", run.Status),
+			attribute.String("github.conclusion", run.Conclusion),
+			attribute.String("github.repo", fmt.Sprintf("%s/%s", owner, repo)),
+			attribute.String("github.url", workflowURL),
+			attribute.Int("github.url_index", urlIndex),
+		},
+	})
+
 	return metrics, traceEvents, jobStartTimes, jobEndTimes, nil
 }
 
-func processJob(ctx context.Context, job githubapi.Job, jobIndex int, run githubapi.WorkflowRun, jobThreadID, processID int, earliestTime int64, metrics *Metrics, traceEvents *[]TraceEvent, jobStartTimes, jobEndTimes *[]JobEvent, prURL string, urlIndex int, displayURL, sourceType, identifier string, requiredContexts []string) {
+func processJob(job githubapi.Job, jobIndex int, run githubapi.WorkflowRun, jobThreadID, processID int, earliestTime int64, metrics *Metrics, traceEvents *[]TraceEvent, jobStartTimes, jobEndTimes *[]JobEvent, prURL string, urlIndex int, displayURL, sourceType, identifier string, requiredContexts []string, builder *SpanBuilder, traceID trace.TraceID, parentSC trace.SpanContext) {
 	if job.StartedAt == "" {
 		return
 	}
@@ -406,8 +429,12 @@ func processJob(ctx context.Context, job githubapi.Job, jobIndex int, run github
 		jobURL = fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/job/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID, job.ID)
 	}
 
-	sid := githubapi.NewSpanID(job.ID)
-	ctx = githubapi.ContextWithIDs(ctx, trace.TraceID{}, sid)
+	jobSID := githubapi.NewSpanID(job.ID)
+	jobSC := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     jobSID,
+		TraceFlags: trace.FlagsSampled,
+	})
 
 	// Determine if this job is a required status check
 	isRequired := isJobRequired(job.Name, run.Name, requiredContexts)
@@ -415,20 +442,6 @@ func processJob(ctx context.Context, job githubapi.Job, jobIndex int, run github
 	if isRequired {
 		requiredSuffix = " 🔒"
 	}
-
-	ctx, span := getTracer().Start(ctx, job.Name+requiredSuffix,
-		trace.WithTimestamp(jobStart),
-		trace.WithAttributes(
-			attribute.String("type", "job"),
-			attribute.Int64("github.job_id", job.ID),
-			attribute.String("github.status", job.Status),
-			attribute.String("github.conclusion", job.Conclusion),
-			attribute.String("github.runner_name", job.RunnerName),
-			attribute.String("github.url", jobURL),
-			attribute.Bool("is_required", isRequired),
-		),
-	)
-	defer span.End(trace.WithTimestamp(jobEnd))
 
 	isPending := job.Status != "completed" || job.CompletedAt == ""
 	if isPending {
@@ -536,11 +549,28 @@ func processJob(ctx context.Context, job githubapi.Job, jobIndex int, run github
 	})
 
 	for _, step := range job.Steps {
-		processStep(ctx, step, job, run, jobThreadID, processID, earliestTime, jobEndTs, metrics, traceEvents, prURL, urlIndex, displayURL, sourceType, identifier)
+		processStep(step, job, run, jobThreadID, processID, earliestTime, jobEndTs, metrics, traceEvents, prURL, urlIndex, displayURL, sourceType, identifier, builder, traceID, jobSC)
 	}
+
+	builder.Add(tracetest.SpanStub{
+		Name:        job.Name + requiredSuffix,
+		SpanContext: jobSC,
+		Parent:      parentSC,
+		StartTime:   jobStart,
+		EndTime:     jobEnd,
+		Attributes: []attribute.KeyValue{
+			attribute.String("type", "job"),
+			attribute.Int64("github.job_id", job.ID),
+			attribute.String("github.status", job.Status),
+			attribute.String("github.conclusion", job.Conclusion),
+			attribute.String("github.runner_name", job.RunnerName),
+			attribute.String("github.url", jobURL),
+			attribute.Bool("is_required", isRequired),
+		},
+	})
 }
 
-func processStep(ctx context.Context, step githubapi.Step, job githubapi.Job, run githubapi.WorkflowRun, jobThreadID, processID int, earliestTime, jobEndTs int64, metrics *Metrics, traceEvents *[]TraceEvent, prURL string, urlIndex int, displayURL, sourceType, identifier string) {
+func processStep(step githubapi.Step, job githubapi.Job, run githubapi.WorkflowRun, jobThreadID, processID int, earliestTime, jobEndTs int64, metrics *Metrics, traceEvents *[]TraceEvent, prURL string, urlIndex int, displayURL, sourceType, identifier string, builder *SpanBuilder, traceID trace.TraceID, parentSC trace.SpanContext) {
 	if step.StartedAt == "" || step.CompletedAt == "" {
 		return
 	}
@@ -561,20 +591,27 @@ func processStep(ctx context.Context, step githubapi.Step, job githubapi.Job, ru
 
 	stepURL := fmt.Sprintf("%s#step:%d:1", jobURL, step.Number)
 
-	sid := githubapi.NewSpanIDFromString(fmt.Sprintf("%d-%s", job.ID, step.Name))
-	ctx = githubapi.ContextWithIDs(ctx, trace.TraceID{}, sid)
+	stepSID := githubapi.NewSpanIDFromString(fmt.Sprintf("%d-%s", job.ID, step.Name))
+	stepSC := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     stepSID,
+		TraceFlags: trace.FlagsSampled,
+	})
 
-	_, span := getTracer().Start(ctx, step.Name,
-		trace.WithTimestamp(start),
-		trace.WithAttributes(
+	builder.Add(tracetest.SpanStub{
+		Name:        step.Name,
+		SpanContext: stepSC,
+		Parent:      parentSC,
+		StartTime:   start,
+		EndTime:     end,
+		Attributes: []attribute.KeyValue{
 			attribute.String("type", "step"),
 			attribute.Int("github.step_number", step.Number),
 			attribute.String("github.status", step.Status),
 			attribute.String("github.conclusion", step.Conclusion),
 			attribute.String("github.url", stepURL),
-		),
-	)
-	defer span.End(trace.WithTimestamp(end))
+		},
+	})
 
 	metrics.TotalSteps++
 	if step.Conclusion == "failure" {

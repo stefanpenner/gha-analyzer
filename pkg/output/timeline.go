@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
@@ -15,6 +16,8 @@ import (
 // SpanNode represents a node in the OTel span hierarchy tree.
 type SpanNode struct {
 	Span     trace.ReadOnlySpan
+	Attrs    map[string]string
+	Hints    enrichment.SpanHints
 	Children []*SpanNode
 }
 
@@ -35,18 +38,16 @@ func BuildSpanTree(spans []trace.ReadOnlySpan) []*SpanNode {
 			continue
 		}
 		parentID := s.Parent().SpanID().String()
-		
+
 		if parentID == "0000000000000000" {
 			roots = append(roots, node)
 		} else if parent, ok := nodes[parentID]; ok {
 			parent.Children = append(parent.Children, node)
 		} else {
-			// Parent not in this batch, treat as root
 			roots = append(roots, node)
 		}
 	}
 
-	// Sort roots and children by start time
 	sortNodes(roots)
 	for _, n := range nodes {
 		sortNodes(n.Children)
@@ -55,11 +56,71 @@ func BuildSpanTree(spans []trace.ReadOnlySpan) []*SpanNode {
 	return roots
 }
 
+// BuildEnrichedSpanTree filters spans using the enricher, deduplicates, and builds the tree.
+func BuildEnrichedSpanTree(spans []trace.ReadOnlySpan, enricher enrichment.Enricher, globalEarliest, globalLatest time.Time) []*SpanNode {
+	var filtered []trace.ReadOnlySpan
+	seenDedup := make(map[string]struct{})
+
+	for _, s := range spans {
+		attrs := make(map[string]string)
+		for _, a := range s.Attributes() {
+			attrs[string(a.Key)] = a.Value.AsString()
+		}
+
+		isZeroDuration := s.EndTime().Before(s.StartTime()) || s.EndTime().Equal(s.StartTime())
+		hints := enricher.Enrich(s.Name(), attrs, isZeroDuration)
+		if hints.Category == "" {
+			continue
+		}
+
+		if !globalEarliest.IsZero() && s.EndTime().Before(globalEarliest) {
+			continue
+		}
+		if !globalLatest.IsZero() && s.StartTime().After(globalLatest) {
+			continue
+		}
+
+		if hints.DedupKey != "" {
+			if _, seen := seenDedup[hints.DedupKey]; seen {
+				continue
+			}
+			seenDedup[hints.DedupKey] = struct{}{}
+		}
+
+		filtered = append(filtered, s)
+	}
+
+	if len(filtered) == 0 {
+		return nil
+	}
+
+	// Build tree, then enrich each node
+	roots := BuildSpanTree(filtered)
+	enrichNodes(roots, enricher)
+	return roots
+}
+
+// enrichNodes enriches each SpanNode in-place with attrs and hints.
+func enrichNodes(nodes []*SpanNode, enricher enrichment.Enricher) {
+	for _, n := range nodes {
+		n.Attrs = make(map[string]string)
+		for _, a := range n.Span.Attributes() {
+			n.Attrs[string(a.Key)] = a.Value.AsString()
+		}
+		isZeroDuration := n.Span.EndTime().Before(n.Span.StartTime()) || n.Span.EndTime().Equal(n.Span.StartTime())
+		n.Hints = enricher.Enrich(n.Span.Name(), n.Attrs, isZeroDuration)
+		enrichNodes(n.Children, enricher)
+	}
+}
+
 func sortNodes(nodes []*SpanNode) {
 	sort.Slice(nodes, func(i, j int) bool {
 		sI, sJ := nodes[i].Span, nodes[j].Span
 		if sI.StartTime().Equal(sJ.StartTime()) {
-			// Tie-breaker: markers always come first
+			// Use hints sort priority if available, otherwise fall back to type
+			if nodes[i].Hints.SortPriority != nodes[j].Hints.SortPriority {
+				return nodes[i].Hints.SortPriority < nodes[j].Hints.SortPriority
+			}
 			typeI := getSpanType(sI)
 			typeJ := getSpanType(sJ)
 			if typeI != typeJ {
@@ -90,71 +151,32 @@ func RenderOTelTimeline(w io.Writer, spans []trace.ReadOnlySpan, globalEarliest,
 		return
 	}
 
-	// Filter out internal instrumentation spans by default
-	// We only want to show spans that are part of the GHA hierarchy (workflow, job, step) or markers
-	var filtered []trace.ReadOnlySpan
-	seenMarkers := make(map[string]struct{})
-	for _, s := range spans {
-		isGHA := false
-		var eventID string
-		var eventTime string
-		for _, attr := range s.Attributes() {
-			if attr.Key == "type" && (attr.Value.AsString() == "workflow" || attr.Value.AsString() == "job" || attr.Value.AsString() == "step" || attr.Value.AsString() == "marker") {
-				isGHA = true
-			}
-			if attr.Key == "github.event_id" {
-				eventID = attr.Value.AsString()
-			}
-			if attr.Key == "github.event_time" {
-				eventTime = attr.Value.AsString()
-			}
-		}
-		if isGHA {
-			// If we have global bounds, only include spans that overlap with them
-			if !globalEarliest.IsZero() && s.EndTime().Before(globalEarliest) {
-				continue
-			}
-			if !globalLatest.IsZero() && s.StartTime().After(globalLatest) {
-				continue
-			}
-
-			// For markers, we only want to keep the first one for each eventID to avoid duplicates
-			if eventID != "" {
-				key := fmt.Sprintf("%s-%s", eventID, eventTime)
-				if _, seen := seenMarkers[key]; seen {
-					continue
-				}
-				seenMarkers[key] = struct{}{}
-			}
-
-			filtered = append(filtered, s)
-		}
-	}
-
-	if len(filtered) == 0 {
+	enricher := enrichment.DefaultEnricher()
+	roots := BuildEnrichedSpanTree(spans, enricher, globalEarliest, globalLatest)
+	if len(roots) == 0 {
 		return
 	}
 
-	roots := BuildSpanTree(filtered)
-	
 	// Find overall time bounds
-	// We'll use the provided global bounds if available, otherwise calculate from spans
 	earliest := globalEarliest
 	latest := globalLatest
 
 	if earliest.IsZero() || latest.IsZero() {
-		if len(filtered) > 0 {
-			earliest = filtered[0].StartTime()
-			latest = filtered[0].EndTime()
-			for _, s := range filtered {
-				if s.StartTime().Before(earliest) {
-					earliest = s.StartTime()
+		earliest = roots[0].Span.StartTime()
+		latest = roots[0].Span.EndTime()
+		var walk func([]*SpanNode)
+		walk = func(nodes []*SpanNode) {
+			for _, n := range nodes {
+				if n.Span.StartTime().Before(earliest) {
+					earliest = n.Span.StartTime()
 				}
-				if s.EndTime().After(latest) {
-					latest = s.EndTime()
+				if n.Span.EndTime().After(latest) {
+					latest = n.Span.EndTime()
 				}
+				walk(n.Children)
 			}
 		}
+		walk(roots)
 	}
 
 	if earliest.IsZero() || latest.IsZero() {
@@ -208,7 +230,8 @@ func getMarkerWidth(eventType string) int {
 
 func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, totalDuration time.Duration, scale int) {
 	s := node.Span
-	
+	h := node.Hints
+
 	// Clamp start and end times to the global window for visualization
 	startT := s.StartTime()
 	if startT.Before(globalStart) {
@@ -218,122 +241,75 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 	if endT.After(globalStart.Add(totalDuration)) {
 		endT = globalStart.Add(totalDuration)
 	}
-	
+
 	if endT.Before(startT) {
 		return // Span is entirely outside the window
 	}
 
 	start := startT.Sub(globalStart)
 	duration := endT.Sub(startT)
-	
+
 	startPos := int(float64(start) / float64(totalDuration) * float64(scale))
 	barLength := maxInt(1, int(float64(duration)/float64(totalDuration)*float64(scale)))
 	clampedLength := minInt(barLength, scale-startPos)
-	
+
 	padding := strings.Repeat(" ", maxInt(0, startPos))
-	
-	// Determine color/icon from attributes
-	attrs := make(map[string]string)
-	for _, a := range s.Attributes() {
-		attrs[string(a.Key)] = a.Value.AsString()
+
+	// Use hints for icon, falling back for step alignment
+	icon := h.Icon
+	if icon == "" {
+		icon = "• "
 	}
-	
-	icon := "• "
-	switch attrs["type"] {
-	case "workflow":
-		icon = "📋 "
-	case "job":
-		icon = "⚙️ "
-	case "step":
+	// Steps need leading spaces for indentation alignment
+	if h.IsLeaf && icon == "↳" {
 		icon = "  ↳"
-	case "marker":
-		switch attrs["github.event_type"] {
-		case "merged":
-			icon = "◆"
-		case "commit":
-			icon = "📍"
-		case "push":
-			icon = "🚀"
-		case "comment":
-			icon = "💬"
-		case "approved":
-			icon = "▲"
-		case "changes_requested":
-			icon = "❌"
-		case "commented":
-			icon = "💬"
-		default:
-			icon = "▲"
-		}
 	}
 
-	statusIcon := "  " // Default to 2 spaces for empty status
-	switch attrs["github.conclusion"] {
-	case "failure":
+	statusIcon := "  "
+	if h.Outcome == "failure" {
 		statusIcon = "❌"
 	}
 
-	barChar := "█"
-	if attrs["type"] == "step" {
-		barChar = "▒"
+	// Build bar
+	barChar := h.BarChar
+	if barChar == "" {
+		barChar = "█"
 	}
 
 	coloredBar := strings.Repeat(barChar, maxInt(1, clampedLength))
 	markerWidth := 1
-	if attrs["type"] == "marker" {
-		markerWidth = getMarkerWidth(attrs["github.event_type"])
-		switch attrs["github.event_type"] {
-		case "merged":
-			coloredBar = utils.GreenText("◆")
-		case "commit":
-			coloredBar = utils.BlueText("📍")
-		case "push":
-			coloredBar = utils.BlueText("🚀")
-		case "comment":
-			coloredBar = utils.BlueText("💬")
-		case "approved":
-			coloredBar = utils.YellowText("▲")
-		case "changes_requested":
-			coloredBar = utils.RedText("❌")
-		case "commented":
-			coloredBar = utils.BlueText("💬")
-		default:
-			coloredBar = utils.YellowText("▲")
-		}
-	} else if attrs["github.conclusion"] == "failure" {
-		coloredBar = utils.RedText(coloredBar)
-	} else if attrs["github.conclusion"] == "success" {
-		coloredBar = utils.GreenText(coloredBar)
+	if h.IsMarker {
+		// Markers render as a single character
+		markerWidth = getMarkerWidth(h.EventType)
+		coloredBar = colorizeText(h.BarChar, h.Color)
 	} else {
-		coloredBar = utils.BlueText(coloredBar)
+		coloredBar = colorizeText(coloredBar, h.Color)
 	}
 
 	indent := strings.Repeat("  ", depth)
 	remainingCount := scale - startPos - maxInt(1, clampedLength)
-	if attrs["type"] == "marker" {
+	if h.IsMarker {
 		remainingCount = scale - startPos - markerWidth
 	}
 	remaining := strings.Repeat(" ", maxInt(0, remainingCount))
 
 	label := s.Name()
-	if user, ok := attrs["github.user"]; ok && user != "" {
-		label = fmt.Sprintf("%s by %s", label, user)
+	if h.User != "" {
+		label = fmt.Sprintf("%s by %s", label, h.User)
 	}
-	if url, ok := attrs["github.url"]; ok && url != "" {
-		label = utils.MakeClickableLink(url, label)
+	if h.URL != "" {
+		label = utils.MakeClickableLink(h.URL, label)
 	}
-	
+
 	// Pad icons to ensure consistent labeling alignment
 	var displayName string
-	if attrs["type"] == "marker" {
+	if h.IsMarker {
 		if markerWidth == 1 {
 			displayName = fmt.Sprintf("%s     %s", icon, label)
 		} else {
 			displayName = fmt.Sprintf("%s    %s", icon, label)
 		}
 	} else {
-		// icon is typically 3 cells (📋 , ⚙️ ,   ↳)
-		// statusIcon is typically 2 cells (❌) or empty
 		if statusIcon != "  " {
 			displayName = fmt.Sprintf("%s %s %s", icon, label, statusIcon)
 		} else {
@@ -342,8 +318,8 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 	}
 
 	durationDisplay := fmt.Sprintf("(%s)", utils.HumanizeTime(duration.Seconds()))
-	if attrs["type"] == "marker" {
-		durationDisplay = "" // Points in time don't need duration
+	if h.IsMarker {
+		durationDisplay = ""
 	}
 
 	fmt.Fprintf(w, "│%s%s%s  │ %s%s %s\n",
@@ -352,6 +328,24 @@ func renderNode(w io.Writer, node *SpanNode, depth int, globalStart time.Time, t
 
 	for _, child := range node.Children {
 		renderNode(w, child, depth+1, globalStart, totalDuration, scale)
+	}
+}
+
+// colorizeText applies terminal color based on color name.
+func colorizeText(text, color string) string {
+	switch color {
+	case "green":
+		return utils.GreenText(text)
+	case "red":
+		return utils.RedText(text)
+	case "blue":
+		return utils.BlueText(text)
+	case "yellow":
+		return utils.YellowText(text)
+	case "gray":
+		return utils.GrayText(text)
+	default:
+		return utils.BlueText(text)
 	}
 }
 

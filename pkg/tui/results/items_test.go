@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -63,10 +64,9 @@ func TestBuildTreeItems(t *testing.T) {
 		roots := []*analyzer.TreeNode{
 			{
 				Name:      "CI",
-				Type:      analyzer.NodeTypeWorkflow,
+				Hints:     enrichment.SpanHints{Category: "workflow", IsRoot: true, Outcome: "success", Color: "green", BarChar: "█"},
 				StartTime: now,
 				EndTime:   now.Add(time.Minute),
-				Status:    "completed",
 			},
 		}
 
@@ -82,15 +82,15 @@ func TestBuildTreeItems(t *testing.T) {
 	t.Run("converts nested hierarchy", func(t *testing.T) {
 		roots := []*analyzer.TreeNode{
 			{
-				Name: "CI",
-				Type: analyzer.NodeTypeWorkflow,
+				Name:  "CI",
+				Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true},
 				Children: []*analyzer.TreeNode{
 					{
-						Name: "build",
-						Type: analyzer.NodeTypeJob,
+						Name:  "build",
+						Hints: enrichment.SpanHints{Category: "job"},
 						Children: []*analyzer.TreeNode{
-							{Name: "checkout", Type: analyzer.NodeTypeStep},
-							{Name: "compile", Type: analyzer.NodeTypeStep},
+							{Name: "checkout", Hints: enrichment.SpanHints{Category: "step", IsLeaf: true}},
+							{Name: "compile", Hints: enrichment.SpanHints{Category: "step", IsLeaf: true}},
 						},
 					},
 				},
@@ -110,7 +110,7 @@ func TestBuildTreeItems(t *testing.T) {
 
 	t.Run("respects expanded state", func(t *testing.T) {
 		roots := []*analyzer.TreeNode{
-			{Name: "CI", Type: analyzer.NodeTypeWorkflow},
+			{Name: "CI", Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true}},
 		}
 		expandedState := map[string]bool{"CI/0": true}
 
@@ -122,10 +122,8 @@ func TestBuildTreeItems(t *testing.T) {
 	t.Run("preserves marker attributes under Activity group", func(t *testing.T) {
 		roots := []*analyzer.TreeNode{
 			{
-				Name:      "Approval",
-				Type:      analyzer.NodeTypeMarker,
-				User:      "reviewer",
-				EventType: "approved",
+				Name:  "Approval",
+				Hints: enrichment.SpanHints{Category: "marker", IsMarker: true, GroupKey: "activity", User: "reviewer", EventType: "approved"},
 			},
 		}
 
@@ -138,8 +136,8 @@ func TestBuildTreeItems(t *testing.T) {
 		assert.Len(t, items[0].Children, 1)
 
 		marker := items[0].Children[0]
-		assert.Equal(t, "reviewer", marker.User)
-		assert.Equal(t, "approved", marker.EventType)
+		assert.Equal(t, "reviewer", marker.Hints.User)
+		assert.Equal(t, "approved", marker.Hints.EventType)
 		assert.Equal(t, ItemTypeMarker, marker.ItemType)
 	})
 }
@@ -151,16 +149,14 @@ func TestBuildTreeItemsPartitioning(t *testing.T) {
 
 	t.Run("workflows at root, markers grouped under Activity", func(t *testing.T) {
 		roots := []*analyzer.TreeNode{
-			{Name: "Tests", Type: analyzer.NodeTypeWorkflow, StartTime: now, EndTime: now.Add(time.Minute)},
-			{Name: "approved", Type: analyzer.NodeTypeMarker, User: "bob", EventType: "approved", StartTime: now.Add(2 * time.Minute), EndTime: now.Add(2 * time.Minute)},
-			{Name: "Deploy", Type: analyzer.NodeTypeWorkflow, StartTime: now.Add(time.Minute), EndTime: now.Add(3 * time.Minute)},
-			{Name: "merged", Type: analyzer.NodeTypeMarker, User: "alice", EventType: "merged", StartTime: now.Add(4 * time.Minute), EndTime: now.Add(4 * time.Minute)},
+			{Name: "Tests", Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true}, StartTime: now, EndTime: now.Add(time.Minute)},
+			{Name: "approved", Hints: enrichment.SpanHints{Category: "marker", IsMarker: true, GroupKey: "activity", User: "bob", EventType: "approved"}, StartTime: now.Add(2 * time.Minute), EndTime: now.Add(2 * time.Minute)},
+			{Name: "Deploy", Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true}, StartTime: now.Add(time.Minute), EndTime: now.Add(3 * time.Minute)},
+			{Name: "merged", Hints: enrichment.SpanHints{Category: "marker", IsMarker: true, GroupKey: "activity", User: "alice", EventType: "merged"}, StartTime: now.Add(4 * time.Minute), EndTime: now.Add(4 * time.Minute)},
 		}
 
 		items := BuildTreeItems(roots, nil, nil)
 
-		// Should have 1 Activity group + 2 workflows = 3 root items
-		// Activity group comes first (collapsed by default)
 		assert.Len(t, items, 3)
 		assert.Equal(t, ItemTypeActivityGroup, items[0].ItemType)
 		assert.Equal(t, "Activity", items[0].Name)
@@ -169,18 +165,17 @@ func TestBuildTreeItemsPartitioning(t *testing.T) {
 		assert.Equal(t, ItemTypeWorkflow, items[2].ItemType)
 		assert.Equal(t, "Deploy", items[2].Name)
 
-		// Activity group should contain 2 markers
 		assert.Len(t, items[0].Children, 2)
 		assert.Equal(t, ItemTypeMarker, items[0].Children[0].ItemType)
-		assert.Equal(t, "bob", items[0].Children[0].User)
+		assert.Equal(t, "bob", items[0].Children[0].Hints.User)
 		assert.Equal(t, ItemTypeMarker, items[0].Children[1].ItemType)
-		assert.Equal(t, "alice", items[0].Children[1].User)
+		assert.Equal(t, "alice", items[0].Children[1].Hints.User)
 	})
 
 	t.Run("no markers means no Activity group", func(t *testing.T) {
 		roots := []*analyzer.TreeNode{
-			{Name: "Tests", Type: analyzer.NodeTypeWorkflow},
-			{Name: "Deploy", Type: analyzer.NodeTypeWorkflow},
+			{Name: "Tests", Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true}},
+			{Name: "Deploy", Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true}},
 		}
 
 		items := BuildTreeItems(roots, nil, nil)
@@ -193,7 +188,7 @@ func TestBuildTreeItemsPartitioning(t *testing.T) {
 
 	t.Run("only markers produces only Activity group", func(t *testing.T) {
 		roots := []*analyzer.TreeNode{
-			{Name: "comment", Type: analyzer.NodeTypeMarker, User: "carol", EventType: "comment"},
+			{Name: "comment", Hints: enrichment.SpanHints{Category: "marker", IsMarker: true, GroupKey: "activity", User: "carol", EventType: "comment"}},
 		}
 
 		items := BuildTreeItems(roots, nil, nil)
@@ -205,8 +200,8 @@ func TestBuildTreeItemsPartitioning(t *testing.T) {
 
 	t.Run("Activity group aggregates time bounds", func(t *testing.T) {
 		roots := []*analyzer.TreeNode{
-			{Name: "comment", Type: analyzer.NodeTypeMarker, StartTime: now.Add(2 * time.Minute), EndTime: now.Add(2 * time.Minute)},
-			{Name: "merged", Type: analyzer.NodeTypeMarker, StartTime: now.Add(5 * time.Minute), EndTime: now.Add(5 * time.Minute)},
+			{Name: "comment", Hints: enrichment.SpanHints{Category: "marker", IsMarker: true, GroupKey: "activity"}, StartTime: now.Add(2 * time.Minute), EndTime: now.Add(2 * time.Minute)},
+			{Name: "merged", Hints: enrichment.SpanHints{Category: "marker", IsMarker: true, GroupKey: "activity"}, StartTime: now.Add(5 * time.Minute), EndTime: now.Add(5 * time.Minute)},
 		}
 
 		items := BuildTreeItems(roots, nil, nil)
@@ -217,9 +212,9 @@ func TestBuildTreeItemsPartitioning(t *testing.T) {
 
 	t.Run("multi-URL mode groups markers under Activity per URL group", func(t *testing.T) {
 		roots := []*analyzer.TreeNode{
-			{Name: "Tests", Type: analyzer.NodeTypeWorkflow, URLIndex: 0},
-			{Name: "approved", Type: analyzer.NodeTypeMarker, User: "bob", URLIndex: 0, StartTime: now, EndTime: now},
-			{Name: "Deploy", Type: analyzer.NodeTypeWorkflow, URLIndex: 1, StartTime: now, EndTime: now},
+			{Name: "Tests", Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true}, URLIndex: 0},
+			{Name: "approved", Hints: enrichment.SpanHints{Category: "marker", IsMarker: true, GroupKey: "activity", User: "bob"}, URLIndex: 0, StartTime: now, EndTime: now},
+			{Name: "Deploy", Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true}, URLIndex: 1, StartTime: now, EndTime: now},
 		}
 
 		items := BuildTreeItems(roots, nil, []string{
@@ -227,25 +222,17 @@ func TestBuildTreeItemsPartitioning(t *testing.T) {
 			"https://github.com/owner/repo/pull/2",
 		})
 
-		// 2 URL groups
 		assert.Len(t, items, 2)
 
-		// First URL group: 1 workflow + 1 Activity group
-		group0 := items[0]
-		if group0.URL == "https://github.com/owner/repo/pull/2" {
-			// Sort may reorder; find the one with PR #1
-			group0 = items[1]
-		}
 		// Find PR #1 group
 		var pr1Group *TreeItem
 		for _, item := range items {
-			if item.URL == "https://github.com/owner/repo/pull/1" {
+			if item.Hints.URL == "https://github.com/owner/repo/pull/1" {
 				pr1Group = item
 				break
 			}
 		}
 		if assert.NotNil(t, pr1Group) {
-			// Activity group first, then workflow
 			assert.Len(t, pr1Group.Children, 2)
 			assert.Equal(t, ItemTypeActivityGroup, pr1Group.Children[0].ItemType)
 			assert.Len(t, pr1Group.Children[0].Children, 1)
@@ -358,7 +345,7 @@ func TestCountStats(t *testing.T) {
 		{
 			name: "single workflow no jobs",
 			roots: []*analyzer.TreeNode{
-				{Type: analyzer.NodeTypeWorkflow},
+				{Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true}},
 			},
 			expectedWorkflows: 1,
 			expectedJobs:      0,
@@ -367,10 +354,10 @@ func TestCountStats(t *testing.T) {
 			name: "workflow with jobs",
 			roots: []*analyzer.TreeNode{
 				{
-					Type: analyzer.NodeTypeWorkflow,
+					Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true},
 					Children: []*analyzer.TreeNode{
-						{Type: analyzer.NodeTypeJob},
-						{Type: analyzer.NodeTypeJob},
+						{Hints: enrichment.SpanHints{Category: "job"}},
+						{Hints: enrichment.SpanHints{Category: "job"}},
 					},
 				},
 			},
@@ -381,16 +368,16 @@ func TestCountStats(t *testing.T) {
 			name: "multiple workflows with nested jobs",
 			roots: []*analyzer.TreeNode{
 				{
-					Type: analyzer.NodeTypeWorkflow,
+					Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true},
 					Children: []*analyzer.TreeNode{
-						{Type: analyzer.NodeTypeJob},
+						{Hints: enrichment.SpanHints{Category: "job"}},
 					},
 				},
 				{
-					Type: analyzer.NodeTypeWorkflow,
+					Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true},
 					Children: []*analyzer.TreeNode{
-						{Type: analyzer.NodeTypeJob},
-						{Type: analyzer.NodeTypeJob},
+						{Hints: enrichment.SpanHints{Category: "job"}},
+						{Hints: enrichment.SpanHints{Category: "job"}},
 					},
 				},
 			},
@@ -400,8 +387,8 @@ func TestCountStats(t *testing.T) {
 		{
 			name: "markers not counted as workflows",
 			roots: []*analyzer.TreeNode{
-				{Type: analyzer.NodeTypeMarker},
-				{Type: analyzer.NodeTypeWorkflow},
+				{Hints: enrichment.SpanHints{Category: "marker", IsMarker: true}},
+				{Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true}},
 			},
 			expectedWorkflows: 1,
 			expectedJobs:      0,

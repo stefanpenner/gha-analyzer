@@ -5,6 +5,7 @@ import (
 
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 type PollingIngestor struct {
@@ -23,12 +24,11 @@ func NewPollingIngestor(client *githubapi.Client, urls []string, reporter analyz
 	}
 }
 
-func (i *PollingIngestor) Ingest(ctx context.Context) ([]analyzer.URLResult, int64, int64, error) {
-	results, _, globalEarliest, globalLatest, errs := analyzer.AnalyzeURLs(ctx, i.urls, i.client, i.reporter, i.opts)
+func (i *PollingIngestor) Ingest(ctx context.Context) ([]analyzer.URLResult, int64, int64, []sdktrace.ReadOnlySpan, error) {
+	results, _, globalEarliest, globalLatest, spans, errs := analyzer.AnalyzeURLs(ctx, i.urls, i.client, i.reporter, i.opts)
 	if len(errs) > 0 {
-		// Return the full URLError which includes the URL context
-		return nil, 0, 0, errs[0]
+		return nil, 0, 0, nil, errs[0]
 	}
 
-	return results, globalEarliest, globalLatest, nil
+	return results, globalEarliest, globalLatest, spans, nil
 }

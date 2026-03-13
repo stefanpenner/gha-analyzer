@@ -16,14 +16,15 @@ import (
 	perfettoexport "github.com/stefanpenner/gha-analyzer/pkg/export/perfetto"
 	"github.com/stefanpenner/gha-analyzer/pkg/export/terminal"
 	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
+	"github.com/stefanpenner/gha-analyzer/pkg/ingest/otlpfile"
 	"github.com/stefanpenner/gha-analyzer/pkg/ingest/polling"
+	"github.com/stefanpenner/gha-analyzer/pkg/ingest/traceapi"
 	"github.com/stefanpenner/gha-analyzer/pkg/ingest/webhook"
 	"github.com/stefanpenner/gha-analyzer/pkg/output"
 	"github.com/stefanpenner/gha-analyzer/pkg/perfetto"
 	"github.com/stefanpenner/gha-analyzer/pkg/tui"
 	tuiresults "github.com/stefanpenner/gha-analyzer/pkg/tui/results"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
-	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -79,6 +80,10 @@ func printErrorMsg(message string) {
 
 type config struct {
 	urls             []string
+	traceFiles       []string // --trace=<file.json> OTel trace files
+	tempoURL         string   // --tempo=<baseURL> Tempo backend
+	jaegerURL        string   // --jaeger=<baseURL> Jaeger v2 backend
+	traceIDs         []string // trace IDs to fetch from backends
 	perfettoFile     string
 	openInPerfetto   bool
 	openInOTel       bool
@@ -173,6 +178,22 @@ func parseArgs(args []string, terminal bool) (config, error) {
 				return cfg, fmt.Errorf("invalid --output value: %s (must be 'stdout' or 'markdown')", cfg.outputFormat)
 			}
 			cfg.tuiMode = false
+			continue
+		}
+		if strings.HasPrefix(arg, "--trace=") {
+			cfg.traceFiles = append(cfg.traceFiles, strings.TrimPrefix(arg, "--trace="))
+			continue
+		}
+		if strings.HasPrefix(arg, "--tempo=") {
+			cfg.tempoURL = strings.TrimPrefix(arg, "--tempo=")
+			continue
+		}
+		if strings.HasPrefix(arg, "--jaeger=") {
+			cfg.jaegerURL = strings.TrimPrefix(arg, "--jaeger=")
+			continue
+		}
+		if strings.HasPrefix(arg, "--trace-id=") {
+			cfg.traceIDs = append(cfg.traceIDs, strings.TrimPrefix(arg, "--trace-id="))
 			continue
 		}
 		if arg == "--clear-cache" {
@@ -318,8 +339,10 @@ func main() {
 		return
 	}
 
-	// If no URL args and stdin is piped, read webhook from stdin
-	if len(args) == 0 && !isStdinTerminal() {
+	hasTraceBackend := cfg.tempoURL != "" || cfg.jaegerURL != ""
+
+	// If no URL args, no trace files, no trace backend, and stdin is piped, read webhook from stdin
+	if len(args) == 0 && len(cfg.traceFiles) == 0 && !hasTraceBackend && !isStdinTerminal() {
 		fmt.Fprintf(os.Stderr, "Reading webhook from stdin...\n")
 		urls, err := webhook.ParseWebhook(os.Stdin)
 		if err != nil {
@@ -329,8 +352,8 @@ func main() {
 		args = urls
 	}
 
-	if len(args) == 0 {
-		printErrorMsg("No GitHub URLs provided.\n\n  Usage: gha-analyzer <github_url> [flags]\n\n  Run 'gha-analyzer --help' for more information.")
+	if len(args) == 0 && len(cfg.traceFiles) == 0 && !hasTraceBackend {
+		printErrorMsg("No GitHub URLs or trace files provided.\n\n  Usage: gha-analyzer <github_url> [flags]\n         gha-analyzer --trace=<file.json> [flags]\n         gha-analyzer --tempo=<url> --trace-id=<id> [flags]\n\n  Run 'gha-analyzer --help' for more information.")
 		os.Exit(1)
 	}
 
@@ -350,44 +373,34 @@ func main() {
 		}
 	}
 
-	// 1. Setup GitHub Token
-	token := resolveGitHubToken()
-	if token == "" {
-		// Fall back to parsing token from positional args (legacy behavior)
-		for i, arg := range args {
-			if !strings.HasPrefix(arg, "http") && !strings.HasPrefix(arg, "-") {
-				if _, err := utils.ParseGitHubURL(arg); err == nil {
-					continue
+	// 1. Setup GitHub Token (only required when GHA URLs are provided)
+	var token string
+	if len(args) > 0 {
+		token = resolveGitHubToken()
+		if token == "" {
+			// Fall back to parsing token from positional args (legacy behavior)
+			for i, arg := range args {
+				if !strings.HasPrefix(arg, "http") && !strings.HasPrefix(arg, "-") {
+					if _, err := utils.ParseGitHubURL(arg); err == nil {
+						continue
+					}
+					token = arg
+					args = append(args[:i], args[i+1:]...)
+					break
 				}
-				token = arg
-				args = append(args[:i], args[i+1:]...)
-				break
 			}
 		}
-	}
 
-	if token == "" {
-		printErrorMsg("GITHUB_TOKEN environment variable or token argument is required.\n  Tip: install the GitHub CLI (gh) and run `gh auth login` to authenticate automatically.")
-		printUsage()
-		os.Exit(1)
+		if token == "" {
+			printErrorMsg("GITHUB_TOKEN environment variable or token argument is required.\n  Tip: install the GitHub CLI (gh) and run `gh auth login` to authenticate automatically.")
+			printUsage()
+			os.Exit(1)
+		}
 	}
 
 	ctx := context.Background()
 
-	// 2. Setup OTel
-	collector := core.NewSpanCollector()
-	res, _ := otelexport.GetResource(ctx)
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(collector),
-		sdktrace.WithResource(res),
-		sdktrace.WithIDGenerator(githubapi.GHIDGenerator{}),
-	)
-	otel.SetTracerProvider(tp)
-	defer tp.Shutdown(ctx)
-
-	client := githubapi.NewClient(githubapi.NewContext(token))
-
-	// 3. Setup Exporters
+	// 2. Setup Exporters
 	exporters := []core.Exporter{
 		terminal.NewExporter(os.Stderr),
 	}
@@ -419,27 +432,79 @@ func main() {
 
 	pipeline := core.NewPipeline(exporters...)
 
-	// 4. Setup Progress TUI
-	progress := tui.NewProgress(len(args), os.Stderr)
-	progress.Start()
-
-	// 5. Run Ingestor
-	ingestor := polling.NewPollingIngestor(client, args, progress, analyzer.AnalyzeOptions{
-		Window: cfg.window,
-	})
-	results, globalEarliest, globalLatest, err := ingestor.Ingest(ctx)
-	
-	progress.Finish()
-	progress.Wait()
-
-	if err != nil {
-		printError(err, "ingestion failed")
-		os.Exit(1)
+	// 4. Load trace files if provided
+	var traceSpans []sdktrace.ReadOnlySpan
+	for _, tf := range cfg.traceFiles {
+		fileSpans, err := otlpfile.ParseFile(tf)
+		if err != nil {
+			printError(err, fmt.Sprintf("failed to load trace file %s", tf))
+			os.Exit(1)
+		}
+		traceSpans = append(traceSpans, fileSpans...)
+		fmt.Fprintf(os.Stderr, "Loaded %d spans from %s\n", len(fileSpans), tf)
 	}
 
-	// 6. Finalize & Process Spans
-	tp.ForceFlush(ctx)
-	spans := collector.Spans()
+	// 4. Fetch traces from backends (Tempo/Jaeger)
+	if hasTraceBackend && len(cfg.traceIDs) > 0 {
+		var backendURL string
+		var backendName string
+		if cfg.tempoURL != "" {
+			backendURL = cfg.tempoURL
+			backendName = "Tempo"
+		} else {
+			backendURL = cfg.jaegerURL
+			backendName = "Jaeger"
+		}
+		client := traceapi.New(backendURL)
+		for _, traceID := range cfg.traceIDs {
+			fmt.Fprintf(os.Stderr, "Fetching trace %s from %s (%s)...\n", traceID, backendName, backendURL)
+			fetchedSpans, err := client.FetchTrace(traceID)
+			if err != nil {
+				printError(err, fmt.Sprintf("failed to fetch trace %s from %s", traceID, backendName))
+				os.Exit(1)
+			}
+			traceSpans = append(traceSpans, fetchedSpans...)
+			fmt.Fprintf(os.Stderr, "Fetched %d spans for trace %s\n", len(fetchedSpans), traceID)
+		}
+	}
+
+	// 5. Run GHA Ingestor (only when URLs are provided)
+	var results []analyzer.URLResult
+	var globalEarliest, globalLatest int64
+	var ghaSpans []sdktrace.ReadOnlySpan
+	if len(args) > 0 {
+		client := githubapi.NewClient(githubapi.NewContext(token))
+		progress := tui.NewProgress(len(args), os.Stderr)
+		progress.Start()
+
+		ingestor := polling.NewPollingIngestor(client, args, progress, analyzer.AnalyzeOptions{
+			Window: cfg.window,
+		})
+		var err error
+		results, globalEarliest, globalLatest, ghaSpans, err = ingestor.Ingest(ctx)
+
+		progress.Finish()
+		progress.Wait()
+
+		if err != nil {
+			printError(err, "ingestion failed")
+			os.Exit(1)
+		}
+	}
+
+	// 6. Combine all spans
+	spans := append(ghaSpans, traceSpans...)
+	// Update global time bounds from trace spans
+	for _, s := range traceSpans {
+		startMs := s.StartTime().UnixMilli()
+		endMs := s.EndTime().UnixMilli()
+		if globalEarliest == 0 || startMs < globalEarliest {
+			globalEarliest = startMs
+		}
+		if endMs > globalLatest {
+			globalLatest = endMs
+		}
+	}
 
 	if err := pipeline.Process(ctx, spans); err != nil {
 		printError(err, "processing spans failed")
@@ -464,57 +529,67 @@ func main() {
 
 		// Create reload function that clears cache and refetches data
 		reloadFunc := func(reporter tuiresults.LoadingReporter) ([]sdktrace.ReadOnlySpan, time.Time, time.Time, error) {
-			// Report progress if reporter is available
-			if reporter != nil {
-				reporter.SetPhase("Clearing cache")
+			var allSpans []sdktrace.ReadOnlySpan
+			var reloadEarliest, reloadLatest int64
+
+			// Re-read trace files
+			if len(cfg.traceFiles) > 0 {
+				if reporter != nil {
+					reporter.SetPhase("Loading trace files")
+				}
+				for _, tf := range cfg.traceFiles {
+					fileSpans, err := otlpfile.ParseFile(tf)
+					if err != nil {
+						return nil, time.Time{}, time.Time{}, fmt.Errorf("failed to load trace file %s: %w", tf, err)
+					}
+					allSpans = append(allSpans, fileSpans...)
+				}
+				for _, s := range allSpans {
+					startMs := s.StartTime().UnixMilli()
+					endMs := s.EndTime().UnixMilli()
+					if reloadEarliest == 0 || startMs < reloadEarliest {
+						reloadEarliest = startMs
+					}
+					if endMs > reloadLatest {
+						reloadLatest = endMs
+					}
+				}
 			}
 
-			// Clear cache
-			if err := os.RemoveAll(githubapi.DefaultCacheDir()); err != nil {
-				return nil, time.Time{}, time.Time{}, fmt.Errorf("failed to clear cache: %w", err)
+			// Re-fetch from GitHub if URLs were provided
+			if len(args) > 0 {
+				if reporter != nil {
+					reporter.SetPhase("Clearing cache")
+				}
+
+				if err := os.RemoveAll(githubapi.DefaultCacheDir()); err != nil {
+					return nil, time.Time{}, time.Time{}, fmt.Errorf("failed to clear cache: %w", err)
+				}
+
+				var progressReporter analyzer.ProgressReporter
+				if reporter != nil {
+					progressReporter = &reloadProgressAdapter{reporter: reporter}
+				}
+
+				reloadClient := githubapi.NewClient(githubapi.NewContext(token))
+				reloadIngestor := polling.NewPollingIngestor(reloadClient, args, progressReporter, analyzer.AnalyzeOptions{
+					Window: cfg.window,
+				})
+				_, ghaEarliest, ghaLatest, reloadGHASpans, err := reloadIngestor.Ingest(ctx)
+				if err != nil {
+					return nil, time.Time{}, time.Time{}, err
+				}
+
+				allSpans = append(allSpans, reloadGHASpans...)
+				if reloadEarliest == 0 || ghaEarliest < reloadEarliest {
+					reloadEarliest = ghaEarliest
+				}
+				if ghaLatest > reloadLatest {
+					reloadLatest = ghaLatest
+				}
 			}
 
-			if reporter != nil {
-				reporter.SetPhase("Setting up")
-			}
-
-			// Create new collector and tracer provider for reload
-			reloadCollector := core.NewSpanCollector()
-			reloadRes, _ := otelexport.GetResource(ctx)
-			reloadTP := sdktrace.NewTracerProvider(
-				sdktrace.WithSyncer(reloadCollector), // Use Syncer instead of Batcher for immediate export
-				sdktrace.WithResource(reloadRes),
-				sdktrace.WithIDGenerator(githubapi.GHIDGenerator{}),
-			)
-			otel.SetTracerProvider(reloadTP)
-
-			// Create a progress reporter adapter if we have one
-			var progressReporter analyzer.ProgressReporter
-			if reporter != nil {
-				progressReporter = &reloadProgressAdapter{reporter: reporter}
-			}
-
-			// Re-run ingestion
-			reloadClient := githubapi.NewClient(githubapi.NewContext(token))
-			reloadIngestor := polling.NewPollingIngestor(reloadClient, args, progressReporter, analyzer.AnalyzeOptions{
-				Window: cfg.window,
-			})
-			_, reloadEarliest, reloadLatest, err := reloadIngestor.Ingest(ctx)
-			if err != nil {
-				reloadTP.Shutdown(ctx)
-				return nil, time.Time{}, time.Time{}, err
-			}
-
-			if reporter != nil {
-				reporter.SetPhase("Finalizing")
-			}
-
-			// Force flush and collect spans before shutdown
-			reloadTP.ForceFlush(ctx)
-			reloadSpans := reloadCollector.Spans()
-			reloadTP.Shutdown(ctx)
-
-			return reloadSpans, time.UnixMilli(reloadEarliest), time.UnixMilli(reloadLatest), nil
+			return allSpans, time.UnixMilli(reloadEarliest), time.UnixMilli(reloadLatest), nil
 		}
 
 		// Create function to open in Perfetto from TUI
@@ -609,6 +684,10 @@ func printUsage() {
 	fmt.Println("  --otel-grpc[=<endpoint>]  Export traces via OTLP/gRPC (default: localhost:4317)")
 	fmt.Println("  --open-in-otel            Automatically open the OTel Desktop Viewer")
 	fmt.Println("  --window=<duration>       Only show events within <duration> of merge/latest activity (e.g. 24h, 2h)")
+	fmt.Println("  --trace=<file.json>       Load OTel spans from a trace file (can be repeated)")
+	fmt.Println("  --tempo=<baseURL>         Fetch traces from Grafana Tempo (e.g., http://localhost:3200)")
+	fmt.Println("  --jaeger=<baseURL>        Fetch traces from Jaeger v2 (e.g., http://localhost:16686)")
+	fmt.Println("  --trace-id=<id>           Trace ID to fetch from Tempo/Jaeger (can be repeated)")
 	fmt.Println("  --clear-cache             Clear the HTTP cache (can be combined with other flags)")
 	fmt.Println("  help, --help, -h          Show this help message")
 	fmt.Println("\nTrends Mode Flags:")
@@ -630,6 +709,10 @@ func printUsage() {
 	fmt.Println("  gha-analyzer trends owner/repo")
 	fmt.Println("  gha-analyzer trends owner/repo --days=7 --format=json")
 	fmt.Println("  gha-analyzer trends owner/repo --branch=main --workflow=post-merge.yaml")
+	fmt.Println("  gha-analyzer --trace=spans.json")
+	fmt.Println("  gha-analyzer --trace=spans.json https://github.com/owner/repo/pull/123")
+	fmt.Println("  gha-analyzer --tempo=http://localhost:3200 --trace-id=abc123def456")
+	fmt.Println("  gha-analyzer --jaeger=http://localhost:16686 --trace-id=abc123def456")
 	fmt.Println("  gha-analyzer --clear-cache")
 }
 
