@@ -14,6 +14,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/analyzer",
+        "//pkg/enrichment",
         "//pkg/utils",
         "@com_github_charmbracelet_bubbles//key",
         "@com_github_charmbracelet_bubbles//spinner",
@@ -33,6 +34,7 @@ go_test(
     embed = [":results"],
     deps = [
         "//pkg/analyzer",
+        "//pkg/enrichment",
         "@com_github_charmbracelet_bubbletea//:bubbletea",
         "@com_github_stretchr_testify//assert",
     ],

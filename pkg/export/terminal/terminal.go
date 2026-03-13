@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -38,7 +39,7 @@ func (e *Exporter) Finish(ctx context.Context) error {
 		return nil
 	}
 
-	summary := analyzer.CalculateSummary(e.spans)
+	summary := analyzer.CalculateSummary(e.spans, enrichment.DefaultEnricher())
 	
 	fmt.Fprintf(e.writer, "\n%s\n", strings.Repeat("=", 80))
 	fmt.Fprintf(e.writer, "📊 GitHub Actions Performance Report\n")

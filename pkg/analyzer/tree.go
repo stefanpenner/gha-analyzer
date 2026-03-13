@@ -4,34 +4,20 @@ import (
 	"sort"
 	"time"
 
+	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"go.opentelemetry.io/otel/sdk/trace"
-)
-
-// NodeType represents the type of tree node
-type NodeType string
-
-const (
-	NodeTypeWorkflow NodeType = "workflow"
-	NodeTypeJob      NodeType = "job"
-	NodeTypeStep     NodeType = "step"
-	NodeTypeMarker   NodeType = "marker"
 )
 
 // TreeNode represents a node in the workflow/job/step hierarchy.
 // This is a shared data structure used by both TUI and CLI rendering.
 type TreeNode struct {
-	Type        NodeType
-	Name        string
-	URL         string
-	StartTime   time.Time
-	EndTime     time.Time
-	Conclusion  string
-	Status      string
-	IsRequired  bool
-	User        string // for markers (reviewer, merged by, etc.)
-	EventType   string // for markers (merged, approved, comment, etc.)
-	URLIndex    int    // index of the input URL this node belongs to
-	Children    []*TreeNode
+	Attrs     map[string]string    // raw span attributes
+	Hints     enrichment.SpanHints // enrichment output
+	Name      string
+	StartTime time.Time
+	EndTime   time.Time
+	URLIndex  int // index of the input URL this node belongs to
+	Children  []*TreeNode
 }
 
 // Duration returns the duration of this node
@@ -40,20 +26,20 @@ func (n *TreeNode) Duration() time.Duration {
 }
 
 // BuildTreeFromSpans constructs a hierarchy of TreeNodes from OTel spans.
-// This filters to only include workflow, job, step, and marker spans.
-func BuildTreeFromSpans(spans []trace.ReadOnlySpan, globalEarliest, globalLatest time.Time) []*TreeNode {
+// Spans are filtered and enriched using the provided enricher.
+func BuildTreeFromSpans(spans []trace.ReadOnlySpan, globalEarliest, globalLatest time.Time, enricher enrichment.Enricher) []*TreeNode {
 	if len(spans) == 0 {
 		return nil
 	}
 
-	// Filter to only GHA-relevant spans
-	type spanWithAttrs struct {
+	type spanWithHints struct {
 		span  trace.ReadOnlySpan
 		attrs map[string]string
+		hints enrichment.SpanHints
 	}
 
-	filtered := []spanWithAttrs{}
-	seenMarkers := make(map[string]struct{})
+	filtered := []spanWithHints{}
+	seenDedup := make(map[string]struct{})
 
 	for _, s := range spans {
 		attrs := make(map[string]string)
@@ -61,8 +47,11 @@ func BuildTreeFromSpans(spans []trace.ReadOnlySpan, globalEarliest, globalLatest
 			attrs[string(a.Key)] = a.Value.AsString()
 		}
 
-		spanType := attrs["type"]
-		if spanType != "workflow" && spanType != "job" && spanType != "step" && spanType != "marker" {
+		isZeroDuration := s.EndTime().Before(s.StartTime()) || s.EndTime().Equal(s.StartTime())
+		hints := enricher.Enrich(s.Name(), attrs, isZeroDuration)
+
+		// Skip spans the enricher doesn't recognize
+		if hints.Category == "" {
 			continue
 		}
 
@@ -74,24 +63,15 @@ func BuildTreeFromSpans(spans []trace.ReadOnlySpan, globalEarliest, globalLatest
 			continue
 		}
 
-		// Deduplicate markers using multiple attributes for robust deduplication
-		if spanType == "marker" {
-			eventID := attrs["github.event_id"]
-			eventTime := attrs["github.event_time"]
-			eventType := attrs["github.event_type"]
-			user := attrs["github.user"]
-			// Build a composite key from available attributes
-			key := eventType + "-" + user + "-" + eventTime
-			if eventID != "" {
-				key = eventID + "-" + key
-			}
-			if _, seen := seenMarkers[key]; seen {
+		// Deduplicate using DedupKey from hints
+		if hints.DedupKey != "" {
+			if _, seen := seenDedup[hints.DedupKey]; seen {
 				continue
 			}
-			seenMarkers[key] = struct{}{}
+			seenDedup[hints.DedupKey] = struct{}{}
 		}
 
-		filtered = append(filtered, spanWithAttrs{span: s, attrs: attrs})
+		filtered = append(filtered, spanWithHints{span: s, attrs: attrs, hints: hints})
 	}
 
 	if len(filtered) == 0 {
@@ -100,14 +80,12 @@ func BuildTreeFromSpans(spans []trace.ReadOnlySpan, globalEarliest, globalLatest
 
 	// Build span ID to node mapping
 	nodes := make(map[string]*TreeNode)
-	spanMap := make(map[string]spanWithAttrs)
 
-	for _, sa := range filtered {
-		spanID := sa.span.SpanContext().SpanID().String()
-		spanMap[spanID] = sa
+	for _, sh := range filtered {
+		spanID := sh.span.SpanContext().SpanID().String()
 
 		urlIndex := 0
-		for _, a := range sa.span.Attributes() {
+		for _, a := range sh.span.Attributes() {
 			if string(a.Key) == "github.url_index" {
 				urlIndex = int(a.Value.AsInt64())
 				break
@@ -115,27 +93,22 @@ func BuildTreeFromSpans(spans []trace.ReadOnlySpan, globalEarliest, globalLatest
 		}
 
 		node := &TreeNode{
-			Type:       NodeType(sa.attrs["type"]),
-			Name:       sa.span.Name(),
-			URL:        sa.attrs["github.url"],
-			StartTime:  sa.span.StartTime(),
-			EndTime:    sa.span.EndTime(),
-			Conclusion: sa.attrs["github.conclusion"],
-			Status:     sa.attrs["github.status"],
-			IsRequired: sa.attrs["github.is_required"] == "true",
-			User:       sa.attrs["github.user"],
-			EventType:  sa.attrs["github.event_type"],
-			URLIndex:   urlIndex,
-			Children:   []*TreeNode{},
+			Attrs:     sh.attrs,
+			Hints:     sh.hints,
+			Name:      sh.span.Name(),
+			StartTime: sh.span.StartTime(),
+			EndTime:   sh.span.EndTime(),
+			URLIndex:  urlIndex,
+			Children:  []*TreeNode{},
 		}
 		nodes[spanID] = node
 	}
 
 	// Link children to parents
 	var roots []*TreeNode
-	for _, sa := range filtered {
-		spanID := sa.span.SpanContext().SpanID().String()
-		parentID := sa.span.Parent().SpanID().String()
+	for _, sh := range filtered {
+		spanID := sh.span.SpanContext().SpanID().String()
+		parentID := sh.span.Parent().SpanID().String()
 		node := nodes[spanID]
 
 		if parentID == "0000000000000000" {
@@ -157,16 +130,13 @@ func BuildTreeFromSpans(spans []trace.ReadOnlySpan, globalEarliest, globalLatest
 	return roots
 }
 
-// sortTreeNodes sorts nodes by start time, with markers first on ties
+// sortTreeNodes sorts nodes by start time, using SortPriority for tie-breaking
 func sortTreeNodes(nodes []*TreeNode) {
 	sort.Slice(nodes, func(i, j int) bool {
 		if nodes[i].StartTime.Equal(nodes[j].StartTime) {
-			// Tie-breaker: markers always come first
-			if nodes[i].Type == NodeTypeMarker && nodes[j].Type != NodeTypeMarker {
-				return true
-			}
-			if nodes[j].Type == NodeTypeMarker && nodes[i].Type != NodeTypeMarker {
-				return false
+			// Tie-breaker: lower SortPriority first (markers have -1)
+			if nodes[i].Hints.SortPriority != nodes[j].Hints.SortPriority {
+				return nodes[i].Hints.SortPriority < nodes[j].Hints.SortPriority
 			}
 		}
 		return nodes[i].StartTime.Before(nodes[j].StartTime)

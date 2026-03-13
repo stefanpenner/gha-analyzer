@@ -112,7 +112,7 @@ func RenderTimelineBar(item TreeItem, globalStart, globalEnd time.Time, width in
 		// Get character and style based on item type/status
 		markerChar, style := getBarStyle(item)
 		// For non-markers, use | as the zero-duration indicator
-		if item.ItemType != ItemTypeMarker {
+		if !item.Hints.IsMarker {
 			markerChar = "|"
 		}
 
@@ -188,7 +188,7 @@ func RenderTimelineBarSelected(item TreeItem, globalStart, globalEnd time.Time, 
 	isZeroDuration := itemEnd.Before(itemStart) || itemEnd.Equal(itemStart)
 	if isZeroDuration {
 		markerChar, style := getBarStyleSelected(item)
-		if item.ItemType != ItemTypeMarker {
+		if !item.Hints.IsMarker {
 			markerChar = "|"
 		}
 
@@ -254,7 +254,7 @@ func renderTimelineBarWithBg(item TreeItem, globalStart, globalEnd time.Time, wi
 	isZeroDuration := itemEnd.Before(itemStart) || itemEnd.Equal(itemStart)
 	if isZeroDuration {
 		markerChar, style := getBarStyle(item)
-		if item.ItemType != ItemTypeMarker {
+		if !item.Hints.IsMarker {
 			markerChar = "|"
 		}
 		startOffset := itemStart.Sub(globalStart)
@@ -303,110 +303,79 @@ func renderTimelineBarWithBg(item TreeItem, globalStart, globalEnd time.Time, wi
 	return leftPad + timelineHyperlink(url, styledBar) + rightPad
 }
 
-// getBarStyle returns the bar character and style based on item status
+// getBarStyle returns the bar character and style based on item hints.
 func getBarStyle(item TreeItem) (string, lipgloss.Style) {
-	// Steps use different character
-	if item.ItemType == ItemTypeStep {
-		switch item.Conclusion {
-		case "success":
-			return "▒", BarSuccessStyle
-		case "failure":
-			return "▒", BarFailureStyle
-		case "skipped", "cancelled":
-			return "░", BarSkippedStyle
-		default:
-			return "▒", BarPendingStyle
-		}
+	barChar := item.Hints.BarChar
+	if barChar == "" {
+		barChar = "█"
 	}
+	style := hintsToBarStyle(item)
+	return barChar, style
+}
 
-	// Markers use point markers
-	if item.ItemType == ItemTypeMarker {
-		switch item.EventType {
-		case "merged":
-			return "◆", BarSuccessStyle
-		case "approved":
-			return "✓", BarSuccessStyle
-		case "comment", "commented", "COMMENTED":
-			return "●", BarPendingStyle
-		case "changes_requested":
-			return "✗", BarFailureStyle
-		default:
-			return "▲", BarPendingStyle
-		}
+// hintsToBarStyle maps hints color/outcome to a lipgloss bar style.
+func hintsToBarStyle(item TreeItem) lipgloss.Style {
+	if item.Hints.Outcome == "failure" && !item.Hints.IsRequired {
+		return BarFailureNonBlockingStyle
 	}
+	return colorToBarStyle(item.Hints.Color)
+}
 
-	// Jobs and workflows
-	switch {
-	case item.Status == "in_progress" || item.Status == "queued" || item.Status == "waiting":
-		return "▒", BarPendingStyle
-	case item.Conclusion == "success":
-		return "█", BarSuccessStyle
-	case item.Conclusion == "failure":
-		if item.IsRequired {
-			return "█", BarFailureStyle
-		}
-		return "░", BarFailureNonBlockingStyle
-	case item.Conclusion == "skipped" || item.Conclusion == "cancelled":
-		return "░", BarSkippedStyle
-	default:
-		// Unknown/empty conclusion - use gray like non-TUI
-		return "░", BarSkippedStyle
+// colorToBarStyle maps a color name to a bar style.
+func colorToBarStyle(color string) lipgloss.Style {
+	switch color {
+	case "green":
+		return BarSuccessStyle
+	case "red":
+		return BarFailureStyle
+	case "blue":
+		return BarPendingStyle
+	case "gray":
+		return BarSkippedStyle
+	case "yellow":
+		return BarFailureNonBlockingStyle
 	}
+	return BarSkippedStyle
 }
 
 // getBarStyleSelected returns the bar character and dimmed style for selected items
 func getBarStyleSelected(item TreeItem) (string, lipgloss.Style) {
-	// Steps use different character
-	if item.ItemType == ItemTypeStep {
-		switch item.Conclusion {
-		case "success":
-			return "▒", BarSuccessSelectedStyle
-		case "failure":
-			return "▒", BarFailureSelectedStyle
-		case "skipped", "cancelled":
-			return "░", BarSkippedSelectedStyle
-		default:
-			return "▒", BarPendingSelectedStyle
-		}
+	barChar := item.Hints.BarChar
+	if barChar == "" {
+		barChar = "█"
 	}
-
-	// Markers use point markers
-	if item.ItemType == ItemTypeMarker {
-		switch item.EventType {
-		case "merged":
-			return "◆", BarSuccessSelectedStyle
-		case "approved":
-			return "✓", BarSuccessSelectedStyle
-		case "comment", "commented", "COMMENTED":
-			return "●", BarPendingSelectedStyle
-		case "changes_requested":
-			return "✗", BarFailureSelectedStyle
-		default:
-			return "▲", BarPendingSelectedStyle
-		}
-	}
-
-	// Jobs and workflows
-	switch {
-	case item.Status == "in_progress" || item.Status == "queued" || item.Status == "waiting":
-		return "▒", BarPendingSelectedStyle
-	case item.Conclusion == "success":
-		return "█", BarSuccessSelectedStyle
-	case item.Conclusion == "failure":
-		if item.IsRequired {
-			return "█", BarFailureSelectedStyle
-		}
-		return "░", BarFailureNonBlockingSelectedStyle
-	case item.Conclusion == "skipped" || item.Conclusion == "cancelled":
-		return "░", BarSkippedSelectedStyle
-	default:
-		return "░", BarSkippedSelectedStyle
-	}
+	style := hintsToBarStyleSelected(item)
+	return barChar, style
 }
 
-// getChildMarkerStyle returns the dimmed style for a child marker based on its conclusion
+// hintsToBarStyleSelected maps hints to a selected bar style.
+func hintsToBarStyleSelected(item TreeItem) lipgloss.Style {
+	if item.Hints.Outcome == "failure" && !item.Hints.IsRequired {
+		return BarFailureNonBlockingSelectedStyle
+	}
+	return colorToBarStyleSelected(item.Hints.Color)
+}
+
+// colorToBarStyleSelected maps a color name to a selected bar style.
+func colorToBarStyleSelected(color string) lipgloss.Style {
+	switch color {
+	case "green":
+		return BarSuccessSelectedStyle
+	case "red":
+		return BarFailureSelectedStyle
+	case "blue":
+		return BarPendingSelectedStyle
+	case "gray":
+		return BarSkippedSelectedStyle
+	case "yellow":
+		return BarFailureNonBlockingSelectedStyle
+	}
+	return BarSkippedSelectedStyle
+}
+
+// getChildMarkerStyle returns the dimmed style for a child marker based on its outcome
 func getChildMarkerStyle(child *TreeItem) lipgloss.Style {
-	switch child.Conclusion {
+	switch child.Hints.Outcome {
 	case "success":
 		return BarChildSuccessStyle
 	case "failure":
@@ -418,7 +387,7 @@ func getChildMarkerStyle(child *TreeItem) lipgloss.Style {
 
 // getChildMarkerStyleSelected returns the dimmed+selected style for a child marker
 func getChildMarkerStyleSelected(child *TreeItem) lipgloss.Style {
-	switch child.Conclusion {
+	switch child.Hints.Outcome {
 	case "success":
 		return BarChildSuccessSelectedStyle
 	case "failure":
@@ -562,7 +531,7 @@ func renderTimelineWithChildren(item TreeItem, globalStart, globalEnd time.Time,
 	}
 
 	// For zero-duration non-marker, use | as indicator
-	if isZeroDuration && item.ItemType != ItemTypeMarker {
+	if isZeroDuration && !item.Hints.IsMarker {
 		barChar = "|"
 	}
 
@@ -651,7 +620,7 @@ func RenderTimelineBarDimmed(item TreeItem, globalStart, globalEnd time.Time, wi
 		startOffset := itemStart.Sub(globalStart)
 		startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
 		markerChar := "|"
-		if item.ItemType == ItemTypeMarker {
+		if item.Hints.IsMarker {
 			markerChar, _ = getBarStyle(item)
 		}
 		return renderMarker(markerChar, BarSkippedStyle, startPos, width, "", true)
@@ -713,7 +682,7 @@ func RenderTimelineBarDimmedSelected(item TreeItem, globalStart, globalEnd time.
 		startOffset := itemStart.Sub(globalStart)
 		startPos := int(float64(startOffset) / float64(totalDuration) * float64(width))
 		markerChar := "|"
-		if item.ItemType == ItemTypeMarker {
+		if item.Hints.IsMarker {
 			markerChar, _ = getBarStyle(item)
 		}
 		return renderMarker(markerChar, BarSkippedSelectedStyle, startPos, width, "", true)

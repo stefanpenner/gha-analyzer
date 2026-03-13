@@ -15,6 +15,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/analyzer",
+        "//pkg/enrichment",
         "//pkg/perfetto",
         "//pkg/utils",
         "@com_github_charmbracelet_lipgloss//:lipgloss",

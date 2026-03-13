@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
@@ -47,21 +48,16 @@ type TreeItem struct {
 	ID           string
 	Name         string
 	DisplayName  string
-	URL          string
 	StartTime    time.Time
 	EndTime      time.Time
-	Conclusion   string
-	Status       string
-	IsRequired   bool
 	IsBottleneck bool
 	Depth        int
 	HasChildren  bool
 	IsExpanded   bool
 	ItemType     ItemType
 	ParentID     string
-	User         string // for markers
-	EventType    string // for markers
 	Children     []*TreeItem
+	Hints        enrichment.SpanHints // enrichment hints from source node
 	sourceNode   *analyzer.TreeNode
 }
 
@@ -110,22 +106,24 @@ func BuildTreeItems(roots []*analyzer.TreeNode, expandedState map[string]bool, i
 			}
 		}
 
-		// Compute aggregate conclusion
-		conclusion := aggregateConclusion(children)
+		// Compute aggregate outcome
+		outcome := aggregateOutcome(children)
 
 		groupItem := &TreeItem{
 			ID:          groupID,
 			Name:        displayName,
 			DisplayName: displayName,
-			URL:         inputURL,
 			StartTime:   earliest,
 			EndTime:     latest,
-			Conclusion:  conclusion,
 			Depth:       0,
 			HasChildren: len(children) > 0,
 			IsExpanded:  expandedState[groupID],
 			ItemType:    ItemTypeURLGroup,
 			Children:    []*TreeItem{},
+			Hints: enrichment.SpanHints{
+				URL:     inputURL,
+				Outcome: outcome,
+			},
 		}
 
 		groupItem.Children = partitionAndGroup(children, groupID, 1, expandedState)
@@ -141,12 +139,12 @@ func BuildTreeItems(roots []*analyzer.TreeNode, expandedState map[string]bool, i
 	return items
 }
 
-// aggregateConclusion returns an aggregate conclusion from child nodes.
-func aggregateConclusion(nodes []*analyzer.TreeNode) string {
+// aggregateOutcome returns an aggregate outcome from child nodes using Hints.
+func aggregateOutcome(nodes []*analyzer.TreeNode) string {
 	hasFailure := false
 	hasSuccess := false
 	for _, n := range nodes {
-		switch n.Conclusion {
+		switch n.Hints.Outcome {
 		case "failure":
 			hasFailure = true
 		case "success":
@@ -168,7 +166,7 @@ func partitionAndGroup(roots []*analyzer.TreeNode, parentID string, depth int, e
 	var workflows []*analyzer.TreeNode
 	var markers []*analyzer.TreeNode
 	for _, root := range roots {
-		if root.Type == analyzer.NodeTypeMarker {
+		if root.Hints.GroupKey == "activity" || root.Hints.IsMarker {
 			markers = append(markers, root)
 		} else {
 			workflows = append(workflows, root)
@@ -220,36 +218,21 @@ func partitionAndGroup(roots []*analyzer.TreeNode, parentID string, depth int, e
 func convertNode(node *analyzer.TreeNode, parentID string, index, depth int, expandedState map[string]bool) *TreeItem {
 	id := makeNodeID(parentID, node.Name, index)
 
-	itemType := ItemTypeWorkflow
-	switch node.Type {
-	case analyzer.NodeTypeWorkflow:
-		itemType = ItemTypeWorkflow
-	case analyzer.NodeTypeJob:
-		itemType = ItemTypeJob
-	case analyzer.NodeTypeStep:
-		itemType = ItemTypeStep
-	case analyzer.NodeTypeMarker:
-		itemType = ItemTypeMarker
-	}
+	itemType := itemTypeFromNode(node)
 
 	item := &TreeItem{
 		ID:          id,
 		Name:        node.Name,
 		DisplayName: node.Name,
-		URL:         node.URL,
 		StartTime:   node.StartTime,
 		EndTime:     node.EndTime,
-		Conclusion:  node.Conclusion,
-		Status:      node.Status,
-		IsRequired:  node.IsRequired,
 		Depth:       depth,
 		HasChildren: len(node.Children) > 0,
 		IsExpanded:  expandedState[id],
 		ItemType:    itemType,
 		ParentID:    parentID,
-		User:        node.User,
-		EventType:   node.EventType,
 		Children:    []*TreeItem{},
+		Hints:       node.Hints,
 		sourceNode:  node,
 	}
 
@@ -292,6 +275,30 @@ func FilterVisibleItems(items []TreeItem, matchIDs, ancestorIDs map[string]bool)
 	return result
 }
 
+// itemTypeFromNode derives ItemType from enrichment hints.
+func itemTypeFromNode(node *analyzer.TreeNode) ItemType {
+	hints := node.Hints
+	if hints.IsMarker {
+		return ItemTypeMarker
+	}
+	switch hints.Category {
+	case "workflow":
+		return ItemTypeWorkflow
+	case "job":
+		return ItemTypeJob
+	case "step":
+		return ItemTypeStep
+	default:
+		if hints.IsRoot {
+			return ItemTypeWorkflow
+		}
+		if hints.IsLeaf {
+			return ItemTypeStep
+		}
+		return ItemTypeJob
+	}
+}
+
 func makeNodeID(parentID, name string, index int) string {
 	if parentID == "" {
 		return fmt.Sprintf("%s/%d", name, index)
@@ -299,15 +306,15 @@ func makeNodeID(parentID, name string, index int) string {
 	return fmt.Sprintf("%s/%s/%d", parentID, name, index)
 }
 
-// BuildTreeFromSpans is a convenience wrapper
+// BuildTreeFromSpans is a convenience wrapper that uses the default enricher.
 func BuildTreeFromSpans(spans []trace.ReadOnlySpan, globalEarliest, globalLatest time.Time) []*analyzer.TreeNode {
-	return analyzer.BuildTreeFromSpans(spans, globalEarliest, globalLatest)
+	return analyzer.BuildTreeFromSpans(spans, globalEarliest, globalLatest, enrichment.DefaultEnricher())
 }
 
 // CountStats returns workflow and job counts from the tree
 func CountStats(roots []*analyzer.TreeNode) (workflows, jobs int) {
 	for _, root := range roots {
-		if root.Type == analyzer.NodeTypeWorkflow {
+		if isRootNode(root) {
 			workflows++
 		}
 		countJobs(root, &jobs)
@@ -315,8 +322,18 @@ func CountStats(roots []*analyzer.TreeNode) (workflows, jobs int) {
 	return
 }
 
+// isRootNode checks if node is a root-level span.
+func isRootNode(node *analyzer.TreeNode) bool {
+	return node.Hints.IsRoot
+}
+
+// isJobNode checks if node is a job-level (mid-tier) span.
+func isJobNode(node *analyzer.TreeNode) bool {
+	return !node.Hints.IsRoot && !node.Hints.IsMarker && !node.Hints.IsLeaf
+}
+
 func countJobs(node *analyzer.TreeNode, count *int) {
-	if node.Type == analyzer.NodeTypeJob {
+	if isJobNode(node) {
 		*count++
 	}
 	for _, child := range node.Children {

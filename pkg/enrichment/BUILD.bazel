@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "enrichment",
+    srcs = [
+        "enricher.go",
+        "generic.go",
+        "gha.go",
+    ],
+    importpath = "github.com/stefanpenner/gha-analyzer/pkg/enrichment",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "enrichment_test",
+    srcs = ["enricher_test.go"],
+    embed = [":enrichment"],
+)

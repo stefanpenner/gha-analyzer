@@ -17,6 +17,7 @@ go_library(
     importpath = "github.com/stefanpenner/gha-analyzer/pkg/analyzer",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/enrichment",
         "//pkg/githubapi",
         "//pkg/utils",
         "@com_github_cockroachdb_errors//:errors",

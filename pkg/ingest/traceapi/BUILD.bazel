@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "traceapi",
+    srcs = ["traceapi.go"],
+    importpath = "github.com/stefanpenner/gha-analyzer/pkg/ingest/traceapi",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/ingest/otlpfile",
+        "@io_opentelemetry_go_otel_sdk//trace",
+    ],
+)
+
+go_test(
+    name = "traceapi_test",
+    srcs = ["traceapi_test.go"],
+    embed = [":traceapi"],
+)

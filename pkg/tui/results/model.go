@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
@@ -130,7 +131,7 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 	}
 
 	// Calculate summary statistics
-	m.summary = analyzer.CalculateSummary(spans)
+	m.summary = analyzer.CalculateSummary(spans, enrichment.DefaultEnricher())
 	m.wallTimeMs = globalEnd.Sub(globalStart).Milliseconds()
 	if m.wallTimeMs < 0 {
 		m.wallTimeMs = 0
@@ -144,7 +145,7 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 	m.displayedStepCount = m.stepCount
 
 	// Build tree from spans
-	m.roots = analyzer.BuildTreeFromSpans(spans, globalStart, globalEnd)
+	m.roots = analyzer.BuildTreeFromSpans(spans, globalStart, globalEnd, enrichment.DefaultEnricher())
 
 	// Expand URL groups + workflows for multi-URL, just workflows for single
 	if len(inputURLs) > 1 {
@@ -248,13 +249,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.globalEnd = msg.globalEnd
 		m.chartStart = msg.globalStart
 		m.chartEnd = msg.globalEnd
-		m.summary = analyzer.CalculateSummary(msg.spans)
+		m.summary = analyzer.CalculateSummary(msg.spans, enrichment.DefaultEnricher())
 		m.wallTimeMs = msg.globalEnd.Sub(msg.globalStart).Milliseconds()
 		if m.wallTimeMs < 0 {
 			m.wallTimeMs = 0
 		}
 		m.computeMs, m.stepCount = calculateComputeAndSteps(msg.spans)
-		m.roots = analyzer.BuildTreeFromSpans(msg.spans, msg.globalStart, msg.globalEnd)
+		m.roots = analyzer.BuildTreeFromSpans(msg.spans, msg.globalStart, msg.globalEnd, enrichment.DefaultEnricher())
 		m.expandedState = make(map[string]bool)
 		m.hiddenState = make(map[string]bool)
 		if len(m.inputURLs) > 1 {
@@ -1012,8 +1013,8 @@ func (m *Model) openCurrentItem() {
 	}
 
 	item := m.visibleItems[m.cursor]
-	if item.URL != "" {
-		_ = utils.OpenBrowser(item.URL)
+	if item.Hints.URL != "" {
+		_ = utils.OpenBrowser(item.Hints.URL)
 	}
 }
 
@@ -1421,13 +1422,13 @@ func (m *Model) recalculateChartBounds() {
 				if !workflowsSeen[item.Name] {
 					workflowsSeen[item.Name] = true
 					totalRuns++
-					if item.Conclusion == "success" {
+					if item.Hints.Outcome == "success" {
 						successfulRuns++
 					}
 				}
 			case ItemTypeJob:
 				totalJobs++
-				if item.Conclusion == "failure" {
+				if item.Hints.Outcome == "failure" {
 					failedJobs++
 				}
 				// Compute time is sum of job durations

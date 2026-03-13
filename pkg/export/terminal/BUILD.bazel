@@ -7,6 +7,7 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/analyzer",
+        "//pkg/enrichment",
         "@io_opentelemetry_go_otel_sdk//trace",
     ],
 )

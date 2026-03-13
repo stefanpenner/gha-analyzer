@@ -42,15 +42,6 @@ func (c *SpanCollector) Reset() {
 	c.spans = nil
 }
 
-// SpanType identifies the level of a span in the GHA hierarchy.
-type SpanType string
-
-const (
-	SpanTypeWorkflow SpanType = "workflow"
-	SpanTypeJob      SpanType = "job"
-	SpanTypeStep     SpanType = "step"
-)
-
 // Exporter interface for GHA analysis results.
 // We align this with OTel's SpanExporter but keep it simplified for our CLI needs.
 type Exporter interface {

@@ -376,8 +376,8 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 
 	// Build the name part
 	name := item.DisplayName
-	if item.User != "" && item.ItemType == ItemTypeMarker {
-		name = fmt.Sprintf("%s by %s", name, item.User)
+	if item.Hints.User != "" && item.Hints.IsMarker {
+		name = fmt.Sprintf("%s by %s", name, item.Hints.User)
 	}
 
 	// Build duration string separately (styled in gray)
@@ -447,7 +447,7 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 			displayName = highlightMatch(name, m.searchQuery, SearchCharStyle, SearchRowStyle)
 		}
 	}
-	displayName = hyperlink(item.URL, displayName)
+	displayName = hyperlink(item.Hints.URL, displayName)
 
 	// Build styled [end] badge
 	styledEndBadge := ""
@@ -529,15 +529,15 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 		// Render with dimmed colors and selection background
 		timelineBar = RenderTimelineBarSelected(item, m.chartStart, m.chartEnd, timelineW, "")
 	} else if isSearchMatch && hasCollapsedChildren {
-		timelineBar = renderTimelineBarWithChildrenBg(item, m.chartStart, m.chartEnd, timelineW, item.URL, SearchRowBgStyle)
+		timelineBar = renderTimelineBarWithChildrenBg(item, m.chartStart, m.chartEnd, timelineW, item.Hints.URL, SearchRowBgStyle)
 	} else if isSearchMatch {
 		// Search match: normal bar colors but with subtle row background on empty space
-		timelineBar = renderTimelineBarWithBg(item, m.chartStart, m.chartEnd, timelineW, item.URL, SearchRowBgStyle)
+		timelineBar = renderTimelineBarWithBg(item, m.chartStart, m.chartEnd, timelineW, item.Hints.URL, SearchRowBgStyle)
 	} else if hasCollapsedChildren {
-		timelineBar = RenderTimelineBarWithChildren(item, m.chartStart, m.chartEnd, timelineW, item.URL)
+		timelineBar = RenderTimelineBarWithChildren(item, m.chartStart, m.chartEnd, timelineW, item.Hints.URL)
 	} else {
 		// Normal: full colors, pass URL so bar is clickable
-		timelineBar = RenderTimelineBar(item, m.chartStart, m.chartEnd, timelineW, item.URL)
+		timelineBar = RenderTimelineBar(item, m.chartStart, m.chartEnd, timelineW, item.Hints.URL)
 	}
 
 	// Overlay logical end vertical line on the timeline bar
@@ -571,51 +571,33 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	return BorderStyle.Render("│") + treePart + midSep + timelineBar + BorderStyle.Render("│")
 }
 
-// getItemIcon returns the icon for an item type
-// All icons are normalized to display width 2 for consistent alignment
+// getItemIcon returns the icon for an item type.
+// Uses hints.Icon when available, falling back to type-based defaults for
+// synthetic items (URLGroup, ActivityGroup) that have no enrichment hints.
 func getItemIcon(item TreeItem) string {
 	switch item.ItemType {
 	case ItemTypeURLGroup:
 		return "🔗" // width 2
-	case ItemTypeWorkflow:
-		return "📋" // width 2
-	case ItemTypeJob:
-		return "⚙️" // width 2
-	case ItemTypeStep:
-		return "↳" // width 1, no padding needed for steps
 	case ItemTypeActivityGroup:
 		return "📌" // width 2
-	case ItemTypeMarker:
-		switch item.EventType {
-		case "merged":
-			return "◆ " // width 1 + 1 space = 2
-		case "approved":
-			return "▲ " // width 1 + 1 space = 2
-		case "comment", "commented":
-			return "● " // width 1 + 1 space = 2
-		case "changes_requested":
-			return "❌" // width 2
-		default:
-			return "▲ " // width 1 + 1 space = 2
-		}
 	default:
+		if item.Hints.Icon != "" {
+			return item.Hints.Icon
+		}
 		return "• " // width 1 + 1 space = 2
 	}
 }
 
-// getStatusIcon returns the status icon based on conclusion
+// getStatusIcon returns the status icon based on outcome
 func getStatusIcon(item TreeItem) string {
-	switch item.Status {
-	case "in_progress", "queued", "waiting":
+	switch item.Hints.Outcome {
+	case "pending":
 		return "◷"
-	}
-
-	switch item.Conclusion {
 	case "success":
 		return "✓"
 	case "failure":
 		return "✗"
-	case "skipped", "cancelled":
+	case "skipped":
 		return "○"
 	default:
 		return " "
@@ -624,17 +606,14 @@ func getStatusIcon(item TreeItem) string {
 
 // getStyledStatusIcon returns the status icon with color applied
 func getStyledStatusIcon(item TreeItem) string {
-	switch item.Status {
-	case "in_progress", "queued", "waiting":
+	switch item.Hints.Outcome {
+	case "pending":
 		return PendingStyle.Render("◷")
-	}
-
-	switch item.Conclusion {
 	case "success":
 		return SuccessStyle.Render("✓")
 	case "failure":
 		return FailureStyle.Render("✗")
-	case "skipped", "cancelled":
+	case "skipped":
 		return SkippedStyle.Render("○")
 	default:
 		return " "
@@ -644,17 +623,14 @@ func getStyledStatusIcon(item TreeItem) string {
 // getStyledStatusIconWithBg returns the status icon with color and background
 func getStyledStatusIconWithBg(item TreeItem, bg lipgloss.Color) string {
 	bgStyle := lipgloss.NewStyle().Background(bg)
-	switch item.Status {
-	case "in_progress", "queued", "waiting":
+	switch item.Hints.Outcome {
+	case "pending":
 		return PendingStyle.Background(bg).Render("◷")
-	}
-
-	switch item.Conclusion {
 	case "success":
 		return SuccessStyle.Background(bg).Render("✓")
 	case "failure":
 		return FailureStyle.Background(bg).Render("✗")
-	case "skipped", "cancelled":
+	case "skipped":
 		return SkippedStyle.Background(bg).Render("○")
 	default:
 		return bgStyle.Render(" ")
@@ -664,7 +640,7 @@ func getStyledStatusIconWithBg(item TreeItem, bg lipgloss.Color) string {
 // getBadges returns badges for required and bottleneck status
 func getBadges(item TreeItem) string {
 	badges := ""
-	if item.IsRequired {
+	if item.Hints.IsRequired {
 		badges += " 🔒"
 	}
 	if item.IsBottleneck {
@@ -853,13 +829,10 @@ func (m Model) renderDetailModal(maxHeight, maxWidth int) (string, int) {
 
 	// Status
 	lines = append(lines, ModalTitleStyle.Render("── Status ──"))
-	if item.Status != "" {
-		addRow("Status:", item.Status)
+	if item.Hints.Outcome != "" {
+		addRow("Outcome:", item.Hints.Outcome)
 	}
-	if item.Conclusion != "" {
-		addRow("Conclusion:", item.Conclusion)
-	}
-	if item.IsRequired {
+	if item.Hints.IsRequired {
 		addRow("Is Required:", "Yes")
 	} else {
 		addRow("Is Required:", "No")
@@ -872,21 +845,21 @@ func (m Model) renderDetailModal(maxHeight, maxWidth int) (string, int) {
 	lines = append(lines, "")
 
 	// Links
-	if item.URL != "" {
+	if item.Hints.URL != "" {
 		lines = append(lines, ModalTitleStyle.Render("── Links ──"))
-		linkedURL := hyperlink(item.URL, item.URL)
+		linkedURL := hyperlink(item.Hints.URL, item.Hints.URL)
 		lines = append(lines, ModalLabelStyle.Render("URL:")+linkedURL)
 		lines = append(lines, "")
 	}
 
 	// Marker-specific fields
-	if item.ItemType == ItemTypeMarker {
+	if item.Hints.IsMarker {
 		lines = append(lines, ModalTitleStyle.Render("── Marker ──"))
-		if item.User != "" {
-			addRow("User:", item.User)
+		if item.Hints.User != "" {
+			addRow("User:", item.Hints.User)
 		}
-		if item.EventType != "" {
-			addRow("Event Type:", item.EventType)
+		if item.Hints.EventType != "" {
+			addRow("Event Type:", item.Hints.EventType)
 		}
 		lines = append(lines, "")
 	}
