@@ -80,8 +80,9 @@ func ParseFile(path string) ([]sdktrace.ReadOnlySpan, error) {
 }
 
 // Parse reads OTel span JSON from a reader and returns ReadOnlySpans.
-// Auto-detects format: if the content contains "resourceSpans" it's parsed as
-// OTLP protobuf-JSON, otherwise as stdouttrace (newline-delimited or array).
+// Auto-detects format: OTLP protobuf-JSON ("resourceSpans"), Chrome Tracing
+// ("traceEvents"/"ph"), flat JSON ("ParentSpanID" with map-style attributes),
+// or stdouttrace (newline-delimited/array).
 func Parse(r io.Reader) ([]sdktrace.ReadOnlySpan, error) {
 	// Read all content so we can inspect it for format detection.
 	data, err := io.ReadAll(r)
@@ -98,6 +99,11 @@ func Parse(r io.Reader) ([]sdktrace.ReadOnlySpan, error) {
 	// "ph" field (event phase indicator unique to Chrome Tracing).
 	if bytes.Contains(data, []byte(`"traceEvents"`)) || looksLikeChromeTrace(data) {
 		return ParseChrome(bytes.NewReader(data))
+	}
+
+	// Detect flat JSON format: has "ParentSpanID" (stdouttrace uses "Parent").
+	if bytes.Contains(data, []byte(`"ParentSpanID"`)) {
+		return parseFlatJSON(data)
 	}
 
 	return parseStdout(bytes.NewReader(data))
@@ -278,4 +284,155 @@ func trimSpace(b []byte) []byte {
 		end--
 	}
 	return b[start:end]
+}
+
+// flatSpan is the JSON structure used by some Go OTel exporters that serialize
+// attributes as a plain map and use "ParentSpanID" instead of a "Parent" object.
+type flatSpan struct {
+	Name         string                 `json:"Name"`
+	SpanContext  spanContextJSON        `json:"SpanContext"`
+	ParentSpanID string                 `json:"ParentSpanID"`
+	SpanKind     int                    `json:"SpanKind"`
+	StartTime    time.Time              `json:"StartTime"`
+	EndTime      time.Time              `json:"EndTime"`
+	Attributes   map[string]interface{} `json:"Attributes"`
+	Events       []flatEventJSON        `json:"Events"`
+	Status       statusJSON             `json:"Status"`
+	Resource     map[string]interface{} `json:"Resource"`
+}
+
+type flatEventJSON struct {
+	Name       string                 `json:"Name"`
+	Attributes map[string]interface{} `json:"Attributes"`
+	Time       time.Time              `json:"Time"`
+}
+
+// parseFlatJSON parses spans with flat attribute maps and "ParentSpanID".
+// Supports a single object, newline-delimited objects, or a JSON array.
+func parseFlatJSON(data []byte) ([]sdktrace.ReadOnlySpan, error) {
+	var stubs tracetest.SpanStubs
+
+	// Try single object first.
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '{' {
+		var raw flatSpan
+		if err := json.Unmarshal(trimmed, &raw); err == nil {
+			if stub, err := convertFlatToStub(raw); err == nil {
+				stubs = append(stubs, stub)
+				return stubs.Snapshots(), nil
+			}
+		}
+	}
+
+	// Try JSON array.
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var raws []flatSpan
+		if err := json.Unmarshal(trimmed, &raws); err == nil {
+			for _, raw := range raws {
+				if stub, err := convertFlatToStub(raw); err == nil {
+					stubs = append(stubs, stub)
+				}
+			}
+			return stubs.Snapshots(), nil
+		}
+	}
+
+	// Fall back to newline-delimited.
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+	for scanner.Scan() {
+		line := trimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		if line[len(line)-1] == ',' {
+			line = line[:len(line)-1]
+		}
+		var raw flatSpan
+		if err := json.Unmarshal(line, &raw); err != nil {
+			continue
+		}
+		if stub, err := convertFlatToStub(raw); err == nil {
+			stubs = append(stubs, stub)
+		}
+	}
+	return stubs.Snapshots(), nil
+}
+
+func convertFlatToStub(raw flatSpan) (tracetest.SpanStub, error) {
+	sc, err := parseSpanContext(raw.SpanContext)
+	if err != nil {
+		return tracetest.SpanStub{}, err
+	}
+
+	// Build parent span context from ParentSpanID + same TraceID.
+	var parent trace.SpanContext
+	if raw.ParentSpanID != "" && raw.ParentSpanID != "0000000000000000" {
+		parentSpanID, err := trace.SpanIDFromHex(raw.ParentSpanID)
+		if err == nil {
+			parent = trace.NewSpanContext(trace.SpanContextConfig{
+				TraceID:    sc.TraceID(),
+				SpanID:     parentSpanID,
+				TraceFlags: trace.FlagsSampled,
+			})
+		}
+	}
+
+	attrs := convertFlatAttrs(raw.Attributes)
+
+	// Add resource attributes with "resource." prefix.
+	for k, v := range raw.Resource {
+		attrs = append(attrs, flatAttr("resource."+k, v))
+	}
+
+	status := StatusFromCode(raw.Status.Code, raw.Status.Description)
+
+	var events []sdktrace.Event
+	for _, e := range raw.Events {
+		events = append(events, sdktrace.Event{
+			Name:       e.Name,
+			Attributes: convertFlatAttrs(e.Attributes),
+			Time:       e.Time,
+		})
+	}
+
+	return tracetest.SpanStub{
+		Name:        raw.Name,
+		SpanContext: sc,
+		Parent:      parent,
+		SpanKind:    trace.SpanKind(raw.SpanKind),
+		StartTime:   raw.StartTime,
+		EndTime:     raw.EndTime,
+		Attributes:  attrs,
+		Events:      events,
+		Status:      status,
+	}, nil
+}
+
+func convertFlatAttrs(m map[string]interface{}) []attribute.KeyValue {
+	var result []attribute.KeyValue
+	for k, v := range m {
+		result = append(result, flatAttr(k, v))
+	}
+	return result
+}
+
+// flatAttr converts a key and an untyped JSON value to an attribute.KeyValue,
+// inferring the type from the Go type that encoding/json produces.
+func flatAttr(k string, v interface{}) attribute.KeyValue {
+	key := attribute.Key(k)
+	switch val := v.(type) {
+	case string:
+		return key.String(val)
+	case float64:
+		// JSON numbers are float64; use int if it's a whole number.
+		if val == float64(int64(val)) {
+			return key.Int64(int64(val))
+		}
+		return key.Float64(val)
+	case bool:
+		return key.Bool(val)
+	default:
+		return key.String(fmt.Sprintf("%v", v))
+	}
 }

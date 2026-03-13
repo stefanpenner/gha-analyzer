@@ -166,7 +166,46 @@ func (m Model) renderHeader() string {
 
 	line3 := buildLine(leftStyled3, leftPlain3, rightStyled3, rightPlain3)
 
-	// Line 4: URL
+	// Line 4: Queue + Retry + Billable (conditional)
+	line4 := ""
+	{
+		var parts []string
+		var partsPlain []string
+
+		// Queue time
+		if m.displayedSummary.QueueCount > 0 {
+			avgQ := utils.HumanizeTime(m.displayedSummary.AvgQueueTimeMs / 1000)
+			maxQ := utils.HumanizeTime(m.displayedSummary.MaxQueueTimeMs / 1000)
+			parts = append(parts, HeaderCountStyle.Render("Queue: avg ")+numStyle.Render(avgQ)+HeaderCountStyle.Render(" / max ")+numStyle.Render(maxQ))
+			partsPlain = append(partsPlain, fmt.Sprintf("Queue: avg %s / max %s", avgQ, maxQ))
+		}
+
+		// Retry rate
+		if m.displayedSummary.RetriedRuns > 0 && m.displayedSummary.TotalRuns > 0 {
+			retryPct := fmt.Sprintf("%.0f%%", float64(m.displayedSummary.RetriedRuns)/float64(m.displayedSummary.TotalRuns)*100)
+			parts = append(parts, HeaderCountStyle.Render("Retries: ")+numStyle.Render(retryPct))
+			partsPlain = append(partsPlain, fmt.Sprintf("Retries: %s", retryPct))
+		}
+
+		// Billable total
+		var totalBillableMs int64
+		for _, ms := range m.displayedSummary.BillableMs {
+			totalBillableMs += ms
+		}
+		if totalBillableMs > 0 {
+			billStr := utils.HumanizeTime(float64(totalBillableMs) / 1000)
+			parts = append(parts, HeaderCountStyle.Render("Billable: ")+numStyle.Render(billStr))
+			partsPlain = append(partsPlain, fmt.Sprintf("Billable: %s", billStr))
+		}
+
+		if len(parts) > 0 {
+			styled4 := strings.Join(parts, sep)
+			plain4 := strings.Join(partsPlain, " • ")
+			line4 = "\n" + buildLeftLine(styled4, plain4)
+		}
+	}
+
+	// URL lines
 	lineURL := ""
 	for _, inputURL := range m.inputURLs {
 		urlText := inputURL
@@ -178,7 +217,7 @@ func (m Model) renderHeader() string {
 		lineURL += "\n" + buildLeftLine(linkedURL, urlText)
 	}
 
-	return topBorder + "\n" + line1 + "\n" + line2 + "\n" + line3 + lineURL
+	return topBorder + "\n" + line1 + "\n" + line2 + "\n" + line3 + line4 + lineURL
 }
 
 // renderTimeAxis renders the time axis row that sits above the timeline

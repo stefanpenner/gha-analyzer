@@ -520,6 +520,143 @@ func TestParseChromeTraceSkipsMetadata(t *testing.T) {
 	}
 }
 
+func TestParseFlatJSONSingleObject(t *testing.T) {
+	input := `{
+		"Name": "GET /user",
+		"SpanContext": {
+			"TraceID": "384719368474cf130bdd39cffbe0781f",
+			"SpanID": "eb123f7615b18f36",
+			"TraceFlags": "01"
+		},
+		"ParentSpanID": "0000000000000000",
+		"SpanKind": 2,
+		"StartTime": "2026-03-12T10:00:00.123456Z",
+		"EndTime": "2026-03-12T10:00:00.125678Z",
+		"Attributes": {
+			"http.method": "GET",
+			"http.route": "/user",
+			"http.status_code": 200,
+			"net.peer.ip": "192.168.1.10"
+		},
+		"Events": [
+			{
+				"Name": "database_query",
+				"Attributes": {
+					"db.statement": "SELECT * FROM users WHERE id = 1"
+				},
+				"Time": "2026-03-12T10:00:00.124000Z"
+			}
+		],
+		"Resource": {
+			"service.name": "user-service",
+			"service.version": "1.2.0"
+		},
+		"Status": {
+			"Code": "Ok"
+		}
+	}`
+
+	spans, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+
+	s := spans[0]
+	if s.Name() != "GET /user" {
+		t.Errorf("name = %q, want %q", s.Name(), "GET /user")
+	}
+	if s.SpanContext().TraceID().String() != "384719368474cf130bdd39cffbe0781f" {
+		t.Errorf("traceID = %q", s.SpanContext().TraceID().String())
+	}
+	// ParentSpanID all zeros → no parent
+	if s.Parent().SpanID().IsValid() {
+		t.Errorf("expected invalid parent for all-zero ParentSpanID")
+	}
+
+	// Check attributes
+	attrMap := make(map[string]string)
+	for _, a := range s.Attributes() {
+		attrMap[string(a.Key)] = a.Value.Emit()
+	}
+	if attrMap["http.method"] != "GET" {
+		t.Errorf("http.method = %q, want %q", attrMap["http.method"], "GET")
+	}
+	if attrMap["http.status_code"] != "200" {
+		t.Errorf("http.status_code = %q, want %q", attrMap["http.status_code"], "200")
+	}
+	if attrMap["resource.service.name"] != "user-service" {
+		t.Errorf("resource.service.name = %q, want %q", attrMap["resource.service.name"], "user-service")
+	}
+
+	// Check events
+	events := s.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Name != "database_query" {
+		t.Errorf("event name = %q", events[0].Name)
+	}
+	var foundStmt bool
+	for _, a := range events[0].Attributes {
+		if string(a.Key) == "db.statement" {
+			foundStmt = true
+		}
+	}
+	if !foundStmt {
+		t.Errorf("missing db.statement event attribute")
+	}
+
+	// Check status
+	if s.Status().Code.String() != "Ok" {
+		t.Errorf("status = %v, want Ok", s.Status().Code)
+	}
+}
+
+func TestParseFlatJSONWithParent(t *testing.T) {
+	input := `[
+		{
+			"Name": "root",
+			"SpanContext": {"TraceID": "384719368474cf130bdd39cffbe0781f", "SpanID": "eb123f7615b18f36", "TraceFlags": "01"},
+			"ParentSpanID": "0000000000000000",
+			"SpanKind": 1,
+			"StartTime": "2026-03-12T10:00:00Z",
+			"EndTime": "2026-03-12T10:00:01Z",
+			"Attributes": {},
+			"Status": {"Code": ""}
+		},
+		{
+			"Name": "child",
+			"SpanContext": {"TraceID": "384719368474cf130bdd39cffbe0781f", "SpanID": "aa00bb11cc22dd33", "TraceFlags": "01"},
+			"ParentSpanID": "eb123f7615b18f36",
+			"SpanKind": 1,
+			"StartTime": "2026-03-12T10:00:00.1Z",
+			"EndTime": "2026-03-12T10:00:00.5Z",
+			"Attributes": {"custom.tag": "hello"},
+			"Status": {"Code": ""}
+		}
+	]`
+
+	spans, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if len(spans) != 2 {
+		t.Fatalf("expected 2 spans, got %d", len(spans))
+	}
+
+	// Child should have parent pointing to root
+	child := spans[1]
+	if child.Name() != "child" {
+		t.Errorf("span[1] name = %q, want %q", child.Name(), "child")
+	}
+	if child.Parent().SpanID().String() != "eb123f7615b18f36" {
+		t.Errorf("child parent spanID = %q, want %q", child.Parent().SpanID().String(), "eb123f7615b18f36")
+	}
+}
+
 func TestStatusFromCode(t *testing.T) {
 	tests := []struct {
 		code string

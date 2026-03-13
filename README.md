@@ -1,104 +1,103 @@
-# GitHub Actions Analyzer
+<p align="center">
+  <strong>gha-analyzer</strong><br>
+  See where your GitHub Actions time actually goes.
+</p>
 
-Analyze GitHub Actions performance and visualize workflow timelines directly in your terminal or [Perfetto UI](https://ui.perfetto.dev).
+<p align="center">
+  <a href="#install">Install</a> &middot;
+  <a href="#quick-start">Quick Start</a> &middot;
+  <a href="#features">Features</a> &middot;
+  <a href="#trends">Trends</a> &middot;
+  <a href="#opentelemetry">OpenTelemetry</a>
+</p>
 
-![TUI Screenshot](docs/tui-screenshot.jpeg)
+---
+
+An interactive terminal tool that turns GitHub Actions runs into navigable timelines — so you can find the slow jobs, the flaky tests, and the queue-time bottlenecks without clicking through the GitHub UI.
+
+![Interactive TUI with timeline visualization](docs/tui-screenshot.jpeg)
 
 ## Install
-
-### Homebrew
 
 ```bash
 brew install stefanpenner/tap/gha-analyzer
 ```
 
-### Go
+Or with Go:
 
 ```bash
 go install github.com/stefanpenner/gha-analyzer/cmd/gha-analyzer@latest
 ```
 
-## Authentication
+## Quick Start
 
-If you have the [GitHub CLI](https://cli.github.com/) installed and authenticated (`gh auth login`), the token is picked up automatically — no extra setup needed.
+Point it at any PR or commit:
 
-Otherwise, set `GITHUB_TOKEN`:
+```bash
+gha-analyzer nodejs/node/pull/60369
+```
+
+That's it. If you have [GitHub CLI](https://cli.github.com/) installed and authenticated, the token is picked up automatically. Otherwise:
 
 ```bash
 export GITHUB_TOKEN="your_token_here"
 ```
 
-## Usage
+## Features
+
+### Interactive TUI
+
+The default view is a full-screen terminal UI with a tree of workflows, jobs, and steps on the left and a Gantt-style timeline on the right. Navigate with arrow keys or vim bindings, expand/collapse nodes, multi-select ranges, search, and drill into details.
+
+### Perfetto Export
+
+Export any analysis as a [Perfetto](https://ui.perfetto.dev) trace for deep-dive visualization with full zoom, search, and flame-chart views:
 
 ```bash
-# Analyze a PR or Commit
-gha-analyzer nodejs/node/pull/60369
-
-# Save and open in Perfetto UI
 gha-analyzer <url> --perfetto=trace.json --open-in-perfetto
-
-# Filter to recent activity
-gha-analyzer <url> --window=1h
 ```
 
-## Historical Trend Analysis
+### Trace Backend Integration
 
-Analyze workflow performance trends over time to identify patterns, flaky jobs, and performance regressions:
+Pull traces directly from Grafana Tempo or Jaeger:
 
 ```bash
-# Analyze trends for the last 30 days (default)
-gha-analyzer trends owner/repo
-
-# Analyze trends for a specific time period
-gha-analyzer trends owner/repo --days=7
-
-# Filter by branch (e.g., only main branch workflows)
-gha-analyzer trends owner/repo --branch=main
-
-# Filter by workflow file (e.g., only post-merge workflows)
-gha-analyzer trends owner/repo --workflow=post-merge.yaml
-
-# Combine filters for focused analysis
-gha-analyzer trends owner/repo --days=14 --branch=main --workflow=ci.yaml
-
-# Export as JSON for programmatic analysis
-gha-analyzer trends owner/repo --days=14 --format=json
+gha-analyzer --tempo=http://localhost:3200 --trace-id=abc123
+gha-analyzer --jaeger=http://localhost:16686 --trace-id=abc123
 ```
 
-Trend analysis provides:
-- **Summary Statistics**: Average, median, and 95th percentile durations
-- **Success Rate Trends**: Track workflow reliability over time
-- **Duration Trends**: Visualize performance changes with ASCII charts
-- **Job Performance**: Identify slowest jobs and their trends
-- **Flaky Job Detection**: Automatically detect jobs with inconsistent outcomes (>10% failure rate)
-- **Trend Direction**: See if performance is improving, stable, or degrading
+### Webhook Input
 
-### Sampling
-
-For large repositories, fetching job details for every workflow run is expensive (1 API call per run). Trend analysis uses **job-level statistical sampling** to reduce API usage while maintaining accuracy.
-
-**How it works**: All workflow runs are always fetched (cheap — 1 call per 100 runs), so run-level metrics (duration trends, success rates) are exact. Job detail fetching uses **stratified temporal sampling** — runs are bucketed into equal-width time intervals and samples are drawn proportionally from each bucket, guaranteeing even temporal coverage. Sample size is computed using a finite-population formula at 95% confidence with ±10% margin of error. For example, a repo with 1,000 runs in 30 days will fetch job details for ~88 runs instead of all 1,000.
-
-**What's affected**: Job-level analysis (per-job trends, regressions, improvements, flaky detection, queue times) uses the sampled subset. Rare jobs with only a few runs may not appear in sampled results. Trend directions for borderline jobs may vary between runs.
-
-**What's not affected**: Total run count, average/median/p95 duration, success rate, and overall trend direction are always computed from the full dataset.
+Pipe a GitHub Actions webhook payload to analyze the associated commit — useful for CI-triggered analysis:
 
 ```bash
-# Default: sampling enabled (95% confidence, ±10% margin)
-gha-analyzer trends owner/repo --days=30
-
-# Disable sampling for exact results (more API calls)
-gha-analyzer trends owner/repo --days=30 --no-sample
-
-# Tune confidence and margin
-gha-analyzer trends owner/repo --confidence=0.99 --margin=0.05
+echo '{"workflow_run":{"head_sha":"abc123"},"repository":{"full_name":"owner/repo"}}' \
+  | gha-analyzer --otel
 ```
 
-### Sample Output
+### Enrichment
+
+Beyond raw timings, the analyzer enriches spans with:
+
+- **Queue time** — how long jobs waited for a runner
+- **Runner distribution** — which runners ran which jobs
+- **Billable minutes** — computed cost breakdown
+- **Retry detection** — identifies re-run jobs and counts attempts
+- **PR annotations** — review approvals, comments, merge events shown as markers on the timeline
+
+## Trends
+
+Analyze workflow performance over time to spot regressions, flaky jobs, and slow-downs:
+
+```bash
+gha-analyzer trends owner/repo                          # last 30 days
+gha-analyzer trends owner/repo --days=7 --branch=main   # scoped
+gha-analyzer trends owner/repo --format=json             # machine-readable
+```
 
 ```
 ================================================================================
-📈 Historical Trend Analysis: stefanpenner/gha-analyzer
+  Historical Trend Analysis: stefanpenner/gha-analyzer
 ================================================================================
 
 Summary Statistics
@@ -107,50 +106,47 @@ Average Duration                        1m 46s
 Median Duration                         1m 41s
 95th Percentile                         3m 13s
 Average Success Rate                     61.7%
-Trend Direction           ✓ Improving (-20.7%)
+Trend Direction           Improving (-20.7%)
 Flaky Jobs Detected                          1
 ```
 
-## OTel Output
+Trend analysis covers success rates, duration percentiles, per-job breakdowns, flaky detection (>10% failure rate), and trend direction. For large repos, it uses stratified temporal sampling to keep API usage reasonable — run-level metrics are always exact, job-level analysis is sampled at 95% confidence / ±10% margin by default.
 
 ```bash
-# JSON spans to stdout (agent-readable JSONL)
+gha-analyzer trends owner/repo --no-sample               # exact, more API calls
+gha-analyzer trends owner/repo --confidence=0.99 --margin=0.05  # tune sampling
+```
+
+## OpenTelemetry
+
+Export workflow data as OpenTelemetry spans — feed them into any observability stack:
+
+```bash
+# JSON spans to stdout
 gha-analyzer <url> --otel
 
-# Export via OTLP/HTTP
+# OTLP/HTTP
 gha-analyzer <url> --otel=localhost:4318
 
-# Export via OTLP/gRPC
-gha-analyzer <url> --otel-grpc
+# OTLP/gRPC
 gha-analyzer <url> --otel-grpc=localhost:4317
 ```
 
-## Webhook Input
-
-Pipe a GitHub Actions webhook payload on stdin to analyze the associated commit:
+You can also **ingest** OTel trace files:
 
 ```bash
-echo '{"workflow_run":{"head_sha":"abc123"},"repository":{"full_name":"owner/repo"}}' | gha-analyzer --otel
+gha-analyzer --trace=spans.json
 ```
-
-Supports `workflow_run` and `workflow_job` events. When no URL arguments are given and stdin is piped, the webhook is read automatically.
 
 ## Development
 
-The project uses [Bazel](https://bazel.build/) for hermetic builds.
+Built with [Bazel](https://bazel.build/) for hermetic, reproducible builds.
 
 ```bash
-# Run the analyzer
-bazel run //:gha-analyzer -- <url>
-
-# Build everything
-bazel build //...
-
-# Run all tests
-bazel test //...
-
-# Regenerate BUILD.bazel files after adding Go packages
-bazel run //:gazelle
+bazel run //:gha-analyzer -- <url>   # run
+bazel build //...                     # build all
+bazel test //...                      # test all
+bazel run //:gazelle                  # regenerate BUILD files
 ```
 
 ## License
