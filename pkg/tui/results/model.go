@@ -586,6 +586,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.Action == tea.MouseActionRelease {
 				// Calculate which row was clicked
 				headerLines := 8
+				if m.hasEnrichmentLine() {
+					headerLines++
+				}
 				clickedRow := msg.Y - headerLines
 
 				// Calculate scroll offset
@@ -645,6 +648,9 @@ func (m Model) View() string {
 	// Calculate available height for items
 	headerLines := 9 // header box (6 lines) + 1 newline + time axis + 1 blank line
 	footerLines := 3 // blank line + help line + bottom border
+	if m.hasEnrichmentLine() {
+		headerLines++ // queue/retry/billable line
+	}
 	searchActive := m.isSearching || m.searchQuery != ""
 	if searchActive {
 		headerLines++ // search bar takes one line
@@ -1453,13 +1459,18 @@ func (m *Model) recalculateChartBounds() {
 		m.displayedComputeMs = m.computeMs
 		m.displayedStepCount = m.stepCount
 	} else {
-		// Update displayed stats
+		// Update displayed stats (preserve enrichment metrics from full summary)
 		m.displayedSummary = analyzer.Summary{
 			TotalRuns:      totalRuns,
 			SuccessfulRuns: successfulRuns,
 			TotalJobs:      totalJobs,
 			FailedJobs:     failedJobs,
-			MaxConcurrency: m.summary.MaxConcurrency, // Keep original concurrency
+			MaxConcurrency: m.summary.MaxConcurrency,
+			AvgQueueTimeMs: m.summary.AvgQueueTimeMs,
+			MaxQueueTimeMs: m.summary.MaxQueueTimeMs,
+			QueueCount:     m.summary.QueueCount,
+			RetriedRuns:    m.summary.RetriedRuns,
+			BillableMs:     m.summary.BillableMs,
 		}
 		m.displayedStepCount = stepCount
 		m.displayedComputeMs = computeMs
@@ -1476,6 +1487,22 @@ func (m *Model) recalculateChartBounds() {
 	if m.displayedWallTimeMs < 0 {
 		m.displayedWallTimeMs = 0
 	}
+}
+
+// hasEnrichmentLine returns true if the header should show the queue/retry/billable line.
+func (m Model) hasEnrichmentLine() bool {
+	if m.displayedSummary.QueueCount > 0 {
+		return true
+	}
+	if m.displayedSummary.RetriedRuns > 0 {
+		return true
+	}
+	for _, ms := range m.displayedSummary.BillableMs {
+		if ms > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // IsHidden returns whether an item is hidden from the chart
