@@ -2,6 +2,7 @@ package results
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -618,6 +619,9 @@ func getItemIcon(item TreeItem) string {
 	case ItemTypeURLGroup:
 		return "🔗" // width 2
 	case ItemTypeActivityGroup:
+		if item.Hints.Icon != "" {
+			return item.Hints.Icon
+		}
 		return "📌" // width 2
 	default:
 		if item.Hints.Icon != "" {
@@ -899,6 +903,24 @@ func (m Model) renderDetailModal(maxHeight, maxWidth int) (string, int) {
 		}
 		if item.Hints.EventType != "" {
 			addRow("Event Type:", item.Hints.EventType)
+		}
+		lines = append(lines, "")
+	}
+
+	// Span Attributes (from source node)
+	if item.sourceNode != nil && len(item.sourceNode.Attrs) > 0 {
+		lines = append(lines, ModalTitleStyle.Render("── Attributes ──"))
+		// Sort keys for stable display
+		keys := make([]string, 0, len(item.sourceNode.Attrs))
+		for k := range item.sourceNode.Attrs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			v := item.sourceNode.Attrs[k]
+			if v != "" {
+				addRow(k+":", v)
+			}
 		}
 		lines = append(lines, "")
 	}

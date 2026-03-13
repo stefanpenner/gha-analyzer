@@ -6,16 +6,22 @@ go_library(
         "chrome.go",
         "otlpfile.go",
         "proto.go",
+        "protobuf.go",
         "span.go",
+        "zipkin.go",
     ],
     importpath = "github.com/stefanpenner/gha-analyzer/pkg/ingest/otlpfile",
     visibility = ["//visibility:public"],
     deps = [
+        "@com_github_klauspost_compress//zstd",
         "@io_opentelemetry_go_otel//attribute",
         "@io_opentelemetry_go_otel//codes",
         "@io_opentelemetry_go_otel_sdk//trace",
         "@io_opentelemetry_go_otel_sdk//trace/tracetest",
         "@io_opentelemetry_go_otel_trace//:trace",
+        "@io_opentelemetry_go_proto_otlp//common/v1:common",
+        "@io_opentelemetry_go_proto_otlp//trace/v1:trace",
+        "@org_golang_google_protobuf//proto",
     ],
 )
 
@@ -23,4 +29,14 @@ go_test(
     name = "otlpfile_test",
     srcs = ["otlpfile_test.go"],
     embed = [":otlpfile"],
+    deps = [
+        "@com_github_klauspost_compress//zstd",
+        "@com_github_stretchr_testify//assert",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_trace//:trace",
+        "@io_opentelemetry_go_proto_otlp//common/v1:common",
+        "@io_opentelemetry_go_proto_otlp//resource/v1:resource",
+        "@io_opentelemetry_go_proto_otlp//trace/v1:trace",
+        "@org_golang_google_protobuf//proto",
+    ],
 )

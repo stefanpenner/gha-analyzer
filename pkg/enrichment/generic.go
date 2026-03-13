@@ -33,6 +33,11 @@ func (e *GenericEnricher) Enrich(name string, attrs map[string]string, isZeroDur
 		h.Color = "red"
 	}
 
+	// Artifact trace spans get grouped under their parent workflow
+	if artifactName, ok := attrs["github.artifact_name"]; ok && artifactName != "" {
+		h.GroupKey = "artifact"
+	}
+
 	// Use span kind for icon variation
 	spanKind := attrs["otel.span_kind"]
 	switch spanKind {

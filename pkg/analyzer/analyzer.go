@@ -429,7 +429,7 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 
 	// Ingest trace artifacts (best-effort)
 	if !opts.NoArtifacts {
-		_ = IngestTraceArtifacts(ctx, client, run.Repository.Owner.Login, run.Repository.Name, run.ID, builder)
+		_ = IngestTraceArtifacts(ctx, client, run.Repository.Owner.Login, run.Repository.Name, run.ID, builder, urlIndex, wfSC)
 	}
 
 	// Build workflow span stub (after processing jobs so runEnd may be adjusted)

@@ -9,13 +9,16 @@ import (
 
 	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
 	"github.com/stefanpenner/gha-analyzer/pkg/ingest/otlpfile"
+	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // IngestTraceArtifacts downloads artifacts matching "gha-trace.*" from a workflow run,
 // parses them as OTLP JSON or Chrome trace format, and adds spans to the builder.
-func IngestTraceArtifacts(ctx context.Context, client githubapi.GitHubProvider, owner, repo string, runID int64, builder *SpanBuilder) error {
+// Artifact root spans are re-parented under parentSC so they appear as children of the workflow.
+func IngestTraceArtifacts(ctx context.Context, client githubapi.GitHubProvider, owner, repo string, runID int64, builder *SpanBuilder, urlIndex int, parentSC oteltrace.SpanContext) error {
 	artifacts, err := client.ListArtifacts(ctx, owner, repo, runID)
 	if err != nil {
 		return nil // best-effort
@@ -39,16 +42,33 @@ func IngestTraceArtifacts(ctx context.Context, client githubapi.GitHubProvider, 
 			continue // best-effort
 		}
 
-		// Convert ReadOnlySpans to SpanStubs and add to builder
+		// Build a set of span IDs in this artifact to identify root spans
+		spanIDs := make(map[oteltrace.SpanID]bool)
 		for _, s := range spans {
+			spanIDs[s.SpanContext().SpanID()] = true
+		}
+
+		// Convert ReadOnlySpans to SpanStubs with url_index and artifact tagging
+		for _, s := range spans {
+			parent := s.Parent()
+			// Re-parent orphaned roots under the workflow span
+			if !parent.SpanID().IsValid() || !spanIDs[parent.SpanID()] {
+				parent = parentSC
+			}
+
+			attrs := append(s.Attributes(),
+				attribute.Int("github.url_index", urlIndex),
+				attribute.String("github.artifact_name", artifact.Name),
+			)
+
 			builder.Add(tracetest.SpanStub{
 				Name:        s.Name(),
 				SpanContext: s.SpanContext(),
-				Parent:      s.Parent(),
+				Parent:      parent,
 				SpanKind:    s.SpanKind(),
 				StartTime:   s.StartTime(),
 				EndTime:     s.EndTime(),
-				Attributes:  s.Attributes(),
+				Attributes:  attrs,
 				Events:      s.Events(),
 				Links:       s.Links(),
 				Status:      s.Status(),
