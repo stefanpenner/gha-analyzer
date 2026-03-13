@@ -25,7 +25,6 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/tui"
 	tuiresults "github.com/stefanpenner/gha-analyzer/pkg/tui/results"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
-	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -401,18 +400,7 @@ func main() {
 
 	ctx := context.Background()
 
-	// 2. Setup OTel
-	collector := core.NewSpanCollector()
-	res, _ := otelexport.GetResource(ctx)
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(collector),
-		sdktrace.WithResource(res),
-		sdktrace.WithIDGenerator(githubapi.GHIDGenerator{}),
-	)
-	otel.SetTracerProvider(tp)
-	defer tp.Shutdown(ctx)
-
-	// 3. Setup Exporters
+	// 2. Setup Exporters
 	exporters := []core.Exporter{
 		terminal.NewExporter(os.Stderr),
 	}
@@ -456,7 +444,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Loaded %d spans from %s\n", len(fileSpans), tf)
 	}
 
-	// 5. Fetch traces from backends (Tempo/Jaeger)
+	// 4. Fetch traces from backends (Tempo/Jaeger)
 	if hasTraceBackend && len(cfg.traceIDs) > 0 {
 		var backendURL string
 		var backendName string
@@ -480,9 +468,10 @@ func main() {
 		}
 	}
 
-	// 6. Run GHA Ingestor (only when URLs are provided)
+	// 5. Run GHA Ingestor (only when URLs are provided)
 	var results []analyzer.URLResult
 	var globalEarliest, globalLatest int64
+	var ghaSpans []sdktrace.ReadOnlySpan
 	if len(args) > 0 {
 		client := githubapi.NewClient(githubapi.NewContext(token))
 		progress := tui.NewProgress(len(args), os.Stderr)
@@ -492,7 +481,7 @@ func main() {
 			Window: cfg.window,
 		})
 		var err error
-		results, globalEarliest, globalLatest, err = ingestor.Ingest(ctx)
+		results, globalEarliest, globalLatest, ghaSpans, err = ingestor.Ingest(ctx)
 
 		progress.Finish()
 		progress.Wait()
@@ -503,23 +492,17 @@ func main() {
 		}
 	}
 
-	// 6. Finalize & Process Spans
-	tp.ForceFlush(ctx)
-	spans := collector.Spans()
-
-	// Merge trace file spans with collected spans
-	if len(traceSpans) > 0 {
-		spans = append(spans, traceSpans...)
-		// Update global time bounds from trace spans
-		for _, s := range traceSpans {
-			startMs := s.StartTime().UnixMilli()
-			endMs := s.EndTime().UnixMilli()
-			if globalEarliest == 0 || startMs < globalEarliest {
-				globalEarliest = startMs
-			}
-			if endMs > globalLatest {
-				globalLatest = endMs
-			}
+	// 6. Combine all spans
+	spans := append(ghaSpans, traceSpans...)
+	// Update global time bounds from trace spans
+	for _, s := range traceSpans {
+		startMs := s.StartTime().UnixMilli()
+		endMs := s.EndTime().UnixMilli()
+		if globalEarliest == 0 || startMs < globalEarliest {
+			globalEarliest = startMs
+		}
+		if endMs > globalLatest {
+			globalLatest = endMs
 		}
 	}
 
@@ -583,19 +566,6 @@ func main() {
 					return nil, time.Time{}, time.Time{}, fmt.Errorf("failed to clear cache: %w", err)
 				}
 
-				if reporter != nil {
-					reporter.SetPhase("Setting up")
-				}
-
-				reloadCollector := core.NewSpanCollector()
-				reloadRes, _ := otelexport.GetResource(ctx)
-				reloadTP := sdktrace.NewTracerProvider(
-					sdktrace.WithSyncer(reloadCollector),
-					sdktrace.WithResource(reloadRes),
-					sdktrace.WithIDGenerator(githubapi.GHIDGenerator{}),
-				)
-				otel.SetTracerProvider(reloadTP)
-
 				var progressReporter analyzer.ProgressReporter
 				if reporter != nil {
 					progressReporter = &reloadProgressAdapter{reporter: reporter}
@@ -605,21 +575,12 @@ func main() {
 				reloadIngestor := polling.NewPollingIngestor(reloadClient, args, progressReporter, analyzer.AnalyzeOptions{
 					Window: cfg.window,
 				})
-				_, ghaEarliest, ghaLatest, err := reloadIngestor.Ingest(ctx)
+				_, ghaEarliest, ghaLatest, reloadGHASpans, err := reloadIngestor.Ingest(ctx)
 				if err != nil {
-					reloadTP.Shutdown(ctx)
 					return nil, time.Time{}, time.Time{}, err
 				}
 
-				if reporter != nil {
-					reporter.SetPhase("Finalizing")
-				}
-
-				reloadTP.ForceFlush(ctx)
-				ghaSpans := reloadCollector.Spans()
-				reloadTP.Shutdown(ctx)
-
-				allSpans = append(allSpans, ghaSpans...)
+				allSpans = append(allSpans, reloadGHASpans...)
 				if reloadEarliest == 0 || ghaEarliest < reloadEarliest {
 					reloadEarliest = ghaEarliest
 				}

@@ -1,18 +1,14 @@
 package analyzer
 
 import (
-	"context"
 	"testing"
 	"time"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/core"
 	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"context"
 )
 
 type mockGitHubProvider struct {
@@ -72,23 +68,12 @@ func (m *mockGitHubProvider) FetchRecentWorkflowRuns(ctx context.Context, owner,
 	return args.Get(0).([]githubapi.WorkflowRun), args.Error(1)
 }
 
-func TestOTelSpanGeneration(t *testing.T) {
-	ctx := context.Background()
-
-	// Use a syncer for tests to avoid race conditions and delays
-	collector := core.NewSpanCollector()
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithSyncer(collector),
-		sdktrace.WithResource(resource.Empty()),
-	)
-	otel.SetTracerProvider(tp)
-	defer tp.Shutdown(ctx)
-
-	emitter := NewTraceEmitter(otel.Tracer("test"))
+func TestSpanBuilderGeneration(t *testing.T) {
 	mockClient := new(mockGitHubProvider)
 
-	t.Run("Review markers emit correct OTel spans", func(t *testing.T) {
-		collector.Reset()
+	t.Run("Review markers emit correct spans", func(t *testing.T) {
+		builder := &SpanBuilder{}
+		emitter := NewTraceEmitter(builder)
 
 		reviewEvents := []ReviewEvent{
 			{
@@ -107,14 +92,14 @@ func TestOTelSpanGeneration(t *testing.T) {
 			Identifier: "1",
 		}
 
-		emitter.EmitMarkers(ctx, &RawData{
+		emitter.EmitMarkers(&RawData{
 			ReviewEvents: reviewEvents,
 		}, 0)
 
-		_, err := buildURLResult(ctx, parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, nil, mockClient, nil, 0)
+		_, err := buildURLResult(context.Background(), parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, nil, mockClient, nil, 0, builder)
 		assert.NoError(t, err)
 
-		spans := collector.Spans()
+		spans := builder.Spans()
 
 		var approvalFound bool
 		for _, s := range spans {
@@ -133,7 +118,8 @@ func TestOTelSpanGeneration(t *testing.T) {
 	})
 
 	t.Run("Commit markers are emitted when commitTimeMs is present", func(t *testing.T) {
-		collector.Reset()
+		builder := &SpanBuilder{}
+		emitter := NewTraceEmitter(builder)
 
 		commitTime := time.Date(2026, 1, 15, 9, 0, 0, 0, time.UTC)
 		commitTimeMs := commitTime.UnixMilli()
@@ -145,14 +131,14 @@ func TestOTelSpanGeneration(t *testing.T) {
 			Identifier: "sha123",
 		}
 
-		emitter.EmitMarkers(ctx, &RawData{
+		emitter.EmitMarkers(&RawData{
 			CommitTimeMs: &commitTimeMs,
 		}, 0)
 
-		_, err := buildURLResult(ctx, parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, nil, mockClient, nil, 0)
+		_, err := buildURLResult(context.Background(), parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, nil, mockClient, nil, 0, builder)
 		assert.NoError(t, err)
 
-		spans := collector.Spans()
+		spans := builder.Spans()
 
 		var commitFound bool
 		for _, s := range spans {

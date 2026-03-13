@@ -21,7 +21,6 @@ go_library(
         "//pkg/tui",
         "//pkg/tui/results",
         "//pkg/utils",
-        "@io_opentelemetry_go_otel//:otel",
         "@io_opentelemetry_go_otel_sdk//trace",
     ],
 )

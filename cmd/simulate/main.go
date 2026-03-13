@@ -9,79 +9,103 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/core"
 	otelexport "github.com/stefanpenner/gha-analyzer/pkg/export/otel"
 	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func main() {
 	ctx := context.Background()
-	fmt.Println("🧪 Starting End-to-End Simulation...")
+	fmt.Println("Starting End-to-End Simulation...")
 
-	// 1. Setup OTel with local collector
-	collector := core.NewSpanCollector()
-	res, _ := otelexport.GetResource(ctx)
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(collector),
-		sdktrace.WithResource(res),
-		sdktrace.WithIDGenerator(githubapi.GHIDGenerator{}),
-	)
-	otel.SetTracerProvider(tp)
-	defer tp.Shutdown(ctx)
-
-	// 2. Setup Exporters (Local Collector)
+	// 1. Setup Exporters (OTel Collector)
 	otelExporter, err := otelexport.NewExporter(ctx, "localhost:4318")
 	if err != nil {
-		fmt.Printf("❌ Failed to create OTel exporter: %v\n", err)
+		fmt.Printf("Failed to create OTel exporter: %v\n", err)
 		os.Exit(1)
 	}
 
 	pipeline := core.NewPipeline(otelExporter)
 
-	// 3. Simulate a Workflow Run
-	tracer := otel.Tracer("simulation")
-	
-	fmt.Println("📡 Simulating workflow: 'E2E Test Workflow'...")
-	ctx, workflowSpan := tracer.Start(ctx, "Workflow: E2E Test Workflow", trace.WithAttributes(
-		attribute.String("type", "workflow"),
-		attribute.String("github.conclusion", "success"),
-		attribute.String("github.repository", "stefanpenner/gha-analyzer"),
-		attribute.Int64("github.run_id", 123456789),
-	))
+	// 2. Simulate a Workflow Run using SpanStubs
+	now := time.Now()
+	tid := githubapi.NewTraceID(123456789, 1)
+	wfSID := githubapi.NewSpanID(123456789)
+	wfSC := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    tid,
+		SpanID:     wfSID,
+		TraceFlags: trace.FlagsSampled,
+	})
 
-	// Simulate Job 1
-	_, job1Span := tracer.Start(ctx, "Job: Build and Test", trace.WithAttributes(
-		attribute.String("type", "job"),
-		attribute.String("github.conclusion", "success"),
-		attribute.String("github.job_name", "Build and Test"),
-	))
-	time.Sleep(100 * time.Millisecond)
-	job1Span.End()
+	fmt.Println("Simulating workflow: 'E2E Test Workflow'...")
 
-	// Simulate Job 2 (Parallel)
-	_, job2Span := tracer.Start(ctx, "Job: Lint", trace.WithAttributes(
-		attribute.String("type", "job"),
-		attribute.String("github.conclusion", "success"),
-		attribute.String("github.job_name", "Lint"),
-	))
-	time.Sleep(50 * time.Millisecond)
-	job2Span.End()
+	var stubs tracetest.SpanStubs
 
-	workflowSpan.End()
+	// Workflow span
+	stubs = append(stubs, tracetest.SpanStub{
+		Name:        "Workflow: E2E Test Workflow",
+		SpanContext: wfSC,
+		StartTime:   now,
+		EndTime:     now.Add(200 * time.Millisecond),
+		Attributes: []attribute.KeyValue{
+			attribute.String("type", "workflow"),
+			attribute.String("github.conclusion", "success"),
+			attribute.String("github.repository", "stefanpenner/gha-analyzer"),
+			attribute.Int64("github.run_id", 123456789),
+		},
+	})
 
-	// 4. Flush and Process
-	fmt.Println("📤 Flushing spans to OTel Collector...")
-	tp.ForceFlush(ctx)
-	spans := collector.Spans()
+	// Job 1
+	job1SID := githubapi.NewSpanID(1001)
+	job1SC := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    tid,
+		SpanID:     job1SID,
+		TraceFlags: trace.FlagsSampled,
+	})
+	stubs = append(stubs, tracetest.SpanStub{
+		Name:        "Job: Build and Test",
+		SpanContext: job1SC,
+		Parent:      wfSC,
+		StartTime:   now,
+		EndTime:     now.Add(100 * time.Millisecond),
+		Attributes: []attribute.KeyValue{
+			attribute.String("type", "job"),
+			attribute.String("github.conclusion", "success"),
+			attribute.String("github.job_name", "Build and Test"),
+		},
+	})
 
+	// Job 2
+	job2SID := githubapi.NewSpanID(1002)
+	job2SC := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    tid,
+		SpanID:     job2SID,
+		TraceFlags: trace.FlagsSampled,
+	})
+	stubs = append(stubs, tracetest.SpanStub{
+		Name:        "Job: Lint",
+		SpanContext: job2SC,
+		Parent:      wfSC,
+		StartTime:   now,
+		EndTime:     now.Add(50 * time.Millisecond),
+		Attributes: []attribute.KeyValue{
+			attribute.String("type", "job"),
+			attribute.String("github.conclusion", "success"),
+			attribute.String("github.job_name", "Lint"),
+		},
+	})
+
+	// 3. Convert to ReadOnlySpan and process
+	spans := stubs.Snapshots()
+
+	fmt.Println("Sending spans to OTel Collector...")
 	if err := pipeline.Process(ctx, spans); err != nil {
-		fmt.Printf("⚠️  Processing failed: %v\n", err)
+		fmt.Printf("Processing failed: %v\n", err)
 	}
 
 	if err := pipeline.Finish(ctx); err != nil {
-		fmt.Printf("⚠️  Finalizing failed: %v\n", err)
+		fmt.Printf("Finalizing failed: %v\n", err)
 	}
 
-	fmt.Println("✅ Simulation complete! Check Grafana at http://localhost:3000/d/gha-analyzer")
+	fmt.Println("Simulation complete! Check Grafana at http://localhost:3000/d/gha-analyzer")
 }

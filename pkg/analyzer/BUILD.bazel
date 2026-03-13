@@ -7,7 +7,6 @@ go_library(
         "data_provider.go",
         "metrics.go",
         "otel_analyzer.go",
-        "processor.go",
         "trace.go",
         "trace_emitter.go",
         "tree.go",
@@ -21,9 +20,9 @@ go_library(
         "//pkg/githubapi",
         "//pkg/utils",
         "@com_github_cockroachdb_errors//:errors",
-        "@io_opentelemetry_go_otel//:otel",
         "@io_opentelemetry_go_otel//attribute",
         "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk//trace/tracetest",
         "@io_opentelemetry_go_otel_trace//:trace",
     ],
 )
@@ -38,13 +37,9 @@ go_test(
     ],
     embed = [":analyzer"],
     deps = [
-        "//pkg/core",
         "//pkg/githubapi",
         "//pkg/utils",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//mock",
-        "@io_opentelemetry_go_otel//:otel",
-        "@io_opentelemetry_go_otel_sdk//resource",
-        "@io_opentelemetry_go_otel_sdk//trace",
     ],
 )
