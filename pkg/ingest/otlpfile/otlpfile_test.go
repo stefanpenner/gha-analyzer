@@ -376,6 +376,150 @@ func TestParseProtoAttributeTypes(t *testing.T) {
 	}
 }
 
+func TestParseChromeTraceWrapped(t *testing.T) {
+	input := `{
+		"traceEvents": [
+			{"name":"CompileC","ph":"X","ts":1000000,"dur":500000,"pid":1,"tid":1,"cat":"cc","args":{"file":"main.c"}},
+			{"name":"Link","ph":"X","ts":1500000,"dur":200000,"pid":1,"tid":2,"cat":"link"}
+		]
+	}`
+
+	spans, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if len(spans) != 2 {
+		t.Fatalf("expected 2 spans, got %d", len(spans))
+	}
+
+	if spans[0].Name() != "CompileC" {
+		t.Errorf("span[0] name = %q, want %q", spans[0].Name(), "CompileC")
+	}
+	if spans[1].Name() != "Link" {
+		t.Errorf("span[1] name = %q, want %q", spans[1].Name(), "Link")
+	}
+
+	// Check timing: 1000000 microseconds = 1 second
+	expectedStart := time.Unix(1, 0)
+	if !spans[0].StartTime().Equal(expectedStart) {
+		t.Errorf("span[0] start = %v, want %v", spans[0].StartTime(), expectedStart)
+	}
+	expectedEnd := time.Unix(1, 500000000) // 1.5 seconds
+	if !spans[0].EndTime().Equal(expectedEnd) {
+		t.Errorf("span[0] end = %v, want %v", spans[0].EndTime(), expectedEnd)
+	}
+
+	// Check attributes
+	attrs := spans[0].Attributes()
+	var foundCat, foundArg bool
+	for _, a := range attrs {
+		if string(a.Key) == "chrome.category" && a.Value.AsString() == "cc" {
+			foundCat = true
+		}
+		if string(a.Key) == "chrome.args.file" && a.Value.AsString() == "main.c" {
+			foundArg = true
+		}
+	}
+	if !foundCat {
+		t.Errorf("missing chrome.category=cc attribute")
+	}
+	if !foundArg {
+		t.Errorf("missing chrome.args.file=main.c attribute")
+	}
+}
+
+func TestParseChromeTraceBareArray(t *testing.T) {
+	input := `[
+		{"name":"Task","ph":"X","ts":0,"dur":100000,"pid":1,"tid":1},
+		{"name":"Subtask","ph":"X","ts":10000,"dur":50000,"pid":1,"tid":1}
+	]`
+
+	spans, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if len(spans) != 2 {
+		t.Fatalf("expected 2 spans, got %d", len(spans))
+	}
+	if spans[0].Name() != "Task" {
+		t.Errorf("span[0] name = %q, want %q", spans[0].Name(), "Task")
+	}
+}
+
+func TestParseChromeTraceBeginEnd(t *testing.T) {
+	input := `{"traceEvents": [
+		{"name":"LongOp","ph":"B","ts":1000000,"pid":1,"tid":1},
+		{"name":"LongOp","ph":"E","ts":2000000,"pid":1,"tid":1,"args":{"result":"ok"}}
+	]}`
+
+	spans, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+	if spans[0].Name() != "LongOp" {
+		t.Errorf("name = %q, want %q", spans[0].Name(), "LongOp")
+	}
+
+	// Duration should be 1 second
+	dur := spans[0].EndTime().Sub(spans[0].StartTime())
+	if dur != time.Second {
+		t.Errorf("duration = %v, want 1s", dur)
+	}
+
+	// Check merged args from E event
+	var foundResult bool
+	for _, a := range spans[0].Attributes() {
+		if string(a.Key) == "chrome.args.result" && a.Value.AsString() == "ok" {
+			foundResult = true
+		}
+	}
+	if !foundResult {
+		t.Errorf("missing chrome.args.result=ok from end event")
+	}
+}
+
+func TestParseChromeTraceInstant(t *testing.T) {
+	input := `{"traceEvents": [
+		{"name":"Marker","ph":"i","ts":5000000,"pid":1,"tid":1,"s":"g"}
+	]}`
+
+	spans, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span, got %d", len(spans))
+	}
+	if spans[0].Name() != "Marker" {
+		t.Errorf("name = %q, want %q", spans[0].Name(), "Marker")
+	}
+	// Instant events should have zero duration
+	if !spans[0].StartTime().Equal(spans[0].EndTime()) {
+		t.Errorf("instant event should have start == end")
+	}
+}
+
+func TestParseChromeTraceSkipsMetadata(t *testing.T) {
+	input := `{"traceEvents": [
+		{"name":"process_name","ph":"M","pid":1,"args":{"name":"Browser"}},
+		{"name":"RealWork","ph":"X","ts":1000,"dur":500,"pid":1,"tid":1}
+	]}`
+
+	spans, err := Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+	if len(spans) != 1 {
+		t.Fatalf("expected 1 span (metadata skipped), got %d", len(spans))
+	}
+	if spans[0].Name() != "RealWork" {
+		t.Errorf("name = %q, want %q", spans[0].Name(), "RealWork")
+	}
+}
+
 func TestStatusFromCode(t *testing.T) {
 	tests := []struct {
 		code string

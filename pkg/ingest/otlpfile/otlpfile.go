@@ -94,6 +94,12 @@ func Parse(r io.Reader) ([]sdktrace.ReadOnlySpan, error) {
 		return ParseProto(bytes.NewReader(data))
 	}
 
+	// Detect Chrome Tracing format by looking for "traceEvents" key or
+	// "ph" field (event phase indicator unique to Chrome Tracing).
+	if bytes.Contains(data, []byte(`"traceEvents"`)) || looksLikeChromeTrace(data) {
+		return ParseChrome(bytes.NewReader(data))
+	}
+
 	return parseStdout(bytes.NewReader(data))
 }
 
@@ -240,6 +246,26 @@ func convertAttr(a attrJSON) attribute.KeyValue {
 		}
 	}
 	return key.String(fmt.Sprintf("%v", a.Value.Value))
+}
+
+// looksLikeChromeTrace checks for bare-array Chrome Tracing format
+// by looking for the "ph" key (event phase) which is unique to Chrome Tracing.
+func looksLikeChromeTrace(data []byte) bool {
+	// Check for "ph": pattern — the "ph" JSON key followed by a colon.
+	for i := 0; i < len(data)-4; i++ {
+		if data[i] == '"' && data[i+1] == 'p' && data[i+2] == 'h' && data[i+3] == '"' {
+			// Look for colon after optional whitespace
+			for j := i + 4; j < len(data); j++ {
+				if data[j] == ':' {
+					return true
+				}
+				if data[j] != ' ' && data[j] != '\t' {
+					break
+				}
+			}
+		}
+	}
+	return false
 }
 
 func trimSpace(b []byte) []byte {

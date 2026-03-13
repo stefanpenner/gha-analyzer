@@ -4,6 +4,7 @@ go_library(
     name = "analyzer",
     srcs = [
         "analyzer.go",
+        "artifacts.go",
         "data_provider.go",
         "metrics.go",
         "otel_analyzer.go",
@@ -18,6 +19,7 @@ go_library(
     deps = [
         "//pkg/enrichment",
         "//pkg/githubapi",
+        "//pkg/ingest/otlpfile",
         "//pkg/utils",
         "@com_github_cockroachdb_errors//:errors",
         "@io_opentelemetry_go_otel//attribute",

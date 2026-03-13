@@ -7,23 +7,27 @@ import (
 )
 
 type Metrics struct {
-	TotalRuns      int
-	SuccessfulRuns int
-	FailedRuns     int
-	TotalJobs      int
-	FailedJobs     int
-	TotalSteps     int
-	FailedSteps    int
-	JobDurations   []float64
-	JobNames       []string
-	JobURLs        []string
-	StepDurations  []StepDuration
-	RunnerTypes    map[string]struct{}
-	TotalDuration  float64
-	LongestJob     JobDuration
-	ShortestJob    JobDuration
-	JobTimeline    []TimelineJob
-	PendingJobs    []PendingJob
+	TotalRuns       int
+	SuccessfulRuns  int
+	FailedRuns      int
+	RetriedRuns     int
+	TotalJobs       int
+	FailedJobs      int
+	TotalSteps      int
+	FailedSteps     int
+	JobDurations    []float64
+	JobNames        []string
+	JobURLs         []string
+	StepDurations   []StepDuration
+	RunnerJobCounts map[string]int
+	RunnerDurations map[string]float64
+	QueueTimes      []float64
+	BillableMs      map[string]int64
+	TotalDuration   float64
+	LongestJob      JobDuration
+	ShortestJob     JobDuration
+	JobTimeline     []TimelineJob
+	PendingJobs     []PendingJob
 }
 
 type StepDuration struct {
@@ -63,6 +67,9 @@ type FinalMetrics struct {
 	SuccessRate     string
 	JobSuccessRate  string
 	MaxConcurrency  int
+	AvgQueueTime    float64
+	MaxQueueTime    float64
+	RetryRate       string
 }
 
 type JobEvent struct {

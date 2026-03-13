@@ -11,14 +11,17 @@ import (
 
 func InitializeMetrics() Metrics {
 	return Metrics{
-		JobDurations:  []float64{},
-		JobNames:      []string{},
-		JobURLs:       []string{},
-		StepDurations: []StepDuration{},
-		RunnerTypes:   map[string]struct{}{},
-		JobTimeline:   []TimelineJob{},
-		LongestJob:    JobDuration{Name: "", Duration: 0},
-		ShortestJob:   JobDuration{Name: "", Duration: math.Inf(1)},
+		JobDurations:    []float64{},
+		JobNames:        []string{},
+		JobURLs:         []string{},
+		StepDurations:   []StepDuration{},
+		RunnerJobCounts: map[string]int{},
+		RunnerDurations: map[string]float64{},
+		QueueTimes:      []float64{},
+		BillableMs:      map[string]int64{},
+		JobTimeline:     []TimelineJob{},
+		LongestJob:      JobDuration{Name: "", Duration: 0},
+		ShortestJob:     JobDuration{Name: "", Duration: math.Inf(1)},
 	}
 }
 
@@ -104,6 +107,26 @@ func CalculateFinalMetrics(metrics Metrics, totalRuns int, jobStartTimes, jobEnd
 		jobSuccessRate = formatPercent(float64(metrics.TotalJobs-metrics.FailedJobs) / float64(metrics.TotalJobs) * 100)
 	}
 
+	// Queue time stats
+	avgQueueTime := 0.0
+	maxQueueTime := 0.0
+	if len(metrics.QueueTimes) > 0 {
+		sum := 0.0
+		for _, qt := range metrics.QueueTimes {
+			sum += qt
+			if qt > maxQueueTime {
+				maxQueueTime = qt
+			}
+		}
+		avgQueueTime = sum / float64(len(metrics.QueueTimes))
+	}
+
+	// Retry rate
+	retryRate := "0"
+	if metrics.TotalRuns > 0 {
+		retryRate = formatPercent(float64(metrics.RetriedRuns) / float64(metrics.TotalRuns) * 100)
+	}
+
 	return FinalMetrics{
 		Metrics:         metrics,
 		AvgJobDuration:  avgJob,
@@ -111,6 +134,9 @@ func CalculateFinalMetrics(metrics Metrics, totalRuns int, jobStartTimes, jobEnd
 		SuccessRate:     successRate,
 		JobSuccessRate:  jobSuccessRate,
 		MaxConcurrency:  CalculateMaxConcurrency(jobStartTimes, jobEndTimes),
+		AvgQueueTime:    avgQueueTime,
+		MaxQueueTime:    maxQueueTime,
+		RetryRate:       retryRate,
 	}
 }
 

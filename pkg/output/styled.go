@@ -70,11 +70,82 @@ func OutputStyledResults(w io.Writer, urlResults []analyzer.URLResult, combined 
 	rightPlain3 := fmt.Sprintf("Concurrency: %d", combined.MaxConcurrency)
 	line3 := buildLineAligned(contentWidth, leftStyled3, leftPlain3, rightStyled3, rightPlain3)
 
+	// Aggregate enrichment metrics across URL results
+	var totalQueueTimes []float64
+	var totalRetriedRuns, totalRunCount int
+	totalBillable := map[string]int64{}
+	totalRunnerJobs := map[string]int{}
+	totalRunnerDur := map[string]float64{}
+	for _, result := range urlResults {
+		totalQueueTimes = append(totalQueueTimes, result.Metrics.QueueTimes...)
+		totalRetriedRuns += result.Metrics.RetriedRuns
+		totalRunCount += result.Metrics.TotalRuns
+		for os, ms := range result.Metrics.BillableMs {
+			totalBillable[os] += ms
+		}
+		for runner, count := range result.Metrics.RunnerJobCounts {
+			totalRunnerJobs[runner] += count
+		}
+		for runner, dur := range result.Metrics.RunnerDurations {
+			totalRunnerDur[runner] += dur
+		}
+	}
+
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, topBorder)
 	fmt.Fprintln(w, line1)
 	fmt.Fprintln(w, line2)
 	fmt.Fprintln(w, line3)
+
+	// Line 4: Queue time + Retry rate (conditional)
+	hasQueueData := len(totalQueueTimes) > 0
+	hasRetryData := totalRetriedRuns > 0
+	if hasQueueData || hasRetryData {
+		var parts4 []string
+		if hasQueueData {
+			avgQ := 0.0
+			maxQ := 0.0
+			for _, qt := range totalQueueTimes {
+				avgQ += qt
+				if qt > maxQ {
+					maxQ = qt
+				}
+			}
+			avgQ /= float64(len(totalQueueTimes))
+			avgQStr := utils.HumanizeTime(avgQ / 1000)
+			maxQStr := utils.HumanizeTime(maxQ / 1000)
+			parts4 = append(parts4, labelStyle.Render("Queue: avg ")+numStyle.Render(avgQStr)+labelStyle.Render(" / max ")+numStyle.Render(maxQStr))
+		}
+		if hasRetryData {
+			retryPct := fmt.Sprintf("%.0f%%", float64(totalRetriedRuns)/float64(totalRunCount)*100)
+			retryDetail := fmt.Sprintf("(%d/%d runs)", totalRetriedRuns, totalRunCount)
+			parts4 = append(parts4, labelStyle.Render("Retries: ")+numStyle.Render(retryPct)+" "+labelStyle.Render(retryDetail))
+		}
+		fmt.Fprintln(w, buildLeftLine(strings.Join(parts4, sep)))
+	}
+
+	// Line 5: Billable timing (conditional)
+	if len(totalBillable) > 0 {
+		osNames := map[string]string{"UBUNTU": "Ubuntu", "MACOS": "macOS", "WINDOWS": "Windows"}
+		var billParts []string
+		for _, osKey := range []string{"UBUNTU", "MACOS", "WINDOWS"} {
+			ms := totalBillable[osKey]
+			durStr := utils.HumanizeTime(float64(ms) / 1000)
+			billParts = append(billParts, labelStyle.Render(osNames[osKey]+" ")+numStyle.Render(durStr))
+		}
+		fmt.Fprintln(w, buildLeftLine(labelStyle.Render("Billable: ")+strings.Join(billParts, "  ")))
+	}
+
+	// Line 6: Runner distribution (conditional)
+	if len(totalRunnerJobs) > 0 {
+		var runnerParts []string
+		for runner, count := range totalRunnerJobs {
+			dur := totalRunnerDur[runner]
+			durStr := utils.HumanizeTime(dur / 1000)
+			runnerParts = append(runnerParts, numStyle.Render(runner)+labelStyle.Render(fmt.Sprintf(" ×%d ", count))+dimStyle.Render("("+durStr+")"))
+		}
+		fmt.Fprintln(w, buildLeftLine(labelStyle.Render("Runners: ")+strings.Join(runnerParts, "  ")))
+	}
 
 	// URL lines inside header box
 	for _, result := range urlResults {

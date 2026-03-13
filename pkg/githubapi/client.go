@@ -871,3 +871,138 @@ func (c *Client) FetchBranchProtection(ctx context.Context, owner, repo, branch 
 
 	return &BranchProtection{RequiredStatusChecks: &protection}, nil
 }
+
+// RunTiming represents the billing timing for a workflow run.
+type RunTiming struct {
+	Billable map[string]BillableOS `json:"billable"`
+}
+
+// BillableOS represents billable time for an OS.
+type BillableOS struct {
+	TotalMs int64 `json:"total_ms"`
+}
+
+// CheckRun represents a GitHub check run.
+type CheckRun struct {
+	ID         int64  `json:"id"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+}
+
+// Annotation represents a check run annotation.
+type Annotation struct {
+	Path      string `json:"path"`
+	StartLine int    `json:"start_line"`
+	EndLine   int    `json:"end_line"`
+	Level     string `json:"annotation_level"`
+	Message   string `json:"message"`
+	Title     string `json:"title"`
+}
+
+// Artifact represents a GitHub Actions artifact.
+type Artifact struct {
+	ID                 int64  `json:"id"`
+	Name               string `json:"name"`
+	SizeInBytes        int64  `json:"size_in_bytes"`
+	ArchiveDownloadURL string `json:"archive_download_url"`
+	Expired            bool   `json:"expired"`
+}
+
+func (c *Client) FetchRunTiming(ctx context.Context, owner, repo string, runID int64) (*RunTiming, error) {
+	ctx, span := getTracer().Start(ctx, "FetchRunTiming", trace.WithAttributes(
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+		attribute.Int64("github.run_id", runID),
+	))
+	defer span.End()
+
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs/%d/timing", owner, repo, runID)
+	resp, err := fetchWithAuth(ctx, c, endpoint, "")
+	if err != nil {
+		return nil, err
+	}
+	var timing RunTiming
+	if err := decodeJSON(resp, &timing); err != nil {
+		return nil, err
+	}
+	return &timing, nil
+}
+
+func (c *Client) FetchCheckRunsForCommit(ctx context.Context, owner, repo, sha string) ([]CheckRun, error) {
+	ctx, span := getTracer().Start(ctx, "FetchCheckRunsForCommit", trace.WithAttributes(
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+		attribute.String("github.sha", sha),
+	))
+	defer span.End()
+
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s/check-runs?per_page=100", owner, repo, sha)
+	resp, err := fetchWithAuth(ctx, c, endpoint, "")
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		CheckRuns []CheckRun `json:"check_runs"`
+	}
+	if err := decodeJSON(resp, &result); err != nil {
+		return nil, err
+	}
+	return result.CheckRuns, nil
+}
+
+func (c *Client) FetchAnnotations(ctx context.Context, owner, repo string, checkRunID int64) ([]Annotation, error) {
+	ctx, span := getTracer().Start(ctx, "FetchAnnotations", trace.WithAttributes(
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+		attribute.Int64("github.check_run_id", checkRunID),
+	))
+	defer span.End()
+
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/check-runs/%d/annotations?per_page=100", owner, repo, checkRunID)
+	resp, err := fetchWithAuth(ctx, c, endpoint, "")
+	if err != nil {
+		return nil, err
+	}
+	var annotations []Annotation
+	if err := decodeJSON(resp, &annotations); err != nil {
+		return nil, err
+	}
+	return annotations, nil
+}
+
+func (c *Client) ListArtifacts(ctx context.Context, owner, repo string, runID int64) ([]Artifact, error) {
+	ctx, span := getTracer().Start(ctx, "ListArtifacts", trace.WithAttributes(
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+		attribute.Int64("github.run_id", runID),
+	))
+	defer span.End()
+
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs/%d/artifacts?per_page=100", owner, repo, runID)
+	resp, err := fetchWithAuth(ctx, c, endpoint, "")
+	if err != nil {
+		return nil, err
+	}
+	var result struct {
+		Artifacts []Artifact `json:"artifacts"`
+	}
+	if err := decodeJSON(resp, &result); err != nil {
+		return nil, err
+	}
+	return result.Artifacts, nil
+}
+
+func (c *Client) DownloadArtifact(ctx context.Context, downloadURL string) ([]byte, error) {
+	ctx, span := getTracer().Start(ctx, "DownloadArtifact", trace.WithAttributes(
+		attribute.String("github.url", downloadURL),
+	))
+	defer span.End()
+
+	resp, err := fetchWithAuth(ctx, c, downloadURL, "application/vnd.github.v3+json")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	return io.ReadAll(resp.Body)
+}
