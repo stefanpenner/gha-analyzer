@@ -1,6 +1,7 @@
 package results
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"github.com/stretchr/testify/assert"
+	"go.opentelemetry.io/otel/sdk/trace"
 )
 
 // createTestModel creates a Model with test data for integration testing
@@ -1306,6 +1308,698 @@ func TestSearchKeyBinding(t *testing.T) {
 			}
 		}
 		assert.True(t, found, "Full help should contain search info")
+	})
+}
+
+func TestLogicalEnd(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sets logicalEndID and logicalEndTime from cursor item", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		item := m.visibleItems[0]
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+		m = newModel.(Model)
+
+		assert.Equal(t, item.ID, m.logicalEndID)
+		assert.Equal(t, item.EndTime, m.logicalEndTime)
+	})
+
+	t.Run("toggles off when same item selected again", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+
+		// Set marker
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+		m = newModel.(Model)
+		assert.NotEmpty(t, m.logicalEndID)
+
+		// Toggle off
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+		m = newModel.(Model)
+
+		assert.Empty(t, m.logicalEndID)
+		assert.True(t, m.logicalEndTime.IsZero())
+	})
+
+	t.Run("moves marker when different item selected", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+
+		// Set marker on first item
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+		m = newModel.(Model)
+		firstID := m.logicalEndID
+
+		// Move to second item and set marker
+		m.cursor = 1
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("e")})
+		m = newModel.(Model)
+
+		assert.NotEqual(t, firstID, m.logicalEndID)
+		assert.Equal(t, m.visibleItems[1].ID, m.logicalEndID)
+		assert.Equal(t, m.visibleItems[1].EndTime, m.logicalEndTime)
+	})
+}
+
+func TestDetailModalNavigation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("h/left navigates to previous item in modal", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 1
+		m.openDetailModal()
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+		m = newModel.(Model)
+
+		assert.Equal(t, 0, m.cursor)
+		assert.Equal(t, m.visibleItems[0].ID, m.modalItem.ID)
+		assert.Equal(t, 0, m.modalScroll)
+	})
+
+	t.Run("l/right navigates to next item in modal", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+		m = newModel.(Model)
+
+		assert.Equal(t, 1, m.cursor)
+		assert.Equal(t, m.visibleItems[1].ID, m.modalItem.ID)
+		assert.Equal(t, 0, m.modalScroll)
+	})
+
+	t.Run("left arrow navigates to previous item in modal", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 1
+		m.openDetailModal()
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+		m = newModel.(Model)
+
+		assert.Equal(t, 0, m.cursor)
+		assert.NotNil(t, m.modalItem)
+	})
+
+	t.Run("right arrow navigates to next item in modal", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
+		m = newModel.(Model)
+
+		assert.Equal(t, 1, m.cursor)
+		assert.NotNil(t, m.modalItem)
+	})
+
+	t.Run("h at first item does not change cursor", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+		m = newModel.(Model)
+
+		assert.Equal(t, 0, m.cursor)
+	})
+
+	t.Run("l at last item does not change cursor", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = len(m.visibleItems) - 1
+		m.openDetailModal()
+		lastCursor := m.cursor
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+		m = newModel.(Model)
+
+		assert.Equal(t, lastCursor, m.cursor)
+	})
+
+	t.Run("modal scroll resets on h/l navigation", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 1
+		m.openDetailModal()
+		m.modalScroll = 5
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+		m = newModel.(Model)
+
+		assert.Equal(t, 0, m.modalScroll)
+	})
+
+	t.Run("j scrolls modal content down", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		m = newModel.(Model)
+
+		assert.Equal(t, 1, m.modalScroll)
+	})
+
+	t.Run("k scrolls modal content up", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+		m.modalScroll = 3
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+		m = newModel.(Model)
+
+		assert.Equal(t, 2, m.modalScroll)
+	})
+
+	t.Run("k does not scroll below zero", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+		m.modalScroll = 0
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+		m = newModel.(Model)
+
+		assert.Equal(t, 0, m.modalScroll)
+	})
+
+	t.Run("r in modal with reloadFunc closes modal and starts loading", func(t *testing.T) {
+		m := createTestModel()
+		m.reloadFunc = func(reporter LoadingReporter) ([]trace.ReadOnlySpan, time.Time, time.Time, error) {
+			return nil, time.Now(), time.Now(), nil
+		}
+		m.cursor = 0
+		m.openDetailModal()
+
+		newModel, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+		m = newModel.(Model)
+
+		assert.False(t, m.showDetailModal)
+		assert.Nil(t, m.modalItem)
+		assert.True(t, m.isLoading)
+		assert.NotNil(t, cmd)
+	})
+
+	t.Run("r in modal without reloadFunc just closes modal", func(t *testing.T) {
+		m := createTestModel()
+		m.reloadFunc = nil
+		m.cursor = 0
+		m.openDetailModal()
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+		m = newModel.(Model)
+
+		assert.False(t, m.showDetailModal)
+		assert.Nil(t, m.modalItem)
+		assert.False(t, m.isLoading)
+	})
+}
+
+func TestReloadFlow(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ReloadResultMsg resets model state", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 2
+		m.selectionStart = 1
+		m.logicalEndID = "some-id"
+		m.isLoading = true
+
+		now := time.Now()
+		newStart := now.Add(-10 * time.Minute)
+		newEnd := now
+
+		newModel, _ := m.Update(ReloadResultMsg{
+			spans:       nil,
+			globalStart: newStart,
+			globalEnd:   newEnd,
+		})
+		m = newModel.(Model)
+
+		assert.Equal(t, 0, m.cursor)
+		assert.Equal(t, -1, m.selectionStart)
+		assert.Empty(t, m.logicalEndID)
+		assert.False(t, m.isLoading)
+		assert.Equal(t, newStart, m.globalStart)
+		assert.Equal(t, newEnd, m.globalEnd)
+		assert.Equal(t, newStart, m.chartStart)
+		assert.Equal(t, newEnd, m.chartEnd)
+	})
+
+	t.Run("ReloadResultMsg clears expanded and hidden state", func(t *testing.T) {
+		m := createTestModel()
+		m.expandedState["foo"] = true
+		m.hiddenState["bar"] = true
+		m.isLoading = true
+
+		now := time.Now()
+		newModel, _ := m.Update(ReloadResultMsg{
+			globalStart: now,
+			globalEnd:   now.Add(time.Minute),
+		})
+		m = newModel.(Model)
+
+		assert.False(t, m.expandedState["foo"])
+		assert.False(t, m.hiddenState["bar"])
+	})
+
+	t.Run("ReloadResultMsg with error returns early", func(t *testing.T) {
+		m := createTestModel()
+		m.isLoading = true
+		m.cursor = 2
+
+		newModel, _ := m.Update(ReloadResultMsg{
+			err: fmt.Errorf("reload failed"),
+		})
+		m = newModel.(Model)
+
+		assert.False(t, m.isLoading)
+		// cursor should not be reset on error
+		assert.Equal(t, 2, m.cursor)
+	})
+
+	t.Run("ReloadResultMsg clears progress fields", func(t *testing.T) {
+		m := createTestModel()
+		m.isLoading = true
+		m.loadingPhase = "Fetching"
+		m.loadingDetail = "page 3/5"
+		m.loadingURL = "https://example.com"
+
+		now := time.Now()
+		newModel, _ := m.Update(ReloadResultMsg{
+			globalStart: now,
+			globalEnd:   now.Add(time.Minute),
+		})
+		m = newModel.(Model)
+
+		assert.Empty(t, m.loadingPhase)
+		assert.Empty(t, m.loadingDetail)
+		assert.Empty(t, m.loadingURL)
+	})
+}
+
+func TestLoadingProgressMsg(t *testing.T) {
+	t.Parallel()
+
+	t.Run("non-empty fields update model", func(t *testing.T) {
+		m := createTestModel()
+		m.progressCh = make(chan LoadingProgressMsg, 1)
+		m.resultCh = make(chan ReloadResultMsg, 1)
+
+		newModel, _ := m.Update(LoadingProgressMsg{
+			Phase:  "Downloading",
+			Detail: "50%",
+			URL:    "https://example.com",
+		})
+		m = newModel.(Model)
+
+		assert.Equal(t, "Downloading", m.loadingPhase)
+		assert.Equal(t, "50%", m.loadingDetail)
+		assert.Equal(t, "https://example.com", m.loadingURL)
+	})
+
+	t.Run("empty fields do not overwrite existing values", func(t *testing.T) {
+		m := createTestModel()
+		m.loadingPhase = "Downloading"
+		m.loadingDetail = "50%"
+		m.loadingURL = "https://example.com"
+		m.progressCh = make(chan LoadingProgressMsg, 1)
+		m.resultCh = make(chan ReloadResultMsg, 1)
+
+		newModel, _ := m.Update(LoadingProgressMsg{
+			Phase: "Processing",
+		})
+		m = newModel.(Model)
+
+		assert.Equal(t, "Processing", m.loadingPhase)
+		assert.Equal(t, "50%", m.loadingDetail)
+		assert.Equal(t, "https://example.com", m.loadingURL)
+	})
+}
+
+func TestGGSequences(t *testing.T) {
+	t.Parallel()
+
+	t.Run("gg jumps to top", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = len(m.visibleItems) - 1
+
+		// First g
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+		m = newModel.(Model)
+		assert.True(t, m.pendingG)
+
+		// Second g
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+		m = newModel.(Model)
+
+		assert.Equal(t, 0, m.cursor)
+		assert.False(t, m.pendingG)
+	})
+
+	t.Run("GG jumps to bottom", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+
+		// First G
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
+		m = newModel.(Model)
+		assert.True(t, m.pendingGG)
+
+		// Second G
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
+		m = newModel.(Model)
+
+		assert.Equal(t, len(m.visibleItems)-1, m.cursor)
+		assert.False(t, m.pendingGG)
+	})
+
+	t.Run("other key between g presses clears pending state", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = len(m.visibleItems) - 1
+
+		// First g
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+		m = newModel.(Model)
+		assert.True(t, m.pendingG)
+
+		// Different key
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		m = newModel.(Model)
+
+		assert.False(t, m.pendingG)
+		assert.NotEqual(t, 0, m.cursor) // did not jump to top
+	})
+
+	t.Run("gg clears selectionStart", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = len(m.visibleItems) - 1
+		m.selectionStart = 1
+
+		// gg
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+		m = newModel.(Model)
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
+		m = newModel.(Model)
+
+		assert.Equal(t, -1, m.selectionStart)
+	})
+
+	t.Run("GG clears selectionStart", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.selectionStart = 0
+
+		// GG
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
+		m = newModel.(Model)
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
+		m = newModel.(Model)
+
+		assert.Equal(t, -1, m.selectionStart)
+	})
+}
+
+func TestSearchEdgeCases(t *testing.T) {
+	t.Parallel()
+
+	t.Run("backspace on empty query is no-op", func(t *testing.T) {
+		m := createTestModel()
+
+		// Enter search mode
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		assert.True(t, m.isSearching)
+		assert.Equal(t, "", m.searchQuery)
+
+		// Backspace on empty
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		m = newModel.(Model)
+
+		assert.True(t, m.isSearching)
+		assert.Equal(t, "", m.searchQuery)
+	})
+
+	t.Run("tab exits search keeping filter active", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+
+		// Enter search and type
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		for _, r := range "build" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+		filteredCount := len(m.visibleItems)
+
+		// Press Tab
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m = newModel.(Model)
+
+		assert.False(t, m.isSearching)
+		assert.Equal(t, "build", m.searchQuery)
+		assert.Equal(t, filteredCount, len(m.visibleItems))
+	})
+
+	t.Run("enter after exiting search input clears filter preserves cursor", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+		beforeCount := len(m.visibleItems)
+
+		// Search for "test"
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		for _, r := range "test" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+
+		// Exit input with Tab
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m = newModel.(Model)
+
+		// Navigate to "test" item
+		for i, item := range m.visibleItems {
+			if item.Name == "test" {
+				m.cursor = i
+				break
+			}
+		}
+		cursorItemID := m.visibleItems[m.cursor].ID
+
+		// Press Enter to clear filter
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		m = newModel.(Model)
+
+		assert.Equal(t, "", m.searchQuery)
+		assert.Equal(t, beforeCount, len(m.visibleItems))
+		assert.Equal(t, cursorItemID, m.visibleItems[m.cursor].ID)
+	})
+
+	t.Run("esc during search input clears everything", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+		beforeCount := len(m.visibleItems)
+
+		// Enter search and type
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		for _, r := range "build" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+
+		// Esc during input
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		m = newModel.(Model)
+
+		assert.False(t, m.isSearching)
+		assert.Equal(t, "", m.searchQuery)
+		assert.Nil(t, m.searchMatchIDs)
+		assert.Equal(t, beforeCount, len(m.visibleItems))
+	})
+}
+
+func TestMouseClick(t *testing.T) {
+	t.Parallel()
+
+	t.Run("left click maps Y position to item index", func(t *testing.T) {
+		m := createTestModel()
+		m.mouseEnabled = true
+		m.height = 40
+		m.width = 120
+
+		// Header is 8 lines (or 9 with enrichment), clicking at Y=8 should select first item
+		newModel, _ := m.Update(tea.MouseMsg{
+			X:      10,
+			Y:      8,
+			Button: tea.MouseButtonLeft,
+			Action: tea.MouseActionRelease,
+		})
+		m = newModel.(Model)
+
+		assert.Equal(t, 0, m.cursor)
+	})
+
+	t.Run("click clears selection", func(t *testing.T) {
+		m := createTestModel()
+		m.mouseEnabled = true
+		m.selectionStart = 0
+		m.height = 40
+		m.width = 120
+
+		newModel, _ := m.Update(tea.MouseMsg{
+			X:      10,
+			Y:      9,
+			Button: tea.MouseButtonLeft,
+			Action: tea.MouseActionRelease,
+		})
+		m = newModel.(Model)
+
+		assert.Equal(t, -1, m.selectionStart)
+	})
+
+	t.Run("out-of-range Y does not panic or change cursor", func(t *testing.T) {
+		m := createTestModel()
+		m.mouseEnabled = true
+		m.cursor = 1
+		m.height = 40
+		m.width = 120
+
+		// Click way below content
+		newModel, _ := m.Update(tea.MouseMsg{
+			X:      10,
+			Y:      200,
+			Button: tea.MouseButtonLeft,
+			Action: tea.MouseActionRelease,
+		})
+		m = newModel.(Model)
+
+		// Cursor should not change for out-of-range click
+		assert.Equal(t, 1, m.cursor)
+	})
+
+	t.Run("mouse ignored during loading", func(t *testing.T) {
+		m := createTestModel()
+		m.isLoading = true
+		m.cursor = 0
+
+		newModel, _ := m.Update(tea.MouseMsg{
+			X:      10,
+			Y:      10,
+			Button: tea.MouseButtonLeft,
+			Action: tea.MouseActionRelease,
+		})
+		m = newModel.(Model)
+
+		assert.Equal(t, 0, m.cursor)
+	})
+
+	t.Run("wheel up in modal scrolls modal", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+		m.modalScroll = 3
+
+		newModel, _ := m.Update(tea.MouseMsg{
+			Button: tea.MouseButtonWheelUp,
+		})
+		m = newModel.(Model)
+
+		assert.Equal(t, 2, m.modalScroll)
+	})
+
+	t.Run("wheel down in modal scrolls modal", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+		m.modalScroll = 0
+
+		newModel, _ := m.Update(tea.MouseMsg{
+			Button: tea.MouseButtonWheelDown,
+		})
+		m = newModel.(Model)
+
+		assert.Equal(t, 1, m.modalScroll)
+	})
+
+	t.Run("wheel up in main view moves cursor up", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 1
+
+		newModel, _ := m.Update(tea.MouseMsg{
+			Button: tea.MouseButtonWheelUp,
+		})
+		m = newModel.(Model)
+
+		assert.Equal(t, 0, m.cursor)
+	})
+
+	t.Run("wheel down in main view moves cursor down", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+
+		newModel, _ := m.Update(tea.MouseMsg{
+			Button: tea.MouseButtonWheelDown,
+		})
+		m = newModel.(Model)
+
+		assert.Equal(t, 1, m.cursor)
+	})
+}
+
+func TestChartBoundsRecalculation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("hiding latest item shrinks chartEnd", func(t *testing.T) {
+		m := createMultiURLTestModel()
+		m.expandAll()
+		originalChartEnd := m.chartEnd
+
+		// Find the Deploy workflow (url-group/1, ends at globalEnd).
+		// Hide the entire url-group/1 which contains the latest items.
+		for i, item := range m.visibleItems {
+			if item.ID == "url-group/1" {
+				m.cursor = i
+				break
+			}
+		}
+
+		// Hide via space — hides url-group/1 and all descendants
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = newModel.(Model)
+
+		assert.True(t, m.chartEnd.Before(originalChartEnd),
+			"chartEnd %v should be before original %v", m.chartEnd, originalChartEnd)
+	})
+
+	t.Run("unhiding restores chartEnd", func(t *testing.T) {
+		m := createMultiURLTestModel()
+		m.expandAll()
+		originalChartEnd := m.chartEnd
+
+		// Find and hide url-group/1
+		for i, item := range m.visibleItems {
+			if item.ID == "url-group/1" {
+				m.cursor = i
+				break
+			}
+		}
+
+		// Hide
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = newModel.(Model)
+		assert.True(t, m.chartEnd.Before(originalChartEnd))
+
+		// Unhide
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = newModel.(Model)
+
+		assert.Equal(t, originalChartEnd, m.chartEnd)
 	})
 }
 
