@@ -68,6 +68,34 @@ func (m *mockGitHubProvider) FetchRecentWorkflowRuns(ctx context.Context, owner,
 	return args.Get(0).([]githubapi.WorkflowRun), args.Error(1)
 }
 
+func (m *mockGitHubProvider) FetchRunTiming(ctx context.Context, owner, repo string, runID int64) (*githubapi.RunTiming, error) {
+	args := m.Called(ctx, owner, repo, runID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*githubapi.RunTiming), args.Error(1)
+}
+
+func (m *mockGitHubProvider) FetchCheckRunsForCommit(ctx context.Context, owner, repo, sha string) ([]githubapi.CheckRun, error) {
+	args := m.Called(ctx, owner, repo, sha)
+	return args.Get(0).([]githubapi.CheckRun), args.Error(1)
+}
+
+func (m *mockGitHubProvider) FetchAnnotations(ctx context.Context, owner, repo string, checkRunID int64) ([]githubapi.Annotation, error) {
+	args := m.Called(ctx, owner, repo, checkRunID)
+	return args.Get(0).([]githubapi.Annotation), args.Error(1)
+}
+
+func (m *mockGitHubProvider) ListArtifacts(ctx context.Context, owner, repo string, runID int64) ([]githubapi.Artifact, error) {
+	args := m.Called(ctx, owner, repo, runID)
+	return args.Get(0).([]githubapi.Artifact), args.Error(1)
+}
+
+func (m *mockGitHubProvider) DownloadArtifact(ctx context.Context, url string) ([]byte, error) {
+	args := m.Called(ctx, url)
+	return args.Get(0).([]byte), args.Error(1)
+}
+
 func TestSpanBuilderGeneration(t *testing.T) {
 	mockClient := new(mockGitHubProvider)
 
@@ -96,7 +124,7 @@ func TestSpanBuilderGeneration(t *testing.T) {
 			ReviewEvents: reviewEvents,
 		}, 0)
 
-		_, err := buildURLResult(context.Background(), parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, nil, mockClient, nil, 0, builder)
+		_, err := buildURLResult(context.Background(), parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, nil, mockClient, nil, 0, builder, AnalyzeOptions{})
 		assert.NoError(t, err)
 
 		spans := builder.Spans()
@@ -135,7 +163,7 @@ func TestSpanBuilderGeneration(t *testing.T) {
 			CommitTimeMs: &commitTimeMs,
 		}, 0)
 
-		_, err := buildURLResult(context.Background(), parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, nil, mockClient, nil, 0, builder)
+		_, err := buildURLResult(context.Background(), parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, nil, mockClient, nil, 0, builder, AnalyzeOptions{})
 		assert.NoError(t, err)
 
 		spans := builder.Spans()

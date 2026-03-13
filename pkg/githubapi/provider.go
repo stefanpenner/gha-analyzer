@@ -16,4 +16,9 @@ type GitHubProvider interface {
 	FetchPRComments(ctx context.Context, owner, repo, prNumber string) ([]Review, error)
 	FetchJobsPaginated(ctx context.Context, urlValue string) ([]Job, error)
 	FetchBranchProtection(ctx context.Context, owner, repo, branch string) (*BranchProtection, error)
+	FetchRunTiming(ctx context.Context, owner, repo string, runID int64) (*RunTiming, error)
+	FetchCheckRunsForCommit(ctx context.Context, owner, repo, sha string) ([]CheckRun, error)
+	FetchAnnotations(ctx context.Context, owner, repo string, checkRunID int64) ([]Annotation, error)
+	ListArtifacts(ctx context.Context, owner, repo string, runID int64) ([]Artifact, error)
+	DownloadArtifact(ctx context.Context, url string) ([]byte, error)
 }

@@ -104,6 +104,7 @@ type config struct {
 	trendsNoSample   bool
 	trendsConfidence float64
 	trendsMargin     float64
+	noArtifacts      bool
 }
 
 func parseArgs(args []string, terminal bool) (config, error) {
@@ -200,6 +201,10 @@ func parseArgs(args []string, terminal bool) (config, error) {
 			cfg.clearCache = true
 			continue
 		}
+		if arg == "--no-artifacts" {
+			cfg.noArtifacts = true
+			continue
+		}
 
 		// Trends-specific flags
 		if strings.HasPrefix(arg, "--days=") {
@@ -251,6 +256,15 @@ func parseArgs(args []string, terminal bool) (config, error) {
 		if cfg.trendsMode && cfg.trendsRepo == "" && !strings.HasPrefix(arg, "-") {
 			cfg.trendsRepo = arg
 			continue
+		}
+
+		// If the arg looks like a local file (not a URL, not a flag), check if
+		// it exists on disk — if so, treat it as a trace file input.
+		if !strings.HasPrefix(arg, "http") && !strings.HasPrefix(arg, "-") {
+			if _, err := os.Stat(arg); err == nil {
+				cfg.traceFiles = append(cfg.traceFiles, arg)
+				continue
+			}
 		}
 
 		cfg.urls = append(cfg.urls, arg)
@@ -353,7 +367,7 @@ func main() {
 	}
 
 	if len(args) == 0 && len(cfg.traceFiles) == 0 && !hasTraceBackend {
-		printErrorMsg("No GitHub URLs or trace files provided.\n\n  Usage: gha-analyzer <github_url> [flags]\n         gha-analyzer --trace=<file.json> [flags]\n         gha-analyzer --tempo=<url> --trace-id=<id> [flags]\n\n  Run 'gha-analyzer --help' for more information.")
+		printErrorMsg("No GitHub URLs or trace files provided.\n\n  Usage: gha-analyzer <github_url> [flags]\n         gha-analyzer <trace_file.json> [flags]\n         gha-analyzer --tempo=<url> --trace-id=<id> [flags]\n\n  Run 'gha-analyzer --help' for more information.")
 		os.Exit(1)
 	}
 
@@ -478,7 +492,8 @@ func main() {
 		progress.Start()
 
 		ingestor := polling.NewPollingIngestor(client, args, progress, analyzer.AnalyzeOptions{
-			Window: cfg.window,
+			Window:      cfg.window,
+			NoArtifacts: cfg.noArtifacts,
 		})
 		var err error
 		results, globalEarliest, globalLatest, ghaSpans, err = ingestor.Ingest(ctx)
@@ -672,6 +687,7 @@ func printUsage() {
 	fmt.Println("GitHub Actions Analyzer")
 	fmt.Println("\nUsage:")
 	fmt.Println("  gha-analyzer <github_url1> [github_url2...] [token] [flags]")
+	fmt.Println("  gha-analyzer <trace_file.json> [flags]")
 	fmt.Println("  gha-analyzer trends <owner/repo> [flags]")
 	fmt.Println("\nFlags:")
 	fmt.Println("  --tui                     Force interactive TUI mode (default when terminal is available)")
@@ -688,6 +704,7 @@ func printUsage() {
 	fmt.Println("  --tempo=<baseURL>         Fetch traces from Grafana Tempo (e.g., http://localhost:3200)")
 	fmt.Println("  --jaeger=<baseURL>        Fetch traces from Jaeger v2 (e.g., http://localhost:16686)")
 	fmt.Println("  --trace-id=<id>           Trace ID to fetch from Tempo/Jaeger (can be repeated)")
+	fmt.Println("  --no-artifacts            Skip downloading and ingesting trace artifacts from workflow runs")
 	fmt.Println("  --clear-cache             Clear the HTTP cache (can be combined with other flags)")
 	fmt.Println("  help, --help, -h          Show this help message")
 	fmt.Println("\nTrends Mode Flags:")
@@ -709,7 +726,8 @@ func printUsage() {
 	fmt.Println("  gha-analyzer trends owner/repo")
 	fmt.Println("  gha-analyzer trends owner/repo --days=7 --format=json")
 	fmt.Println("  gha-analyzer trends owner/repo --branch=main --workflow=post-merge.yaml")
-	fmt.Println("  gha-analyzer --trace=spans.json")
+	fmt.Println("  gha-analyzer trace.json                      # auto-detects OTel or Chrome Tracing format")
+	fmt.Println("  gha-analyzer chrome-profile.json spans.json   # multiple trace files as args")
 	fmt.Println("  gha-analyzer --trace=spans.json https://github.com/owner/repo/pull/123")
 	fmt.Println("  gha-analyzer --tempo=http://localhost:3200 --trace-id=abc123def456")
 	fmt.Println("  gha-analyzer --jaeger=http://localhost:16686 --trace-id=abc123def456")
