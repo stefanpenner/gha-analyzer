@@ -31,6 +31,7 @@ go_test(
     embed = [":otlpfile"],
     deps = [
         "@com_github_klauspost_compress//zstd",
+        "@com_github_stretchr_testify//assert",
         "@io_opentelemetry_go_otel_sdk//trace",
         "@io_opentelemetry_go_otel_trace//:trace",
         "@io_opentelemetry_go_proto_otlp//common/v1:common",
