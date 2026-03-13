@@ -90,6 +90,16 @@ type resolvedEvent struct {
 func chromeEventsToSpans(events []chromeEvent, otherData map[string]any) ([]sdktrace.ReadOnlySpan, error) {
 	traceID := syntheticTraceID(events)
 
+	// If profile_start_ts is present (e.g. Bazel profiles), event timestamps
+	// are relative offsets in microseconds. Convert to absolute by adding the
+	// start timestamp (which is in milliseconds since epoch).
+	if startTsMs, ok := profileStartTsMs(otherData); ok {
+		offsetMicros := startTsMs * 1000 // ms → µs
+		for i := range events {
+			events[i].Ts += offsetMicros
+		}
+	}
+
 	// Sort by timestamp to ensure B events come before their E events.
 	sort.Slice(events, func(i, j int) bool {
 		return events[i].Ts < events[j].Ts
@@ -260,18 +270,21 @@ func chromeEventToStub(ev chromeEvent, traceID trace.TraceID, index int, threadN
 		TraceFlags: trace.FlagsSampled,
 	})
 
+	pid := ev.Pid.String()
+	tid := ev.Tid.String()
+
 	var attrs []attribute.KeyValue
 	if ev.Cat != "" {
 		attrs = append(attrs, attribute.String("chrome.category", ev.Cat))
 	}
-	attrs = append(attrs, attribute.String("chrome.pid", ev.Pid.String()))
-	attrs = append(attrs, attribute.String("chrome.tid", ev.Tid.String()))
+	attrs = append(attrs, attribute.String("chrome.pid", pid))
+	attrs = append(attrs, attribute.String("chrome.tid", tid))
 
 	// Add thread/process name if available.
-	if name, ok := threadNames[ev.Pid.String()+":"+ev.Tid.String()]; ok {
+	if name, ok := threadNames[pid+":"+tid]; ok {
 		attrs = append(attrs, attribute.String("chrome.thread_name", name))
 	}
-	if name, ok := processNames[ev.Pid.String()]; ok {
+	if name, ok := processNames[pid]; ok {
 		attrs = append(attrs, attribute.String("chrome.process_name", name))
 	}
 
@@ -301,6 +314,22 @@ func chromeEventToStub(ev chromeEvent, traceID trace.TraceID, index int, threadN
 		EndTime:     endTime,
 		Attributes:  attrs,
 	}
+}
+
+// profileStartTsMs extracts profile_start_ts from otherData as milliseconds.
+// Bazel profiles store this as an integer (ms since epoch).
+func profileStartTsMs(otherData map[string]any) (float64, bool) {
+	if otherData == nil {
+		return 0, false
+	}
+	v, ok := otherData["profile_start_ts"]
+	if !ok {
+		return 0, false
+	}
+	if n, ok := v.(float64); ok {
+		return n, true
+	}
+	return 0, false
 }
 
 // syntheticTraceID generates a deterministic trace ID by hashing event data.

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/stretchr/testify/assert"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 	v1common "go.opentelemetry.io/proto/otlp/common/v1"
@@ -639,6 +640,46 @@ func TestParseChromeTraceOtherData(t *testing.T) {
 	if attrs["chrome.metadata.build_id"] != "abc123" {
 		t.Errorf("missing or wrong build_id, got %q", attrs["chrome.metadata.build_id"])
 	}
+}
+
+func TestParseChromeTraceProfileStartTs(t *testing.T) {
+	t.Run("with profile_start_ts offsets timestamps", func(t *testing.T) {
+		a := assert.New(t)
+		input := `{
+			"otherData": {"profile_start_ts": 1000000},
+			"traceEvents": [
+				{"name":"Build","ph":"X","ts":5000000,"dur":2000000,"pid":1,"tid":1}
+			]
+		}`
+
+		spans, err := Parse(strings.NewReader(input))
+		a.NoError(err)
+		a.Len(spans, 1)
+
+		// profile_start_ts=1000000 ms = 1,000 seconds from epoch
+		// event ts=5000000 µs = 5s relative offset
+		// event dur=2000000 µs = 2s
+		// Absolute: start = 1000s + 5s = 1005s, end = 1005s + 2s = 1007s
+		a.Equal(time.Unix(1005, 0), spans[0].StartTime())
+		a.Equal(time.Unix(1007, 0), spans[0].EndTime())
+	})
+
+	t.Run("without profile_start_ts treats timestamps as absolute", func(t *testing.T) {
+		a := assert.New(t)
+		input := `{
+			"traceEvents": [
+				{"name":"Build","ph":"X","ts":5000000,"dur":2000000,"pid":1,"tid":1}
+			]
+		}`
+
+		spans, err := Parse(strings.NewReader(input))
+		a.NoError(err)
+		a.Len(spans, 1)
+
+		// No profile_start_ts: ts=5000000 µs = 5s absolute from epoch
+		a.Equal(time.Unix(5, 0), spans[0].StartTime())
+		a.Equal(time.Unix(7, 0), spans[0].EndTime())
+	})
 }
 
 func TestParseChromeTraceFiltersShortEvents(t *testing.T) {

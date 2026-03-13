@@ -228,3 +228,27 @@ func TestChainEnricher_FallbackToGeneric(t *testing.T) {
 		t.Errorf("expected generic enricher fallback, got category %q", h.Category)
 	}
 }
+
+func TestGenericEnricher_ArtifactGrouping(t *testing.T) {
+	e := &GenericEnricher{}
+	attrs := map[string]string{
+		"github.artifact_name": "build-output",
+	}
+	h := e.Enrich("upload artifact", attrs, false)
+
+	if h.GroupKey != "artifact" {
+		t.Errorf("expected GroupKey 'artifact', got %q", h.GroupKey)
+	}
+}
+
+func TestGenericEnricher_EmptyArtifactName(t *testing.T) {
+	e := &GenericEnricher{}
+	attrs := map[string]string{
+		"github.artifact_name": "",
+	}
+	h := e.Enrich("upload artifact", attrs, false)
+
+	if h.GroupKey != "" {
+		t.Errorf("expected empty GroupKey for empty artifact name, got %q", h.GroupKey)
+	}
+}

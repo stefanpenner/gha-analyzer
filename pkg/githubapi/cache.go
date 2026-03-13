@@ -9,7 +9,11 @@ import (
 	"net/http/httputil"
 	"os"
 	"path/filepath"
+	"time"
 )
+
+// cacheTTL controls how long cached responses remain valid.
+const cacheTTL = 5 * time.Minute
 
 // CachedTransport implements http.RoundTripper and caches GET requests to disk.
 type CachedTransport struct {
@@ -66,6 +70,17 @@ func (t *CachedTransport) getCacheKey(req *http.Request) string {
 }
 
 func (t *CachedTransport) getFromCache(path string, req *http.Request) *http.Response {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+
+	// Expire stale entries
+	if time.Since(info.ModTime()) > cacheTTL {
+		_ = os.Remove(path)
+		return nil
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil

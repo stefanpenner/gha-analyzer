@@ -131,7 +131,6 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 		if err != nil {
 			return nil, err
 		}
-
 		// Track target branch for branch protection lookup (base branch of PR)
 		protectionTargetBranch = prData.Base.Ref
 	} else {
