@@ -1,5 +1,5 @@
 name: Test
-
+# Uses real Bazel --profile chrome tracing output for trace artifacts
 on:
   push:
     branches: [main]
