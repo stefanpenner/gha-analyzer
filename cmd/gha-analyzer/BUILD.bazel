@@ -8,6 +8,7 @@ go_library(
     deps = [
         "//pkg/analyzer",
         "//pkg/core",
+        "//pkg/enrichment",
         "//pkg/export/otel",
         "//pkg/export/perfetto",
         "//pkg/export/terminal",

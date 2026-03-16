@@ -84,6 +84,7 @@ Beyond raw timings, the analyzer enriches spans with:
 - **Billable minutes** — computed cost breakdown
 - **Retry detection** — identifies re-run jobs and counts attempts
 - **PR annotations** — review approvals, comments, merge events shown as markers on the timeline
+- **CI/CD pipeline recognition** — auto-classifies spans using [OTel CI/CD semantic conventions](https://opentelemetry.io/docs/specs/semconv/cicd/) (`cicd.pipeline.*` attributes)
 
 ## Trends
 
@@ -132,7 +133,7 @@ gha-analyzer <url> --otel=localhost:4318
 gha-analyzer <url> --otel-grpc=localhost:4317
 ```
 
-You can also **ingest** OTel trace files:
+You can also **ingest** OTel trace files from any CI/CD system — Jenkins, GitLab CI, Buildkite, Dagger, and anything else that emits traces following the [OTel CI/CD semantic conventions](https://opentelemetry.io/docs/specs/semconv/cicd/):
 
 ```bash
 gha-analyzer --trace=spans.json

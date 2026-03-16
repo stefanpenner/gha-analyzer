@@ -15,6 +15,7 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/core"
 	otelexport "github.com/stefanpenner/gha-analyzer/pkg/export/otel"
 	perfettoexport "github.com/stefanpenner/gha-analyzer/pkg/export/perfetto"
+	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"github.com/stefanpenner/gha-analyzer/pkg/export/terminal"
 	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
 	"github.com/stefanpenner/gha-analyzer/pkg/ingest/otlpfile"
@@ -417,9 +418,19 @@ func main() {
 
 	ctx := context.Background()
 
-	// 2. Setup Exporters
+	// 2. Choose enricher chain based on input source
+	var enricher enrichment.Enricher
+	if len(args) > 0 {
+		// GitHub URLs provided: GHA-specific enricher first
+		enricher = enrichment.DefaultEnricher()
+	} else {
+		// Trace files or backends only: skip GHA enricher
+		enricher = enrichment.NewChainEnricher(&enrichment.CICDEnricher{}, &enrichment.GenericEnricher{})
+	}
+
+	// 3. Setup Exporters
 	exporters := []core.Exporter{
-		terminal.NewExporter(os.Stderr),
+		terminal.NewExporter(os.Stderr, enricher),
 	}
 
 	if perfettoFile != "" {
@@ -639,7 +650,7 @@ func main() {
 			inputSources = append(inputSources, filepath.Base(tf))
 		}
 
-		if err := tuiresults.Run(spans, globalStartTime, globalEndTime, inputSources, reloadFunc, openPerfettoFunc); err != nil {
+		if err := tuiresults.Run(spans, globalStartTime, globalEndTime, inputSources, reloadFunc, openPerfettoFunc, enricher); err != nil {
 			fmt.Fprintf(os.Stderr, "%sError: TUI failed: %v%s\n", colorRed, err, colorReset)
 			os.Exit(1)
 		}
@@ -655,9 +666,9 @@ func main() {
 
 	switch cfg.outputFormat {
 	case "markdown":
-		output.OutputCombinedResultsMarkdown(os.Stdout, results, combined, allTraceEvents, globalEarliest, globalLatest, perfettoFile, cfg.openInPerfetto, spans)
+		output.OutputCombinedResultsMarkdown(os.Stdout, results, combined, allTraceEvents, globalEarliest, globalLatest, perfettoFile, cfg.openInPerfetto, spans, enricher)
 	default:
-		output.OutputStyledResults(os.Stderr, results, combined, allTraceEvents, globalEarliest, globalLatest, spans)
+		output.OutputStyledResults(os.Stderr, results, combined, allTraceEvents, globalEarliest, globalLatest, spans, enricher)
 		// Handle perfetto export for styled output
 		if perfettoFile != "" {
 			perfetto.WriteTrace(os.Stderr, results, combined, allTraceEvents, globalEarliest, perfettoFile, cfg.openInPerfetto, spans)

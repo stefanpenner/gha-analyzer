@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
@@ -16,7 +17,7 @@ import (
 // OutputStyledResults renders a lipgloss-styled terminal report.
 // It writes to w (typically os.Stderr) and mirrors the sections of the TUI
 // header: summary box, pending jobs, run summary, slowest jobs, and timeline.
-func OutputStyledResults(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime, globalLatestTime int64, spans []trace.ReadOnlySpan) error {
+func OutputStyledResults(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime, globalLatestTime int64, spans []trace.ReadOnlySpan, enricher enrichment.Enricher) error {
 	width := 90
 	contentWidth := width - 4 // minus "│ " and " │"
 
@@ -36,7 +37,7 @@ func OutputStyledResults(w io.Writer, urlResults []analyzer.URLResult, combined 
 	}
 
 	// Line 1: Title
-	line1 := buildLeftLine(titleStyle.Render("GitHub Actions Analyzer"))
+	line1 := buildLeftLine(titleStyle.Render("Trace Analyzer"))
 
 	// Compute success rates
 	successRate := float64(0)
@@ -292,7 +293,7 @@ func OutputStyledResults(w io.Writer, urlResults []analyzer.URLResult, combined 
 
 	// ── Pipeline Timelines ────────────────────────────────────────────
 	styledSection(w, "Pipeline Timelines")
-	RenderOTelTimeline(w, spans, time.UnixMilli(globalEarliestTime), time.UnixMilli(globalLatestTime))
+	RenderOTelTimeline(w, spans, time.UnixMilli(globalEarliestTime), time.UnixMilli(globalLatestTime), enricher)
 
 	return nil
 }
@@ -341,8 +342,8 @@ func combinedWallCompute(urlResults []analyzer.URLResult) (int64, int64) {
 
 // RenderTimelineToBuffer renders the OTel timeline into a buffer and returns
 // the content as a string. Useful for embedding in markdown code blocks.
-func RenderTimelineToBuffer(spans []trace.ReadOnlySpan, globalEarliestTime, globalLatestTime int64) string {
+func RenderTimelineToBuffer(spans []trace.ReadOnlySpan, globalEarliestTime, globalLatestTime int64, enricher enrichment.Enricher) string {
 	var buf bytes.Buffer
-	RenderOTelTimeline(&buf, spans, time.UnixMilli(globalEarliestTime), time.UnixMilli(globalLatestTime))
+	RenderOTelTimeline(&buf, spans, time.UnixMilli(globalEarliestTime), time.UnixMilli(globalLatestTime), enricher)
 	return buf.String()
 }

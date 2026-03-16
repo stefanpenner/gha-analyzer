@@ -9,7 +9,6 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
-	"go.opentelemetry.io/otel/sdk/trace"
 )
 
 // ItemType represents the type of tree item
@@ -17,9 +16,9 @@ type ItemType int
 
 const (
 	ItemTypeURLGroup ItemType = iota
-	ItemTypeWorkflow
-	ItemTypeJob
-	ItemTypeStep
+	ItemTypeRoot
+	ItemTypeIntermediate
+	ItemTypeLeaf
 	ItemTypeMarker
 	ItemTypeActivityGroup
 )
@@ -29,12 +28,12 @@ func (t ItemType) String() string {
 	switch t {
 	case ItemTypeURLGroup:
 		return "URLGroup"
-	case ItemTypeWorkflow:
-		return "Workflow"
-	case ItemTypeJob:
-		return "Job"
-	case ItemTypeStep:
-		return "Step"
+	case ItemTypeRoot:
+		return "Root"
+	case ItemTypeIntermediate:
+		return "Intermediate"
+	case ItemTypeLeaf:
+		return "Leaf"
 	case ItemTypeMarker:
 		return "Marker"
 	case ItemTypeActivityGroup:
@@ -240,11 +239,14 @@ func convertNode(node *analyzer.TreeNode, parentID string, index, depth int, exp
 		sourceNode:  node,
 	}
 
-	// Partition children into regular and artifact groups
+	// Partition children into regular and artifact groups.
+	// Skip artifact sub-grouping if this node is already an artifact span —
+	// all artifact descendants have GroupKey=="artifact" from the ingest tagging,
+	// and re-grouping them would create spurious nested "Trace Artifacts" nodes.
 	var regularChildren []*analyzer.TreeNode
 	var artifactChildren []*analyzer.TreeNode
 	for _, child := range node.Children {
-		if child.Hints.GroupKey == "artifact" {
+		if child.Hints.GroupKey == "artifact" && node.Hints.GroupKey != "artifact" {
 			artifactChildren = append(artifactChildren, child)
 		} else {
 			regularChildren = append(regularChildren, child)
@@ -337,20 +339,20 @@ func itemTypeFromNode(node *analyzer.TreeNode) ItemType {
 		return ItemTypeMarker
 	}
 	switch hints.Category {
-	case "workflow":
-		return ItemTypeWorkflow
-	case "job":
-		return ItemTypeJob
+	case "workflow", "pipeline":
+		return ItemTypeRoot
+	case "job", "task":
+		return ItemTypeIntermediate
 	case "step":
-		return ItemTypeStep
+		return ItemTypeLeaf
 	default:
 		if hints.IsRoot {
-			return ItemTypeWorkflow
+			return ItemTypeRoot
 		}
-		if hints.IsLeaf {
-			return ItemTypeStep
+		if hints.IsLeaf || len(node.Children) == 0 {
+			return ItemTypeLeaf
 		}
-		return ItemTypeJob
+		return ItemTypeIntermediate
 	}
 }
 
@@ -359,11 +361,6 @@ func makeNodeID(parentID, name string, index int) string {
 		return fmt.Sprintf("%s/%d", name, index)
 	}
 	return fmt.Sprintf("%s/%s/%d", parentID, name, index)
-}
-
-// BuildTreeFromSpans is a convenience wrapper that uses the default enricher.
-func BuildTreeFromSpans(spans []trace.ReadOnlySpan, globalEarliest, globalLatest time.Time) []*analyzer.TreeNode {
-	return analyzer.BuildTreeFromSpans(spans, globalEarliest, globalLatest, enrichment.DefaultEnricher())
 }
 
 // CountStats returns workflow and job counts from the tree
