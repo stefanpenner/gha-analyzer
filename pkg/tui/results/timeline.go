@@ -569,18 +569,22 @@ func renderTimelineWithChildren(item TreeItem, globalStart, globalEnd time.Time,
 	i := 0
 	for i < width {
 		if i >= parentStartPos && i < parentStartPos+parentBarLen {
-			// Parent bar region — collect consecutive parent chars
+			// Parent bar region — render with duration label
 			end := parentStartPos + parentBarLen
 			if end > width {
 				end = width
 			}
 			count := end - i
-			bar := strings.Repeat(barChar, count)
-			styledBar := parentStyle.Render(bar)
-			if !selected && bgStyle == nil {
-				styledBar = timelineHyperlink(url, styledBar)
+			var labelStyle *lipgloss.Style
+			if selected {
+				ls := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelectionBg)
+				labelStyle = &ls
 			}
-			result.WriteString(styledBar)
+			bar := buildBarWithDuration(barChar, count, item, parentStyle, labelStyle)
+			if !selected && bgStyle == nil {
+				bar = timelineHyperlink(url, bar)
+			}
+			result.WriteString(bar)
 			i = end
 		} else if buf[i].isChild {
 			// Child marker
