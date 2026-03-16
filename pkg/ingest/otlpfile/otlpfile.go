@@ -110,6 +110,11 @@ func Parse(r io.Reader) ([]sdktrace.ReadOnlySpan, error) {
 		return parseProtoJSONL(data)
 	}
 
+	// Detect Jaeger API format by looking for top-level "data" with "traceID".
+	if bytes.Contains(data, []byte(`"traceID"`)) && bytes.Contains(data, []byte(`"operationName"`)) {
+		return ParseJaeger(bytes.NewReader(data))
+	}
+
 	// Detect Chrome Tracing format by looking for "traceEvents" key or
 	// "ph" field (event phase indicator unique to Chrome Tracing).
 	if bytes.Contains(data, []byte(`"traceEvents"`)) || looksLikeChromeTrace(data) {

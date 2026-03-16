@@ -4,6 +4,7 @@ go_library(
     name = "otlpfile",
     srcs = [
         "chrome.go",
+        "jaeger.go",
         "otlpfile.go",
         "proto.go",
         "protobuf.go",

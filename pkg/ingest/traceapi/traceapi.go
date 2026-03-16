@@ -1,15 +1,13 @@
-// Package traceapi fetches traces from OTLP-compatible backends
-// (Tempo, Jaeger v2) via their HTTP APIs and returns ReadOnlySpans.
+// Package traceapi fetches traces from trace backends
+// (Tempo, Jaeger) via their HTTP APIs and returns ReadOnlySpans.
 //
 // Supported backends:
-//   - Grafana Tempo: GET /api/traces/{traceID}
-//   - Jaeger v2:     GET /api/traces/{traceID}
-//
-// Both return OTLP protobuf-JSON (ExportTraceServiceRequest) when
-// the Accept header requests it.
+//   - Grafana Tempo: GET /api/traces/{traceID} (OTLP JSON)
+//   - Jaeger:        GET /api/traces/{traceID} (Jaeger JSON, auto-detected)
 package traceapi
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,7 +19,7 @@ import (
 	"github.com/stefanpenner/otel-analyzer/pkg/ingest/otlpfile"
 )
 
-// Client fetches traces from an OTLP-compatible HTTP backend.
+// Client fetches traces from a trace backend HTTP API.
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
@@ -40,6 +38,7 @@ func New(baseURL string) *Client {
 }
 
 // FetchTrace retrieves a trace by its ID and returns parsed ReadOnlySpans.
+// Auto-detects the response format (OTLP JSON or Jaeger JSON).
 func (c *Client) FetchTrace(traceID string) ([]sdktrace.ReadOnlySpan, error) {
 	url := fmt.Sprintf("%s/api/traces/%s", c.baseURL, traceID)
 
@@ -47,7 +46,6 @@ func (c *Client) FetchTrace(traceID string) ([]sdktrace.ReadOnlySpan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	// Request OTLP JSON format (works with both Tempo and Jaeger v2)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.httpClient.Do(req)
@@ -61,9 +59,23 @@ func (c *Client) FetchTrace(traceID string) ([]sdktrace.ReadOnlySpan, error) {
 		return nil, fmt.Errorf("fetch trace %s: HTTP %d: %s", traceID, resp.StatusCode, string(body))
 	}
 
-	spans, err := otlpfile.ParseProto(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("parse trace %s: %w", traceID, err)
+		return nil, fmt.Errorf("read trace %s response: %w", traceID, err)
+	}
+
+	// Auto-detect format: Jaeger responses have "data" key, OTLP has "resourceSpans"
+	if bytes.Contains(body, []byte(`"resourceSpans"`)) {
+		spans, err := otlpfile.ParseProto(bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("parse trace %s (OTLP): %w", traceID, err)
+		}
+		return spans, nil
+	}
+
+	spans, err := otlpfile.ParseJaeger(bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("parse trace %s (Jaeger): %w", traceID, err)
 	}
 	return spans, nil
 }
