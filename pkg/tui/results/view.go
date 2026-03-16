@@ -4,15 +4,18 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 )
 
 const (
-	treeWidth     = 55
-	timelineWidth = 30
-	horizontalPad = 2 // left/right padding for main view
+	defaultTreeWidth = 55
+	minTreeWidth     = 25
+	maxTreeWidth     = 120
+	treeWidthStep    = 5
+	horizontalPad    = 2 // left/right padding for main view
 )
 
 // highlightMatch splits name into before/match/after and styles the match portion
@@ -234,7 +237,7 @@ func (m Model) renderTimeAxis() string {
 	}
 
 	// Match the structure of item rows: │ tree │ timeline │
-	treeW := treeWidth
+	treeW := m.treeWidth
 	availableW := totalWidth - 3 // 3 border chars
 	timelineW := availableW - treeW
 	if timelineW < 10 {
@@ -366,7 +369,7 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	// Calculate widths
 	// Line structure: │ + treePart + │ + timelineBar + │ = 3 border chars
 	availableWidth := totalWidth - 3 // 3 border characters
-	treeW := treeWidth
+	treeW := m.treeWidth
 	timelineW := availableWidth - treeW
 	if timelineW < 10 {
 		timelineW = 10
@@ -702,7 +705,7 @@ func getBadgesWidth(badges string) int {
 	return width
 }
 
-// renderFooter renders the help footer
+// renderFooter renders the help footer with context-sensitive keybindings
 func (m Model) renderFooter() string {
 	width := m.width
 	if width < 40 {
@@ -713,21 +716,59 @@ func (m Model) renderFooter() string {
 		totalWidth = 80
 	}
 
-	help := m.keys.ShortHelp()
-	helpWidth := lipgloss.Width(help)
+	// Determine help mode
+	mode := HelpModeNormal
+	if m.isSearching {
+		mode = HelpModeSearch
+	} else if m.searchQuery != "" {
+		mode = HelpModeSearchActive
+	} else if m.showDetailModal {
+		mode = HelpModeModal
+	}
 
-	// Center the help text across full width (matching item row structure)
+	// Build left (help) and right (status indicators) content
+	help := m.keys.ShortHelpForMode(mode)
+
+	// Build right-side status indicators
+	var indicators []string
+	if m.sortMode != SortByStartTime {
+		indicators = append(indicators, "sort:"+m.sortMode.String())
+	}
+	if m.treeWidth != defaultTreeWidth {
+		indicators = append(indicators, fmt.Sprintf("tree:%d", m.treeWidth))
+	}
+	// Yank flash (show for 2 seconds)
+	if m.yankFlash != "" && time.Since(m.yankFlashTime) < 2*time.Second {
+		flash := m.yankFlash
+		if len(flash) > 30 {
+			flash = flash[:27] + "..."
+		}
+		indicators = append(indicators, "copied: "+flash)
+	}
+
+	right := ""
+	rightPlain := ""
+	if len(indicators) > 0 {
+		rightPlain = " " + strings.Join(indicators, " • ") + " "
+		right = " " + FooterStyle.Render(strings.Join(indicators, " • ")) + " "
+	}
+	rightWidth := lipgloss.Width(rightPlain)
+
+	helpWidth := lipgloss.Width(help)
 	contentWidth := totalWidth - 2 // account for "│" prefix and "│" suffix
-	leftPadding := (contentWidth - helpWidth) / 2
+
+	// Center help text in remaining space
+	availableForHelp := contentWidth - rightWidth
+	leftPadding := (availableForHelp - helpWidth) / 2
 	if leftPadding < 0 {
 		leftPadding = 0
 	}
-	rightPadding := contentWidth - helpWidth - leftPadding
-	if rightPadding < 0 {
-		rightPadding = 0
+	midPadding := availableForHelp - helpWidth - leftPadding
+	if midPadding < 0 {
+		midPadding = 0
 	}
 
-	helpLine := BorderStyle.Render("│") + strings.Repeat(" ", leftPadding) + FooterStyle.Render(help) + strings.Repeat(" ", rightPadding) + BorderStyle.Render("│")
+	helpLine := BorderStyle.Render("│") + strings.Repeat(" ", leftPadding) + FooterStyle.Render(help) + strings.Repeat(" ", midPadding) + right + BorderStyle.Render("│")
 
 	// Bottom border is a simple continuous line with rounded corners
 	bottomBorder := BorderStyle.Render("╰" + strings.Repeat("─", max(0, totalWidth-2)) + "╯")
