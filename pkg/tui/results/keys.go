@@ -26,7 +26,6 @@ type KeyMap struct {
 	Sort            key.Binding
 	ResizeLeft      key.Binding
 	ResizeRight     key.Binding
-
 	NextFailed      key.Binding
 	NextBottleneck  key.Binding
 	PageUp          key.Binding
@@ -206,6 +205,7 @@ func (k KeyMap) FullHelp() [][]string {
 		{"e", "Mark logical end"},
 		{"s", "Cycle sort (start/duration↓/duration↑)"},
 		{"[/]", "Resize tree/timeline split"},
+
 
 		{"r", "Reload data"},
 		{"p", "Open in Perfetto"},

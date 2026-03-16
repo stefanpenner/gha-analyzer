@@ -736,6 +736,8 @@ func (m Model) renderFooter() string {
 	if m.treeWidth != defaultTreeWidth {
 		indicators = append(indicators, fmt.Sprintf("tree:%d", m.treeWidth))
 	}
+
+
 	right := ""
 	rightPlain := ""
 	if len(indicators) > 0 {
