@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "enrichment",
     srcs = [
+        "cicd.go",
         "enricher.go",
         "generic.go",
         "gha.go",
@@ -13,6 +14,9 @@ go_library(
 
 go_test(
     name = "enrichment_test",
-    srcs = ["enricher_test.go"],
+    srcs = [
+        "cicd_test.go",
+        "enricher_test.go",
+    ],
     embed = [":enrichment"],
 )

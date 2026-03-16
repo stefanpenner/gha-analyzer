@@ -46,7 +46,7 @@ func (c *ChainEnricher) Enrich(name string, attrs map[string]string, isZeroDurat
 	return SpanHints{}
 }
 
-// DefaultEnricher returns the default enricher chain: GHA first, then Generic.
+// DefaultEnricher returns the default enricher chain: GHA first, CICD second, then Generic.
 func DefaultEnricher() *ChainEnricher {
-	return NewChainEnricher(&GHAEnricher{}, &GenericEnricher{})
+	return NewChainEnricher(&GHAEnricher{}, &CICDEnricher{}, &GenericEnricher{})
 }

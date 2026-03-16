@@ -7,13 +7,14 @@ import (
 	"strings"
 
 	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"github.com/stefanpenner/gha-analyzer/pkg/perfetto"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 
-func OutputCombinedResultsMarkdown(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime, globalLatestTime int64, perfettoFile string, openInPerfetto bool, spans []trace.ReadOnlySpan) error {
-	fmt.Fprintln(w, "# GitHub Actions Performance Report")
+func OutputCombinedResultsMarkdown(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime, globalLatestTime int64, perfettoFile string, openInPerfetto bool, spans []trace.ReadOnlySpan, enricher enrichment.Enricher) error {
+	fmt.Fprintln(w, "# Trace Performance Report")
 	fmt.Fprintln(w, "")
 	fmt.Fprintf(w, "- Perfetto UI: %s\n", markdownLink("https://ui.perfetto.dev", "https://ui.perfetto.dev"))
 	if perfettoFile != "" {
@@ -64,7 +65,7 @@ func OutputCombinedResultsMarkdown(w io.Writer, urlResults []analyzer.URLResult,
 	fmt.Fprintln(w, "")
 
 	if len(spans) > 0 {
-		timelineStr := RenderTimelineToBuffer(spans, globalEarliestTime, globalLatestTime)
+		timelineStr := RenderTimelineToBuffer(spans, globalEarliestTime, globalLatestTime, enricher)
 		if timelineStr != "" {
 			fmt.Fprintln(w, "## Pipeline Timeline")
 			fmt.Fprintln(w, "")

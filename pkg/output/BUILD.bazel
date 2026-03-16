@@ -29,6 +29,7 @@ go_test(
     srcs = ["timeline_test.go"],
     embed = [":output"],
     deps = [
+        "//pkg/enrichment",
         "@com_github_stretchr_testify//assert",
         "@io_opentelemetry_go_otel//attribute",
         "@io_opentelemetry_go_otel_sdk//instrumentation",

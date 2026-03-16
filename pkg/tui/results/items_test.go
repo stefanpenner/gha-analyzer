@@ -17,9 +17,9 @@ func TestItemTypeString(t *testing.T) {
 		expected string
 	}{
 		{ItemTypeURLGroup, "URLGroup"},
-		{ItemTypeWorkflow, "Workflow"},
-		{ItemTypeJob, "Job"},
-		{ItemTypeStep, "Step"},
+		{ItemTypeRoot, "Root"},
+		{ItemTypeIntermediate, "Intermediate"},
+		{ItemTypeLeaf, "Leaf"},
 		{ItemTypeMarker, "Marker"},
 		{ItemTypeActivityGroup, "ActivityGroup"},
 		{ItemType(99), "Unknown"},
@@ -74,7 +74,7 @@ func TestBuildTreeItems(t *testing.T) {
 
 		assert.Len(t, items, 1)
 		assert.Equal(t, "CI", items[0].Name)
-		assert.Equal(t, ItemTypeWorkflow, items[0].ItemType)
+		assert.Equal(t, ItemTypeRoot, items[0].ItemType)
 		assert.Equal(t, 0, items[0].Depth)
 		assert.False(t, items[0].HasChildren)
 	})
@@ -103,7 +103,7 @@ func TestBuildTreeItems(t *testing.T) {
 		assert.True(t, items[0].HasChildren)
 		assert.Len(t, items[0].Children, 1)
 		assert.Equal(t, "build", items[0].Children[0].Name)
-		assert.Equal(t, ItemTypeJob, items[0].Children[0].ItemType)
+		assert.Equal(t, ItemTypeIntermediate, items[0].Children[0].ItemType)
 		assert.Equal(t, 1, items[0].Children[0].Depth)
 		assert.Len(t, items[0].Children[0].Children, 2)
 	})
@@ -160,9 +160,9 @@ func TestBuildTreeItemsPartitioning(t *testing.T) {
 		assert.Len(t, items, 3)
 		assert.Equal(t, ItemTypeActivityGroup, items[0].ItemType)
 		assert.Equal(t, "Activity", items[0].Name)
-		assert.Equal(t, ItemTypeWorkflow, items[1].ItemType)
+		assert.Equal(t, ItemTypeRoot, items[1].ItemType)
 		assert.Equal(t, "Tests", items[1].Name)
-		assert.Equal(t, ItemTypeWorkflow, items[2].ItemType)
+		assert.Equal(t, ItemTypeRoot, items[2].ItemType)
 		assert.Equal(t, "Deploy", items[2].Name)
 
 		assert.Len(t, items[0].Children, 2)
@@ -182,7 +182,7 @@ func TestBuildTreeItemsPartitioning(t *testing.T) {
 
 		assert.Len(t, items, 2)
 		for _, item := range items {
-			assert.Equal(t, ItemTypeWorkflow, item.ItemType)
+			assert.Equal(t, ItemTypeRoot, item.ItemType)
 		}
 	})
 
@@ -236,7 +236,7 @@ func TestBuildTreeItemsPartitioning(t *testing.T) {
 			assert.Len(t, pr1Group.Children, 2)
 			assert.Equal(t, ItemTypeActivityGroup, pr1Group.Children[0].ItemType)
 			assert.Len(t, pr1Group.Children[0].Children, 1)
-			assert.Equal(t, ItemTypeWorkflow, pr1Group.Children[1].ItemType)
+			assert.Equal(t, ItemTypeRoot, pr1Group.Children[1].ItemType)
 		}
 	})
 }

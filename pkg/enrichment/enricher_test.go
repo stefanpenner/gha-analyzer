@@ -224,8 +224,8 @@ func TestChainEnricher_FallbackToGeneric(t *testing.T) {
 	}
 	h := chain.Enrich("GET /api", attrs, false)
 
-	if h.Category != "operation" {
-		t.Errorf("expected generic enricher fallback, got category %q", h.Category)
+	if h.Category != "http" {
+		t.Errorf("expected generic enricher to recognize http spans, got category %q", h.Category)
 	}
 }
 

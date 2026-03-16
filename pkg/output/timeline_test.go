@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -42,7 +43,7 @@ func TestRenderOTelTimelineDeduplication(t *testing.T) {
 		span2 := createSpan("Review: APPROVED", "approved", eventID, "https://github.com/1", eventTime)
 		
 		var buf bytes.Buffer
-		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{span1, span2}, time.Time{}, time.Time{})
+		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{span1, span2}, time.Time{}, time.Time{}, enrichment.DefaultEnricher())
 		
 		output := buf.String()
 		// Should only contain one "Review: APPROVED"
@@ -57,7 +58,7 @@ func TestRenderOTelTimelineDeduplication(t *testing.T) {
 		span2 := createSpan("Comment", "comment", "comment-123-url2", "https://github.com/1#comment", eventTime)
 		
 		var buf bytes.Buffer
-		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{span1, span2}, time.Time{}, time.Time{})
+		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{span1, span2}, time.Time{}, time.Time{}, enrichment.DefaultEnricher())
 		
 		output := buf.String()
 		// We check for the presence of the labels which are now clickable links
@@ -91,7 +92,7 @@ func TestRenderOTelTimelineDeduplication(t *testing.T) {
 
 		var buf bytes.Buffer
 		// Provide spans in "wrong" order to test sorting
-		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{workflowSpan, markerSpan}, time.Time{}, time.Time{})
+		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{workflowSpan, markerSpan}, time.Time{}, time.Time{}, enrichment.DefaultEnricher())
 
 		output := buf.String()
 		lines := strings.Split(strings.TrimSpace(output), "\n")
@@ -191,7 +192,7 @@ func TestJobSpanRequiredEmoji(t *testing.T) {
 		span := createJobSpan("required-check 🔒", true)
 
 		var buf bytes.Buffer
-		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{span}, time.Time{}, time.Time{})
+		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{span}, time.Time{}, time.Time{}, enrichment.DefaultEnricher())
 
 		output := buf.String()
 		assert.Contains(t, output, "required-check 🔒")
@@ -202,7 +203,7 @@ func TestJobSpanRequiredEmoji(t *testing.T) {
 		span := createJobSpan("optional-check", false)
 
 		var buf bytes.Buffer
-		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{span}, time.Time{}, time.Time{})
+		RenderOTelTimeline(&buf, []sdktrace.ReadOnlySpan{span}, time.Time{}, time.Time{}, enrichment.DefaultEnricher())
 
 		output := buf.String()
 		assert.Contains(t, output, "optional-check")

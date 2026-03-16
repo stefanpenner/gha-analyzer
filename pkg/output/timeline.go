@@ -146,12 +146,10 @@ func getSpanType(s trace.ReadOnlySpan) string {
 }
 
 // RenderOTelTimeline renders a generic OTel span tree as a terminal waterfall.
-func RenderOTelTimeline(w io.Writer, spans []trace.ReadOnlySpan, globalEarliest, globalLatest time.Time) {
+func RenderOTelTimeline(w io.Writer, spans []trace.ReadOnlySpan, globalEarliest, globalLatest time.Time, enricher enrichment.Enricher) {
 	if len(spans) == 0 {
 		return
 	}
-
-	enricher := enrichment.DefaultEnricher()
 	roots := BuildEnrichedSpanTree(spans, enricher, globalEarliest, globalLatest)
 	if len(roots) == 0 {
 		return

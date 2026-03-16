@@ -20,6 +20,7 @@ func createTestModel() Model {
 	globalEnd := now.Add(5 * time.Minute)
 
 	m := Model{
+		enricher:       enrichment.DefaultEnricher(),
 		expandedState:  make(map[string]bool),
 		hiddenState:    make(map[string]bool),
 		globalStart:    globalStart,
@@ -85,7 +86,7 @@ func TestNewModel(t *testing.T) {
 
 	t.Run("initializes with default values", func(t *testing.T) {
 		now := time.Now()
-		m := NewModel(nil, now, now.Add(time.Minute), []string{"https://example.com"}, nil, nil)
+		m := NewModel(nil, now, now.Add(time.Minute), []string{"https://example.com"}, nil, nil, enrichment.DefaultEnricher())
 
 		assert.Equal(t, 80, m.width)
 		assert.Equal(t, 24, m.height)
@@ -106,7 +107,7 @@ func TestModelView(t *testing.T) {
 		view := m.View()
 
 		assert.NotEmpty(t, view)
-		assert.Contains(t, view, "GitHub Actions Analyzer")
+		assert.Contains(t, view, "Trace Analyzer")
 	})
 
 	t.Run("renders header with URL", func(t *testing.T) {
@@ -532,7 +533,7 @@ func TestRenderHeader(t *testing.T) {
 		m := createTestModel()
 		header := m.renderHeader()
 
-		assert.Contains(t, header, "GitHub Actions Analyzer")
+		assert.Contains(t, header, "Trace Analyzer")
 	})
 
 	t.Run("renders header with input URLs", func(t *testing.T) {
@@ -822,7 +823,7 @@ func TestFocusMultiURL(t *testing.T) {
 		// Find the CI workflow under url-group/0
 		var ciID string
 		for _, item := range m.visibleItems {
-			if item.Name == "CI" && item.ItemType == ItemTypeWorkflow {
+			if item.Name == "CI" && item.ItemType == ItemTypeRoot {
 				ciID = item.ID
 				break
 			}
@@ -858,7 +859,7 @@ func TestFocusMultiURL(t *testing.T) {
 		// Find the build job
 		var buildID string
 		for _, item := range m.visibleItems {
-			if item.Name == "build" && item.ItemType == ItemTypeJob {
+			if item.Name == "build" && item.ItemType == ItemTypeIntermediate {
 				buildID = item.ID
 				break
 			}

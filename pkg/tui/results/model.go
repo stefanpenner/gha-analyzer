@@ -39,6 +39,7 @@ type LoadingReporter interface {
 
 // Model represents the TUI state
 type Model struct {
+	enricher      enrichment.Enricher
 	roots         []*analyzer.TreeNode
 	treeItems     []*TreeItem
 	visibleItems  []TreeItem
@@ -108,11 +109,12 @@ type ReloadFunc func(reporter LoadingReporter) ([]trace.ReadOnlySpan, time.Time,
 type OpenPerfettoFunc func()
 
 // NewModel creates a new TUI model from OTel spans
-func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc, openPerfettoFunc OpenPerfettoFunc) Model {
+func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc, openPerfettoFunc OpenPerfettoFunc, enricher enrichment.Enricher) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 
 	m := Model{
+		enricher:         enricher,
 		expandedState:    make(map[string]bool),
 		hiddenState:      make(map[string]bool),
 		globalStart:      globalStart,
@@ -131,12 +133,12 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 	}
 
 	// Calculate summary statistics
-	m.summary = analyzer.CalculateSummary(spans, enrichment.DefaultEnricher())
+	m.summary = analyzer.CalculateSummary(spans, m.enricher)
 	m.wallTimeMs = globalEnd.Sub(globalStart).Milliseconds()
 	if m.wallTimeMs < 0 {
 		m.wallTimeMs = 0
 	}
-	m.computeMs, m.stepCount = calculateComputeAndSteps(spans)
+	m.computeMs, m.stepCount = calculateComputeAndSteps(spans, m.enricher)
 
 	// Initialize displayed stats to match full stats
 	m.displayedSummary = m.summary
@@ -145,7 +147,7 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 	m.displayedStepCount = m.stepCount
 
 	// Build tree from spans
-	m.roots = analyzer.BuildTreeFromSpans(spans, globalStart, globalEnd, enrichment.DefaultEnricher())
+	m.roots = analyzer.BuildTreeFromSpans(spans, globalStart, globalEnd, m.enricher)
 
 	// Expand URL groups + workflows for multi-URL, just workflows for single
 	if len(inputURLs) > 1 {
@@ -161,21 +163,25 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 }
 
 // calculateComputeAndSteps calculates total compute time and step count from spans
-func calculateComputeAndSteps(spans []trace.ReadOnlySpan) (computeMs int64, stepCount int) {
+// using the enricher to classify spans by category instead of hardcoding GHA types.
+func calculateComputeAndSteps(spans []trace.ReadOnlySpan, enricher enrichment.Enricher) (computeMs int64, stepCount int) {
 	for _, s := range spans {
-		var spanType string
+		attrs := make(map[string]string)
 		for _, a := range s.Attributes() {
-			if string(a.Key) == "type" {
-				spanType = a.Value.AsString()
-				break
-			}
+			attrs[string(a.Key)] = a.Value.AsString()
 		}
-		if spanType == "job" {
+		isZeroDuration := s.EndTime().Before(s.StartTime()) || s.EndTime().Equal(s.StartTime())
+		hints := enricher.Enrich(s.Name(), attrs, isZeroDuration)
+		if hints.Category == "" || hints.IsMarker {
+			continue
+		}
+		if !hints.IsRoot && !hints.IsLeaf {
+			// Intermediate spans (jobs, tasks) contribute to compute time
 			duration := s.EndTime().Sub(s.StartTime()).Milliseconds()
 			if duration > 0 {
 				computeMs += duration
 			}
-		} else if spanType == "step" {
+		} else if hints.IsLeaf {
 			stepCount++
 		}
 	}
@@ -249,13 +255,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.globalEnd = msg.globalEnd
 		m.chartStart = msg.globalStart
 		m.chartEnd = msg.globalEnd
-		m.summary = analyzer.CalculateSummary(msg.spans, enrichment.DefaultEnricher())
+		m.summary = analyzer.CalculateSummary(msg.spans, m.enricher)
 		m.wallTimeMs = msg.globalEnd.Sub(msg.globalStart).Milliseconds()
 		if m.wallTimeMs < 0 {
 			m.wallTimeMs = 0
 		}
-		m.computeMs, m.stepCount = calculateComputeAndSteps(msg.spans)
-		m.roots = analyzer.BuildTreeFromSpans(msg.spans, msg.globalStart, msg.globalEnd, enrichment.DefaultEnricher())
+		m.computeMs, m.stepCount = calculateComputeAndSteps(msg.spans, m.enricher)
+		m.roots = analyzer.BuildTreeFromSpans(msg.spans, msg.globalStart, msg.globalEnd, m.enricher)
 		m.expandedState = make(map[string]bool)
 		m.hiddenState = make(map[string]bool)
 		if len(m.inputURLs) > 1 {
@@ -1424,7 +1430,7 @@ func (m *Model) recalculateChartBounds() {
 
 			// Stats by item type
 			switch item.ItemType {
-			case ItemTypeWorkflow:
+			case ItemTypeRoot:
 				if !workflowsSeen[item.Name] {
 					workflowsSeen[item.Name] = true
 					totalRuns++
@@ -1432,19 +1438,19 @@ func (m *Model) recalculateChartBounds() {
 						successfulRuns++
 					}
 				}
-			case ItemTypeJob:
+			case ItemTypeIntermediate:
 				totalJobs++
 				if item.Hints.Outcome == "failure" {
 					failedJobs++
 				}
-				// Compute time is sum of job durations
+				// Compute time is sum of intermediate span durations
 				if !item.StartTime.IsZero() && !item.EndTime.IsZero() {
 					duration := item.EndTime.Sub(item.StartTime).Milliseconds()
 					if duration > 0 {
 						computeMs += duration
 					}
 				}
-			case ItemTypeStep:
+			case ItemTypeLeaf:
 				stepCount++
 			}
 		}
@@ -1511,8 +1517,8 @@ func (m *Model) IsHidden(id string) bool {
 }
 
 // Run starts the TUI
-func Run(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc, openPerfettoFunc OpenPerfettoFunc) error {
-	m := NewModel(spans, globalStart, globalEnd, inputURLs, reloadFunc, openPerfettoFunc)
+func Run(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc, openPerfettoFunc OpenPerfettoFunc, enricher enrichment.Enricher) error {
+	m := NewModel(spans, globalStart, globalEnd, inputURLs, reloadFunc, openPerfettoFunc, enricher)
 	// Mouse mode disabled by default to allow OSC 8 hyperlinks to work
 	// Press 'm' to toggle mouse mode for scrolling
 	p := tea.NewProgram(m, tea.WithAltScreen())

@@ -13,14 +13,16 @@ import (
 )
 
 type Exporter struct {
-	writer io.Writer
-	spans  []trace.ReadOnlySpan
-	mu     sync.Mutex
+	writer   io.Writer
+	enricher enrichment.Enricher
+	spans    []trace.ReadOnlySpan
+	mu       sync.Mutex
 }
 
-func NewExporter(w io.Writer) *Exporter {
+func NewExporter(w io.Writer, enricher enrichment.Enricher) *Exporter {
 	return &Exporter{
-		writer: io.Discard, // Suppress standard OTel summary, we use the rich report instead
+		writer:   io.Discard, // Suppress standard OTel summary, we use the rich report instead
+		enricher: enricher,
 	}
 }
 
@@ -39,10 +41,10 @@ func (e *Exporter) Finish(ctx context.Context) error {
 		return nil
 	}
 
-	summary := analyzer.CalculateSummary(e.spans, enrichment.DefaultEnricher())
+	summary := analyzer.CalculateSummary(e.spans, e.enricher)
 	
 	fmt.Fprintf(e.writer, "\n%s\n", strings.Repeat("=", 80))
-	fmt.Fprintf(e.writer, "📊 GitHub Actions Performance Report\n")
+	fmt.Fprintf(e.writer, "📊 Trace Performance Report\n")
 	fmt.Fprintf(e.writer, "%s\n", strings.Repeat("=", 80))
 
 	fmt.Fprintf(e.writer, "\nSummary\n-------\n")

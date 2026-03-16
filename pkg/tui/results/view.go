@@ -117,7 +117,7 @@ func (m Model) renderHeader() string {
 	}
 
 	// Line 1: Title
-	line1 := buildLeftLine(HeaderStyle.Render("GitHub Actions Analyzer"), "GitHub Actions Analyzer")
+	line1 := buildLeftLine(HeaderStyle.Render("Trace Analyzer"), "Trace Analyzer")
 
 	// Calculate rates
 	successRate := float64(0)
@@ -131,15 +131,15 @@ func (m Model) renderHeader() string {
 
 	// Line 2: Success rates (left) + Counts (right)
 	// Left side: "Workflows: 100% • Jobs: 100%"
-	leftStyled := HeaderCountStyle.Render("Workflows: ") + colorForRate(successRate).Render(fmt.Sprintf("%.0f%%", successRate)) +
-		sep + HeaderCountStyle.Render("Jobs: ") + colorForRate(jobSuccessRate).Render(fmt.Sprintf("%.0f%%", jobSuccessRate))
-	leftPlain := fmt.Sprintf("Workflows: %.0f%% • Jobs: %.0f%%", successRate, jobSuccessRate)
+	leftStyled := HeaderCountStyle.Render("Traces: ") + colorForRate(successRate).Render(fmt.Sprintf("%.0f%%", successRate)) +
+		sep + HeaderCountStyle.Render("Spans: ") + colorForRate(jobSuccessRate).Render(fmt.Sprintf("%.0f%%", jobSuccessRate))
+	leftPlain := fmt.Sprintf("Traces: %.0f%% • Spans: %.0f%%", successRate, jobSuccessRate)
 
-	// Right side: "1 runs • 3 jobs • 21 steps"
-	rightStyled := numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.TotalRuns)) + HeaderCountStyle.Render(" runs") +
-		sep + numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.TotalJobs)) + HeaderCountStyle.Render(" jobs") +
-		sep + numStyle.Render(fmt.Sprintf("%d", m.displayedStepCount)) + HeaderCountStyle.Render(" steps")
-	rightPlain := fmt.Sprintf("%d runs • %d jobs • %d steps", m.displayedSummary.TotalRuns, m.displayedSummary.TotalJobs, m.displayedStepCount)
+	// Right side: "1 traces • 3 spans • 21 leaves"
+	rightStyled := numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.TotalRuns)) + HeaderCountStyle.Render(" traces") +
+		sep + numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.TotalJobs)) + HeaderCountStyle.Render(" spans") +
+		sep + numStyle.Render(fmt.Sprintf("%d", m.displayedStepCount)) + HeaderCountStyle.Render(" leaves")
+	rightPlain := fmt.Sprintf("%d traces • %d spans • %d leaves", m.displayedSummary.TotalRuns, m.displayedSummary.TotalJobs, m.displayedStepCount)
 
 	line2 := buildLine(leftStyled, leftPlain, rightStyled, rightPlain)
 
@@ -375,7 +375,7 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	// Build indent
 	// Steps align under their parent job icon, so use parent's depth
 	indentDepth := item.Depth
-	if item.ItemType == ItemTypeStep && indentDepth > 0 {
+	if item.ItemType == ItemTypeLeaf && indentDepth > 0 {
 		indentDepth = indentDepth - 1
 	}
 	indent := strings.Repeat("  ", indentDepth)
