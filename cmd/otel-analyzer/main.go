@@ -720,7 +720,7 @@ func tagSpansWithIndex(spans []sdktrace.ReadOnlySpan, urlIndex int) []sdktrace.R
 }
 
 func printUsage() {
-	fmt.Println("GitHub Actions Analyzer")
+	fmt.Println("OTel Analyzer")
 	fmt.Println("\nUsage:")
 	fmt.Println("  otel-analyzer <github_url1> [github_url2...] [token] [flags]")
 	fmt.Println("  otel-analyzer <trace_file.json> [flags]")

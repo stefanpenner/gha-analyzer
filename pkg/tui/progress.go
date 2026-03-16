@@ -155,7 +155,7 @@ func (m progressModel) View() string {
 		return ""
 	}
 
-	header := headerStyle.Render(fmt.Sprintf("🚀 GitHub Actions Analyzer (%d/%d URLs)", m.currentURL, m.totalURLs))
+	header := headerStyle.Render(fmt.Sprintf("🚀 OTel Analyzer (%d/%d URLs)", m.currentURL, m.totalURLs))
 	
 	runProgress := ""
 	if m.currentURLRuns > 0 {

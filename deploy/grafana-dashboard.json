@@ -92,7 +92,7 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "GHA Analyzer Dashboard",
+  "title": "OTel Analyzer Dashboard",
   "uid": "otel-analyzer",
   "version": 1,
   "weekStart": ""

@@ -57,7 +57,7 @@ func (e *Exporter) Finish(ctx context.Context) error {
 	return e.exporter.Shutdown(ctx)
 }
 
-// GetResource returns a standard resource for GHA analyzer
+// GetResource returns a standard resource for OTel analyzer
 func GetResource(ctx context.Context) (*resource.Resource, error) {
 	return resource.New(ctx,
 		resource.WithAttributes(

@@ -10,7 +10,7 @@ datasources:
     editable: true
 
 providers:
-  - name: 'GHA Analyzer'
+  - name: 'OTel Analyzer'
     orgId: 1
     folder: ''
     type: file
