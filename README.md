@@ -1,6 +1,6 @@
 <p align="center">
   <strong>otel-analyzer</strong><br>
-  See where your GitHub Actions time actually goes.
+  See where your CI/CD time actually goes.
 </p>
 
 <p align="center">
@@ -13,7 +13,7 @@
 
 ---
 
-An interactive terminal tool that turns GitHub Actions runs into navigable timelines — so you can find the slow jobs, the flaky tests, and the queue-time bottlenecks without clicking through the GitHub UI.
+An interactive terminal tool that turns OpenTelemetry traces and CI/CD runs into navigable timelines — so you can find the slow jobs, the flaky tests, and the queue-time bottlenecks. Works with GitHub Actions, Jenkins, GitLab CI, Buildkite, Dagger, and any system that emits OTel traces.
 
 ![Interactive TUI with timeline visualization](docs/tui-screenshot.jpeg)
 
@@ -68,7 +68,7 @@ otel-analyzer --jaeger=http://localhost:16686 --trace-id=abc123
 
 ### Webhook Input
 
-Pipe a GitHub Actions webhook payload to analyze the associated commit — useful for CI-triggered analysis:
+Pipe a GitHub Actions webhook payload to analyze the associated commit — useful for event-driven analysis:
 
 ```bash
 echo '{"workflow_run":{"head_sha":"abc123"},"repository":{"full_name":"owner/repo"}}' \
@@ -120,7 +120,7 @@ otel-analyzer trends owner/repo --confidence=0.99 --margin=0.05  # tune sampling
 
 ## OpenTelemetry
 
-Export workflow data as OpenTelemetry spans — feed them into any observability stack:
+Export analysis data as OpenTelemetry spans — feed them into any observability stack:
 
 ```bash
 # JSON spans to stdout
