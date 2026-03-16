@@ -2095,37 +2095,6 @@ func TestResizeKeybindings(t *testing.T) {
 	})
 }
 
-func TestYankKeybinding(t *testing.T) {
-	t.Parallel()
-
-	t.Run("y sets yank flash with URL", func(t *testing.T) {
-		m := createTestModel()
-		m.cursor = 0 // CI workflow has a URL
-
-		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
-		m = newModel.(Model)
-
-		assert.NotEmpty(t, m.yankFlash)
-		assert.Contains(t, m.yankFlash, "github.com")
-	})
-
-	t.Run("y falls back to ID when no URL", func(t *testing.T) {
-		m := createTestModel()
-		// Find an item without a URL
-		for i, item := range m.visibleItems {
-			if item.Hints.URL == "" {
-				m.cursor = i
-				break
-			}
-		}
-
-		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
-		m = newModel.(Model)
-
-		assert.NotEmpty(t, m.yankFlash)
-	})
-}
-
 func TestDynamicHelp(t *testing.T) {
 	t.Parallel()
 
@@ -2134,7 +2103,6 @@ func TestDynamicHelp(t *testing.T) {
 		help := km.ShortHelpForMode(HelpModeNormal)
 		assert.Contains(t, help, "sort")
 		assert.Contains(t, help, "resize")
-		assert.Contains(t, help, "copy")
 		assert.Contains(t, help, "page")
 		assert.Contains(t, help, "jump")
 	})

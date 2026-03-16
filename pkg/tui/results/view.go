@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
@@ -737,15 +736,6 @@ func (m Model) renderFooter() string {
 	if m.treeWidth != defaultTreeWidth {
 		indicators = append(indicators, fmt.Sprintf("tree:%d", m.treeWidth))
 	}
-	// Yank flash (show for 2 seconds)
-	if m.yankFlash != "" && time.Since(m.yankFlashTime) < 2*time.Second {
-		flash := m.yankFlash
-		if len(flash) > 30 {
-			flash = flash[:27] + "..."
-		}
-		indicators = append(indicators, "copied: "+flash)
-	}
-
 	right := ""
 	rightPlain := ""
 	if len(indicators) > 0 {

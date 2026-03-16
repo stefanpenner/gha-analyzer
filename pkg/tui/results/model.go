@@ -1,7 +1,6 @@
 package results
 
 import (
-	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -105,9 +104,6 @@ type Model struct {
 	sortMode SortMode
 	// Resizable tree width
 	treeWidth int
-	// Clipboard flash message
-	yankFlash     string
-	yankFlashTime time.Time
 	// Reload error
 	reloadError string
 	// Span index for O(1) lookups
@@ -580,10 +576,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case key.Matches(msg, m.keys.Yank):
-			cmd := m.yankToClipboard()
-			return m, cmd
-
 		case key.Matches(msg, m.keys.NextFailed):
 			m.jumpToNext(func(item TreeItem) bool {
 				return item.Hints.Outcome == "failure"
@@ -1029,28 +1021,6 @@ func (m *Model) toggleLogicalEnd() {
 			m.logicalEndTime = item.StartTime
 		}
 	}
-}
-
-// yankToClipboard copies the current item's URL (or ID) to the clipboard via OSC 52.
-// Returns a tea.Cmd that writes the OSC 52 escape sequence.
-func (m *Model) yankToClipboard() tea.Cmd {
-	if m.cursor >= len(m.visibleItems) {
-		return nil
-	}
-	item := m.visibleItems[m.cursor]
-
-	// Prefer URL, fall back to ID
-	text := item.Hints.URL
-	if text == "" {
-		text = item.ID
-	}
-
-	m.yankFlash = text
-	m.yankFlashTime = time.Now()
-
-	// OSC 52 clipboard escape: \x1b]52;c;BASE64\x07
-	encoded := base64.StdEncoding.EncodeToString([]byte(text))
-	return tea.Printf("\x1b]52;c;%s\x07", encoded)
 }
 
 // jumpToNext moves the cursor to the next item matching the predicate, wrapping around.

@@ -157,7 +157,7 @@ func RenderTimelineBar(item TreeItem, globalStart, globalEnd time.Time, width in
 
 	// Build the bar with optional duration label
 	leftPad := strings.Repeat(" ", startPos)
-	bar := buildBarWithDuration(barChar, barLength, item, style)
+	bar := buildBarWithDuration(barChar, barLength, item, style, nil)
 	rightPad := strings.Repeat(" ", width-startPos-barLength)
 
 	// Wrap only the bar in hyperlink
@@ -224,13 +224,15 @@ func RenderTimelineBarSelected(item TreeItem, globalStart, globalEnd time.Time, 
 
 	barChar, style := getBarStyleSelected(item)
 
+	// Use a bright label style so duration text is visible on the selection background
+	labelStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelectionBg)
+
 	// Apply selection background to padding and bar
 	leftPad := SelectedBgStyle.Render(strings.Repeat(" ", startPos))
-	bar := strings.Repeat(barChar, barLength)
+	bar := buildBarWithDuration(barChar, barLength, item, style, &labelStyle)
 	rightPad := SelectedBgStyle.Render(strings.Repeat(" ", width-startPos-barLength))
 
-	styledBar := style.Render(bar)
-	return leftPad + timelineHyperlink(url, styledBar) + rightPad
+	return leftPad + timelineHyperlink(url, bar) + rightPad
 }
 
 // renderTimelineBarWithBg renders a timeline bar with normal colors but applies
@@ -305,23 +307,29 @@ func renderTimelineBarWithBg(item TreeItem, globalStart, globalEnd time.Time, wi
 
 // buildBarWithDuration renders a bar string, overlaying a short duration label
 // inside the bar when there's enough room (bar length >= label length + 2).
-func buildBarWithDuration(barChar string, barLength int, item TreeItem, style lipgloss.Style) string {
+// labelStyle controls the style of the duration text; if nil, barStyle is used for everything.
+func buildBarWithDuration(barChar string, barLength int, item TreeItem, barStyle lipgloss.Style, labelStyle *lipgloss.Style) string {
 	if item.StartTime.IsZero() || item.EndTime.IsZero() {
-		return style.Render(strings.Repeat(barChar, barLength))
+		return barStyle.Render(strings.Repeat(barChar, barLength))
 	}
 	dur := item.EndTime.Sub(item.StartTime).Seconds()
 	if dur <= 0 {
-		return style.Render(strings.Repeat(barChar, barLength))
+		return barStyle.Render(strings.Repeat(barChar, barLength))
 	}
 	label := utils.HumanizeTime(dur)
 	// Need at least 1 bar char on each side of the label
 	if barLength < len(label)+2 {
-		return style.Render(strings.Repeat(barChar, barLength))
+		return barStyle.Render(strings.Repeat(barChar, barLength))
 	}
 	// Center the label in the bar
 	leftBars := (barLength - len(label)) / 2
 	rightBars := barLength - leftBars - len(label)
-	return style.Render(strings.Repeat(barChar, leftBars) + label + strings.Repeat(barChar, rightBars))
+	if labelStyle != nil {
+		return barStyle.Render(strings.Repeat(barChar, leftBars)) +
+			labelStyle.Render(label) +
+			barStyle.Render(strings.Repeat(barChar, rightBars))
+	}
+	return barStyle.Render(strings.Repeat(barChar, leftBars) + label + strings.Repeat(barChar, rightBars))
 }
 
 // getBarStyle returns the bar character and style based on item hints.

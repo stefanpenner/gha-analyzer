@@ -26,7 +26,7 @@ type KeyMap struct {
 	Sort            key.Binding
 	ResizeLeft      key.Binding
 	ResizeRight     key.Binding
-	Yank            key.Binding
+
 	NextFailed      key.Binding
 	NextBottleneck  key.Binding
 	PageUp          key.Binding
@@ -126,10 +126,6 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("]"),
 			key.WithHelp("]", "widen tree"),
 		),
-		Yank: key.NewBinding(
-			key.WithKeys("y"),
-			key.WithHelp("y", "copy"),
-		),
 		NextFailed: key.NewBinding(
 			key.WithKeys("n"),
 			key.WithHelp("n", "next failed"),
@@ -177,7 +173,7 @@ func (k KeyMap) ShortHelpForMode(mode HelpMode) string {
 	case HelpModeModal:
 		return "↑↓ scroll • ←→ prev/next • esc close"
 	default:
-		return "↑↓ nav • ^u/^d page • n/N jump • s sort • [/] resize • / search • y copy • ? help"
+		return "↑↓ nav • ^u/^d page • n/N jump • s sort • [/] resize • / search • ? help"
 	}
 }
 
@@ -210,7 +206,7 @@ func (k KeyMap) FullHelp() [][]string {
 		{"e", "Mark logical end"},
 		{"s", "Cycle sort (start/duration↓/duration↑)"},
 		{"[/]", "Resize tree/timeline split"},
-		{"y", "Copy URL/ID to clipboard"},
+
 		{"r", "Reload data"},
 		{"p", "Open in Perfetto"},
 		{"/", "Search/filter"},
