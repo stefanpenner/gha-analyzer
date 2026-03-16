@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 )
 
 // timelineHyperlink wraps text in OSC 8 hyperlink with underline disabled.

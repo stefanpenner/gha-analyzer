@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/core"
+	"github.com/stefanpenner/otel-analyzer/pkg/core"
 )
 
 func main() {

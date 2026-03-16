@@ -5,8 +5,8 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
-	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
+	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 )
 
 func InitializeMetrics() Metrics {

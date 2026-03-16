@@ -1,4 +1,4 @@
-module github.com/stefanpenner/gha-analyzer
+module github.com/stefanpenner/otel-analyzer
 
 go 1.25
 

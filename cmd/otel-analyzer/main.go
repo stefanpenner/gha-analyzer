@@ -11,22 +11,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
-	"github.com/stefanpenner/gha-analyzer/pkg/core"
-	otelexport "github.com/stefanpenner/gha-analyzer/pkg/export/otel"
-	perfettoexport "github.com/stefanpenner/gha-analyzer/pkg/export/perfetto"
-	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
-	"github.com/stefanpenner/gha-analyzer/pkg/export/terminal"
-	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
-	"github.com/stefanpenner/gha-analyzer/pkg/ingest/otlpfile"
-	"github.com/stefanpenner/gha-analyzer/pkg/ingest/polling"
-	"github.com/stefanpenner/gha-analyzer/pkg/ingest/traceapi"
-	"github.com/stefanpenner/gha-analyzer/pkg/ingest/webhook"
-	"github.com/stefanpenner/gha-analyzer/pkg/output"
-	"github.com/stefanpenner/gha-analyzer/pkg/perfetto"
-	"github.com/stefanpenner/gha-analyzer/pkg/tui"
-	tuiresults "github.com/stefanpenner/gha-analyzer/pkg/tui/results"
-	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/otel-analyzer/pkg/core"
+	otelexport "github.com/stefanpenner/otel-analyzer/pkg/export/otel"
+	perfettoexport "github.com/stefanpenner/otel-analyzer/pkg/export/perfetto"
+	"github.com/stefanpenner/otel-analyzer/pkg/enrichment"
+	"github.com/stefanpenner/otel-analyzer/pkg/export/terminal"
+	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
+	"github.com/stefanpenner/otel-analyzer/pkg/ingest/otlpfile"
+	"github.com/stefanpenner/otel-analyzer/pkg/ingest/polling"
+	"github.com/stefanpenner/otel-analyzer/pkg/ingest/traceapi"
+	"github.com/stefanpenner/otel-analyzer/pkg/ingest/webhook"
+	"github.com/stefanpenner/otel-analyzer/pkg/output"
+	"github.com/stefanpenner/otel-analyzer/pkg/perfetto"
+	"github.com/stefanpenner/otel-analyzer/pkg/tui"
+	tuiresults "github.com/stefanpenner/otel-analyzer/pkg/tui/results"
+	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -307,7 +307,7 @@ func main() {
 	// Handle trends mode
 	if cfg.trendsMode {
 		if cfg.trendsRepo == "" {
-			printErrorMsg("Trends mode requires a repository in format 'owner/repo'\n\n  Usage: gha-analyzer trends owner/repo [--days=30] [--format=terminal|json]\n\n  Run 'gha-analyzer --help' for more information.")
+			printErrorMsg("Trends mode requires a repository in format 'owner/repo'\n\n  Usage: otel-analyzer trends owner/repo [--days=30] [--format=terminal|json]\n\n  Run 'otel-analyzer --help' for more information.")
 			os.Exit(1)
 		}
 
@@ -371,7 +371,7 @@ func main() {
 	}
 
 	if len(args) == 0 && len(cfg.traceFiles) == 0 && !hasTraceBackend {
-		printErrorMsg("No GitHub URLs or trace files provided.\n\n  Usage: gha-analyzer <github_url> [flags]\n         gha-analyzer <trace_file.json> [flags]\n         gha-analyzer --tempo=<url> --trace-id=<id> [flags]\n\n  Run 'gha-analyzer --help' for more information.")
+		printErrorMsg("No GitHub URLs or trace files provided.\n\n  Usage: otel-analyzer <github_url> [flags]\n         otel-analyzer <trace_file.json> [flags]\n         otel-analyzer --tempo=<url> --trace-id=<id> [flags]\n\n  Run 'otel-analyzer --help' for more information.")
 		os.Exit(1)
 	}
 
@@ -722,9 +722,9 @@ func tagSpansWithIndex(spans []sdktrace.ReadOnlySpan, urlIndex int) []sdktrace.R
 func printUsage() {
 	fmt.Println("GitHub Actions Analyzer")
 	fmt.Println("\nUsage:")
-	fmt.Println("  gha-analyzer <github_url1> [github_url2...] [token] [flags]")
-	fmt.Println("  gha-analyzer <trace_file.json> [flags]")
-	fmt.Println("  gha-analyzer trends <owner/repo> [flags]")
+	fmt.Println("  otel-analyzer <github_url1> [github_url2...] [token] [flags]")
+	fmt.Println("  otel-analyzer <trace_file.json> [flags]")
+	fmt.Println("  otel-analyzer trends <owner/repo> [flags]")
 	fmt.Println("\nFlags:")
 	fmt.Println("  --tui                     Force interactive TUI mode (default when terminal is available)")
 	fmt.Println("  --no-tui                  Disable interactive TUI, use CLI output instead")
@@ -754,20 +754,20 @@ func printUsage() {
 	fmt.Println("\nEnvironment Variables:")
 	fmt.Println("  GITHUB_TOKEN              GitHub PAT (alternatively pass as argument)")
 	fmt.Println("\nExamples:")
-	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123")
-	fmt.Println("  gha-analyzer https://github.com/owner/repo/commit/sha --perfetto=trace.json")
-	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123 --no-tui")
-	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123 --output=stdout")
-	fmt.Println("  gha-analyzer https://github.com/owner/repo/pull/123 --output=markdown > report.md")
-	fmt.Println("  gha-analyzer trends owner/repo")
-	fmt.Println("  gha-analyzer trends owner/repo --days=7 --format=json")
-	fmt.Println("  gha-analyzer trends owner/repo --branch=main --workflow=post-merge.yaml")
-	fmt.Println("  gha-analyzer trace.json                      # auto-detects OTel or Chrome Tracing format")
-	fmt.Println("  gha-analyzer chrome-profile.json spans.json   # multiple trace files as args")
-	fmt.Println("  gha-analyzer --trace=spans.json https://github.com/owner/repo/pull/123")
-	fmt.Println("  gha-analyzer --tempo=http://localhost:3200 --trace-id=abc123def456")
-	fmt.Println("  gha-analyzer --jaeger=http://localhost:16686 --trace-id=abc123def456")
-	fmt.Println("  gha-analyzer --clear-cache")
+	fmt.Println("  otel-analyzer https://github.com/owner/repo/pull/123")
+	fmt.Println("  otel-analyzer https://github.com/owner/repo/commit/sha --perfetto=trace.json")
+	fmt.Println("  otel-analyzer https://github.com/owner/repo/pull/123 --no-tui")
+	fmt.Println("  otel-analyzer https://github.com/owner/repo/pull/123 --output=stdout")
+	fmt.Println("  otel-analyzer https://github.com/owner/repo/pull/123 --output=markdown > report.md")
+	fmt.Println("  otel-analyzer trends owner/repo")
+	fmt.Println("  otel-analyzer trends owner/repo --days=7 --format=json")
+	fmt.Println("  otel-analyzer trends owner/repo --branch=main --workflow=post-merge.yaml")
+	fmt.Println("  otel-analyzer trace.json                      # auto-detects OTel or Chrome Tracing format")
+	fmt.Println("  otel-analyzer chrome-profile.json spans.json   # multiple trace files as args")
+	fmt.Println("  otel-analyzer --trace=spans.json https://github.com/owner/repo/pull/123")
+	fmt.Println("  otel-analyzer --tempo=http://localhost:3200 --trace-id=abc123def456")
+	fmt.Println("  otel-analyzer --jaeger=http://localhost:16686 --trace-id=abc123def456")
+	fmt.Println("  otel-analyzer --clear-cache")
 }
 
 // resolveGitHubToken returns a GitHub token from GITHUB_TOKEN env var or gh CLI.

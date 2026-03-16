@@ -37,7 +37,7 @@ services:
     image: grafana/grafana:latest
     volumes:
       - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
-      - ./grafana-dashboard.json:/etc/grafana/provisioning/dashboards/gha-analyzer.json
+      - ./grafana-dashboard.json:/etc/grafana/provisioning/dashboards/otel-analyzer.json
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
@@ -58,10 +58,10 @@ services:
       - runner
     environment:
       - REPO_URL=${REPO_URL}
-      - RUNNER_NAME=gha-analyzer-runner
+      - RUNNER_NAME=otel-analyzer-runner
       - RUNNER_TOKEN=${RUNNER_TOKEN}
       - RUNNER_WORKDIR=/tmp/runner
-      - LABELS=self-hosted,gha-analyzer
+      - LABELS=self-hosted,otel-analyzer
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:

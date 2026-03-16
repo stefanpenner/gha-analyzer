@@ -3,8 +3,8 @@ package polling
 import (
 	"context"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
-	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
+	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 

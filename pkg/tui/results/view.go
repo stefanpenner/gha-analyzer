@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 )
 
 const (

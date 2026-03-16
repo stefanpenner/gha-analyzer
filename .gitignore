@@ -1,5 +1,5 @@
 node_modules
 out.json
 .gha-cache
-/gha-analyzer
+/otel-analyzer
 bazel-*

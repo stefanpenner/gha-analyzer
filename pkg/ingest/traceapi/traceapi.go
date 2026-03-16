@@ -18,7 +18,7 @@ import (
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/ingest/otlpfile"
+	"github.com/stefanpenner/otel-analyzer/pkg/ingest/otlpfile"
 )
 
 // Client fetches traces from an OTLP-compatible HTTP backend.

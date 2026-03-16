@@ -11,7 +11,7 @@ go_library(
         "timeline.go",
         "trends.go",
     ],
-    importpath = "github.com/stefanpenner/gha-analyzer/pkg/output",
+    importpath = "github.com/stefanpenner/otel-analyzer/pkg/output",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/analyzer",

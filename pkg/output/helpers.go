@@ -3,7 +3,7 @@ package output
 import (
 	"sort"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
 )
 
 func sortReviewEvents(events []analyzer.ReviewEvent) {

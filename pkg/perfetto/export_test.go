@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"

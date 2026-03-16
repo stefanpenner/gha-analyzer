@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
-	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
-	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/otel-analyzer/pkg/enrichment"
+	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 

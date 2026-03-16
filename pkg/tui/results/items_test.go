@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
-	"github.com/stefanpenner/gha-analyzer/pkg/enrichment"
+	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/otel-analyzer/pkg/enrichment"
 	"github.com/stretchr/testify/assert"
 )
 

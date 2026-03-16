@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 
 	"github.com/cockroachdb/errors"
-	"github.com/stefanpenner/gha-analyzer/pkg/analyzer"
-	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 

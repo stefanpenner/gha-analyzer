@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
+	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
 	"github.com/stretchr/testify/assert"
 )
 

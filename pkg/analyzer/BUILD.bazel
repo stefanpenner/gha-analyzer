@@ -14,7 +14,7 @@ go_library(
         "trends.go",
         "types.go",
     ],
-    importpath = "github.com/stefanpenner/gha-analyzer/pkg/analyzer",
+    importpath = "github.com/stefanpenner/otel-analyzer/pkg/analyzer",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/enrichment",

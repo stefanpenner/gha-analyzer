@@ -8,7 +8,7 @@ go_library(
         "generic.go",
         "gha.go",
     ],
-    importpath = "github.com/stefanpenner/gha-analyzer/pkg/enrichment",
+    importpath = "github.com/stefanpenner/otel-analyzer/pkg/enrichment",
     visibility = ["//visibility:public"],
 )
 

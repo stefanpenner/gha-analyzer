@@ -7,7 +7,7 @@
 The unique value is **analysis, not display**:
 - No other OTel viewer has `SpanHints` — transforming raw attributes into *interpreted* presentation (outcome, icon, grouping, dedup, required status)
 - Changepoint detection, bottleneck identification, concurrency analysis — analytical features no general viewer offers
-- Zero-infrastructure TUI: `gha-analyzer --trace=spans.json` gives you an interactive waterfall in your terminal. No Docker, no browser, no server. Useful in SSH sessions, CI, quick local iteration
+- Zero-infrastructure TUI: `otel-analyzer --trace=spans.json` gives you an interactive waterfall in your terminal. No Docker, no browser, no server. Useful in SSH sessions, CI, quick local iteration
 
 **Where it would go wrong:**
 - Building a web UI (puts you against Jaeger/Grafana where you lose)
@@ -122,7 +122,7 @@ Change all `DefaultEnricher()` call sites to accept an `enrichment.Enricher` par
 - `pkg/tui/results/items.go` — item building
 - `pkg/export/terminal/terminal.go` — terminal exporter
 - `pkg/output/timeline.go` — timeline rendering
-- `cmd/gha-analyzer/main.go` — construct and pass enricher
+- `cmd/otel-analyzer/main.go` — construct and pass enricher
 
 ### Phase 2: CICDEnricher
 
@@ -173,8 +173,8 @@ Users write a Go package implementing `Enricher` and build their own binary. Pha
 ## 5. Verification
 
 After each phase:
-- `bazel build //cmd/gha-analyzer` compiles
+- `bazel build //cmd/otel-analyzer` compiles
 - Existing GHA trace analysis unchanged (GHAEnricher still first in chain)
-- `gha-analyzer --trace=<otel-file>` shows enriched spans with appropriate categories
+- `otel-analyzer --trace=<otel-file>` shows enriched spans with appropriate categories
 - Test with: `otelgen` synthetic traces, OTel demo app output, Jenkins/GitLab traces if available
 - Rule-based enricher tested with example YAML + sample trace file

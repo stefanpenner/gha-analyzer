@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
-	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
+	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 )
 
 // SamplingInfo describes whether and how sampling was applied

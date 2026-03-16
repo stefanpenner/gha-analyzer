@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
-	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
+	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"

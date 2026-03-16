@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/stefanpenner/gha-analyzer/pkg/githubapi"
-	"github.com/stefanpenner/gha-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
+	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"

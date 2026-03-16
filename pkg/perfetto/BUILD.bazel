@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "perfetto",
     srcs = ["perfetto.go"],
-    importpath = "github.com/stefanpenner/gha-analyzer/pkg/perfetto",
+    importpath = "github.com/stefanpenner/otel-analyzer/pkg/perfetto",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/analyzer",

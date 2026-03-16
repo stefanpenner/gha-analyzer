@@ -10,7 +10,7 @@ go_library(
         "timeline.go",
         "view.go",
     ],
-    importpath = "github.com/stefanpenner/gha-analyzer/pkg/tui/results",
+    importpath = "github.com/stefanpenner/otel-analyzer/pkg/tui/results",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/analyzer",

@@ -1,9 +1,9 @@
 version: 2
 
 builds:
-  - id: gha-analyzer
-    main: ./cmd/gha-analyzer
-    binary: gha-analyzer
+  - id: otel-analyzer
+    main: ./cmd/otel-analyzer
+    binary: otel-analyzer
     env:
       - CGO_ENABLED=0
     goos:
@@ -16,8 +16,8 @@ builds:
       - -s -w
 
 archives:
-  - id: gha-analyzer
-    builds: [gha-analyzer]
+  - id: otel-analyzer
+    builds: [otel-analyzer]
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     files:
@@ -30,7 +30,7 @@ checksum:
 release:
   github:
     owner: stefanpenner
-    name: gha-analyzer
+    name: otel-analyzer
   draft: false
   prerelease: auto
 
@@ -45,15 +45,15 @@ changelog:
       - Merge branch
 
 brews:
-  - name: gha-analyzer
+  - name: otel-analyzer
     repository:
       owner: stefanpenner
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    homepage: "https://github.com/stefanpenner/gha-analyzer"
-    description: "Analyze GitHub Actions workflow runs to identify performance bottlenecks and flaky tests"
+    homepage: "https://github.com/stefanpenner/otel-analyzer"
+    description: "Analyze OpenTelemetry traces to identify performance bottlenecks"
     license: ""
     install: |
-      bin.install "gha-analyzer"
+      bin.install "otel-analyzer"
     test: |
-      system "#{bin}/gha-analyzer", "--help"
+      system "#{bin}/otel-analyzer", "--help"

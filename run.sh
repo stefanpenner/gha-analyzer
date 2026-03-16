@@ -74,7 +74,7 @@ case $COMMAND in
     if is_stack_up; then
       echo "💡 Local observability stack detected, traces will be sent to Tempo."
     fi
-    go run cmd/gha-analyzer/main.go $SHIFT_ARGS $EXTRA_FLAGS
+    go run cmd/otel-analyzer/main.go $SHIFT_ARGS $EXTRA_FLAGS
     ;;
   server)
     echo "📡 Starting webhook server..."
@@ -82,9 +82,9 @@ case $COMMAND in
     ;;
   dashboard)
     if [[ "$OSTYPE" == "darwin"* ]]; then
-      open http://localhost:3000/d/gha-analyzer
+      open http://localhost:3000/d/otel-analyzer
     else
-      echo "Grafana Dashboard: http://localhost:3000/d/gha-analyzer"
+      echo "Grafana Dashboard: http://localhost:3000/d/otel-analyzer"
     fi
     ;;
   simulate)

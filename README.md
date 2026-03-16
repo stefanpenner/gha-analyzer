@@ -1,5 +1,5 @@
 <p align="center">
-  <strong>gha-analyzer</strong><br>
+  <strong>otel-analyzer</strong><br>
   See where your GitHub Actions time actually goes.
 </p>
 
@@ -20,13 +20,13 @@ An interactive terminal tool that turns GitHub Actions runs into navigable timel
 ## Install
 
 ```bash
-brew install stefanpenner/tap/gha-analyzer
+brew install stefanpenner/tap/otel-analyzer
 ```
 
 Or with Go:
 
 ```bash
-go install github.com/stefanpenner/gha-analyzer/cmd/gha-analyzer@latest
+go install github.com/stefanpenner/otel-analyzer/cmd/otel-analyzer@latest
 ```
 
 ## Quick Start
@@ -34,7 +34,7 @@ go install github.com/stefanpenner/gha-analyzer/cmd/gha-analyzer@latest
 Point it at any PR or commit:
 
 ```bash
-gha-analyzer nodejs/node/pull/60369
+otel-analyzer nodejs/node/pull/60369
 ```
 
 That's it. If you have [GitHub CLI](https://cli.github.com/) installed and authenticated, the token is picked up automatically. Otherwise:
@@ -54,7 +54,7 @@ The default view is a full-screen terminal UI with a tree of workflows, jobs, an
 Export any analysis as a [Perfetto](https://ui.perfetto.dev) trace for deep-dive visualization with full zoom, search, and flame-chart views:
 
 ```bash
-gha-analyzer <url> --perfetto=trace.json --open-in-perfetto
+otel-analyzer <url> --perfetto=trace.json --open-in-perfetto
 ```
 
 ### Trace Backend Integration
@@ -62,8 +62,8 @@ gha-analyzer <url> --perfetto=trace.json --open-in-perfetto
 Pull traces directly from Grafana Tempo or Jaeger:
 
 ```bash
-gha-analyzer --tempo=http://localhost:3200 --trace-id=abc123
-gha-analyzer --jaeger=http://localhost:16686 --trace-id=abc123
+otel-analyzer --tempo=http://localhost:3200 --trace-id=abc123
+otel-analyzer --jaeger=http://localhost:16686 --trace-id=abc123
 ```
 
 ### Webhook Input
@@ -72,7 +72,7 @@ Pipe a GitHub Actions webhook payload to analyze the associated commit — usefu
 
 ```bash
 echo '{"workflow_run":{"head_sha":"abc123"},"repository":{"full_name":"owner/repo"}}' \
-  | gha-analyzer --otel
+  | otel-analyzer --otel
 ```
 
 ### Enrichment
@@ -91,14 +91,14 @@ Beyond raw timings, the analyzer enriches spans with:
 Analyze workflow performance over time to spot regressions, flaky jobs, and slow-downs:
 
 ```bash
-gha-analyzer trends owner/repo                          # last 30 days
-gha-analyzer trends owner/repo --days=7 --branch=main   # scoped
-gha-analyzer trends owner/repo --format=json             # machine-readable
+otel-analyzer trends owner/repo                          # last 30 days
+otel-analyzer trends owner/repo --days=7 --branch=main   # scoped
+otel-analyzer trends owner/repo --format=json             # machine-readable
 ```
 
 ```
 ================================================================================
-  Historical Trend Analysis: stefanpenner/gha-analyzer
+  Historical Trend Analysis: stefanpenner/otel-analyzer
 ================================================================================
 
 Summary Statistics
@@ -114,8 +114,8 @@ Flaky Jobs Detected                          1
 Trend analysis covers success rates, duration percentiles, per-job breakdowns, flaky detection (>10% failure rate), and trend direction. For large repos, it uses stratified temporal sampling to keep API usage reasonable — run-level metrics are always exact, job-level analysis is sampled at 95% confidence / ±10% margin by default.
 
 ```bash
-gha-analyzer trends owner/repo --no-sample               # exact, more API calls
-gha-analyzer trends owner/repo --confidence=0.99 --margin=0.05  # tune sampling
+otel-analyzer trends owner/repo --no-sample               # exact, more API calls
+otel-analyzer trends owner/repo --confidence=0.99 --margin=0.05  # tune sampling
 ```
 
 ## OpenTelemetry
@@ -124,19 +124,19 @@ Export workflow data as OpenTelemetry spans — feed them into any observability
 
 ```bash
 # JSON spans to stdout
-gha-analyzer <url> --otel
+otel-analyzer <url> --otel
 
 # OTLP/HTTP
-gha-analyzer <url> --otel=localhost:4318
+otel-analyzer <url> --otel=localhost:4318
 
 # OTLP/gRPC
-gha-analyzer <url> --otel-grpc=localhost:4317
+otel-analyzer <url> --otel-grpc=localhost:4317
 ```
 
 You can also **ingest** OTel trace files from any CI/CD system — Jenkins, GitLab CI, Buildkite, Dagger, and anything else that emits traces following the [OTel CI/CD semantic conventions](https://opentelemetry.io/docs/specs/semconv/cicd/):
 
 ```bash
-gha-analyzer --trace=spans.json
+otel-analyzer --trace=spans.json
 ```
 
 ## Development
@@ -144,7 +144,7 @@ gha-analyzer --trace=spans.json
 Built with [Bazel](https://bazel.build/) for hermetic, reproducible builds.
 
 ```bash
-bazel run //:gha-analyzer -- <url>   # run
+bazel run //:otel-analyzer -- <url>   # run
 bazel build //...                     # build all
 bazel test //...                      # test all
 bazel run //:gazelle                  # regenerate BUILD files
