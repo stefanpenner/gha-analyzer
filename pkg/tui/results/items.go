@@ -11,6 +11,32 @@ import (
 	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 )
 
+// SortMode defines how timeline items are sorted
+type SortMode int
+
+const (
+	SortByStartTime    SortMode = iota // default: chronological
+	SortByDurationDesc                 // longest first
+	SortByDurationAsc                  // shortest first
+)
+
+// String returns a human-readable label for the sort mode
+func (s SortMode) String() string {
+	switch s {
+	case SortByDurationDesc:
+		return "duration↓"
+	case SortByDurationAsc:
+		return "duration↑"
+	default:
+		return "start"
+	}
+}
+
+// Next cycles to the next sort mode
+func (s SortMode) Next() SortMode {
+	return (s + 1) % 3
+}
+
 // ItemType represents the type of tree item
 type ItemType int
 
@@ -303,12 +329,26 @@ func convertNode(node *analyzer.TreeNode, parentID string, index, depth int, exp
 }
 
 // FlattenVisibleItems returns a flat list of visible items based on expanded state
-func FlattenVisibleItems(items []*TreeItem, expandedState map[string]bool) []TreeItem {
+func FlattenVisibleItems(items []*TreeItem, expandedState map[string]bool, sortMode SortMode) []TreeItem {
 	var result []TreeItem
 
 	var flatten func(items []*TreeItem)
 	flatten = func(items []*TreeItem) {
-		for _, item := range items {
+		sorted := items
+		if sortMode != SortByStartTime {
+			// Sort a copy to avoid mutating the tree
+			sorted = make([]*TreeItem, len(items))
+			copy(sorted, items)
+			sort.Slice(sorted, func(i, j int) bool {
+				di := sorted[i].EndTime.Sub(sorted[i].StartTime)
+				dj := sorted[j].EndTime.Sub(sorted[j].StartTime)
+				if sortMode == SortByDurationDesc {
+					return di > dj
+				}
+				return di < dj
+			})
+		}
+		for _, item := range sorted {
 			result = append(result, *item)
 			if item.HasChildren && expandedState[item.ID] {
 				flatten(item.Children)

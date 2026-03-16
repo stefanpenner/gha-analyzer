@@ -250,7 +250,7 @@ func TestFlattenVisibleItems(t *testing.T) {
 			{ID: "b", HasChildren: false},
 		}
 
-		result := FlattenVisibleItems(items, nil)
+		result := FlattenVisibleItems(items, nil, SortByStartTime)
 
 		assert.Len(t, result, 2)
 		assert.Equal(t, "a", result[0].ID)
@@ -270,7 +270,7 @@ func TestFlattenVisibleItems(t *testing.T) {
 		}
 		expanded := map[string]bool{"a": true}
 
-		result := FlattenVisibleItems(items, expanded)
+		result := FlattenVisibleItems(items, expanded, SortByStartTime)
 
 		assert.Len(t, result, 3)
 		assert.Equal(t, "a", result[0].ID)
@@ -297,7 +297,7 @@ func TestFlattenVisibleItems(t *testing.T) {
 		}
 		expanded := map[string]bool{"workflow": true, "workflow/job": true}
 
-		result := FlattenVisibleItems(items, expanded)
+		result := FlattenVisibleItems(items, expanded, SortByStartTime)
 
 		assert.Len(t, result, 4)
 	})
@@ -319,7 +319,7 @@ func TestFlattenVisibleItems(t *testing.T) {
 		// Only expand workflow, not the job
 		expanded := map[string]bool{"workflow": true}
 
-		result := FlattenVisibleItems(items, expanded)
+		result := FlattenVisibleItems(items, expanded, SortByStartTime)
 
 		assert.Len(t, result, 2)
 		assert.Equal(t, "workflow", result[0].ID)
@@ -402,4 +402,52 @@ func TestCountStats(t *testing.T) {
 			assert.Equal(t, tc.expectedJobs, jobs)
 		})
 	}
+}
+
+func TestSortMode(t *testing.T) {
+	t.Parallel()
+
+	t.Run("String returns expected labels", func(t *testing.T) {
+		assert.Equal(t, "start", SortByStartTime.String())
+		assert.Equal(t, "duration↓", SortByDurationDesc.String())
+		assert.Equal(t, "duration↑", SortByDurationAsc.String())
+	})
+
+	t.Run("Next cycles through modes", func(t *testing.T) {
+		assert.Equal(t, SortByDurationDesc, SortByStartTime.Next())
+		assert.Equal(t, SortByDurationAsc, SortByDurationDesc.Next())
+		assert.Equal(t, SortByStartTime, SortByDurationAsc.Next())
+	})
+}
+
+func TestFlattenVisibleItemsWithSort(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	items := []*TreeItem{
+		{ID: "short", StartTime: now, EndTime: now.Add(1 * time.Second)},
+		{ID: "long", StartTime: now, EndTime: now.Add(10 * time.Second)},
+		{ID: "medium", StartTime: now, EndTime: now.Add(5 * time.Second)},
+	}
+
+	t.Run("SortByStartTime preserves order", func(t *testing.T) {
+		result := FlattenVisibleItems(items, nil, SortByStartTime)
+		assert.Equal(t, "short", result[0].ID)
+		assert.Equal(t, "long", result[1].ID)
+		assert.Equal(t, "medium", result[2].ID)
+	})
+
+	t.Run("SortByDurationDesc sorts longest first", func(t *testing.T) {
+		result := FlattenVisibleItems(items, nil, SortByDurationDesc)
+		assert.Equal(t, "long", result[0].ID)
+		assert.Equal(t, "medium", result[1].ID)
+		assert.Equal(t, "short", result[2].ID)
+	})
+
+	t.Run("SortByDurationAsc sorts shortest first", func(t *testing.T) {
+		result := FlattenVisibleItems(items, nil, SortByDurationAsc)
+		assert.Equal(t, "short", result[0].ID)
+		assert.Equal(t, "medium", result[1].ID)
+		assert.Equal(t, "long", result[2].ID)
+	})
 }

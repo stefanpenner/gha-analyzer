@@ -32,6 +32,7 @@ func createTestModel() Model {
 		height:         40,
 		inputURLs:      []string{"https://github.com/test/repo/pull/123"},
 		selectionStart: -1,
+		treeWidth:      defaultTreeWidth,
 	}
 
 	// Build test tree using analyzer.TreeNode (like real code does)
@@ -199,7 +200,7 @@ func TestModelExpandCollapse(t *testing.T) {
 		m := createTestModel()
 		// Collapse workflow first
 		m.expandedState["CI/0"] = false
-		m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState)
+		m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState, m.sortMode)
 		m.cursor = 0
 
 		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
@@ -211,7 +212,7 @@ func TestModelExpandCollapse(t *testing.T) {
 	t.Run("collapses item with left arrow", func(t *testing.T) {
 		m := createTestModel()
 		m.expandedState["CI/0"] = true
-		m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState)
+		m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState, m.sortMode)
 		m.cursor = 0
 
 		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
@@ -584,6 +585,7 @@ func createMultiURLTestModel() Model {
 		height:         40,
 		inputURLs:      []string{"https://github.com/test/repo/pull/123", "https://github.com/other/repo/pull/456"},
 		selectionStart: -1,
+		treeWidth:      defaultTreeWidth,
 	}
 
 	m.roots = []*analyzer.TreeNode{
@@ -2025,5 +2027,182 @@ func TestLoadingState(t *testing.T) {
 		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
 
 		assert.NotNil(t, cmd)
+	})
+}
+
+func TestSortKeybinding(t *testing.T) {
+	t.Parallel()
+
+	t.Run("s cycles through sort modes", func(t *testing.T) {
+		m := createTestModel()
+		assert.Equal(t, SortByStartTime, m.sortMode)
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+		m = newModel.(Model)
+		assert.Equal(t, SortByDurationDesc, m.sortMode)
+
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+		m = newModel.(Model)
+		assert.Equal(t, SortByDurationAsc, m.sortMode)
+
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+		m = newModel.(Model)
+		assert.Equal(t, SortByStartTime, m.sortMode)
+	})
+}
+
+func TestResizeKeybindings(t *testing.T) {
+	t.Parallel()
+
+	t.Run("] widens tree panel", func(t *testing.T) {
+		m := createTestModel()
+		initial := m.treeWidth
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]")})
+		m = newModel.(Model)
+
+		assert.Equal(t, initial+treeWidthStep, m.treeWidth)
+	})
+
+	t.Run("[ narrows tree panel", func(t *testing.T) {
+		m := createTestModel()
+		initial := m.treeWidth
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+		m = newModel.(Model)
+
+		assert.Equal(t, initial-treeWidthStep, m.treeWidth)
+	})
+
+	t.Run("[ respects minimum width", func(t *testing.T) {
+		m := createTestModel()
+		m.treeWidth = minTreeWidth
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
+		m = newModel.(Model)
+
+		assert.Equal(t, minTreeWidth, m.treeWidth)
+	})
+
+	t.Run("] respects maximum width", func(t *testing.T) {
+		m := createTestModel()
+		m.treeWidth = maxTreeWidth
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]")})
+		m = newModel.(Model)
+
+		assert.Equal(t, maxTreeWidth, m.treeWidth)
+	})
+}
+
+func TestYankKeybinding(t *testing.T) {
+	t.Parallel()
+
+	t.Run("y sets yank flash with URL", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0 // CI workflow has a URL
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		m = newModel.(Model)
+
+		assert.NotEmpty(t, m.yankFlash)
+		assert.Contains(t, m.yankFlash, "github.com")
+	})
+
+	t.Run("y falls back to ID when no URL", func(t *testing.T) {
+		m := createTestModel()
+		// Find an item without a URL
+		for i, item := range m.visibleItems {
+			if item.Hints.URL == "" {
+				m.cursor = i
+				break
+			}
+		}
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+		m = newModel.(Model)
+
+		assert.NotEmpty(t, m.yankFlash)
+	})
+}
+
+func TestDynamicHelp(t *testing.T) {
+	t.Parallel()
+
+	t.Run("normal mode shows sort and resize keys", func(t *testing.T) {
+		km := DefaultKeyMap()
+		help := km.ShortHelpForMode(HelpModeNormal)
+		assert.Contains(t, help, "sort")
+		assert.Contains(t, help, "resize")
+		assert.Contains(t, help, "copy")
+	})
+
+	t.Run("search mode shows search-specific keys", func(t *testing.T) {
+		km := DefaultKeyMap()
+		help := km.ShortHelpForMode(HelpModeSearch)
+		assert.Contains(t, help, "type to search")
+		assert.Contains(t, help, "esc cancel")
+		assert.NotContains(t, help, "sort")
+	})
+
+	t.Run("search active mode shows filter keys", func(t *testing.T) {
+		km := DefaultKeyMap()
+		help := km.ShortHelpForMode(HelpModeSearchActive)
+		assert.Contains(t, help, "clear")
+		assert.Contains(t, help, "sort")
+	})
+
+	t.Run("modal mode shows modal keys", func(t *testing.T) {
+		km := DefaultKeyMap()
+		help := km.ShortHelpForMode(HelpModeModal)
+		assert.Contains(t, help, "scroll")
+		assert.Contains(t, help, "close")
+	})
+}
+
+func TestFilterZoom(t *testing.T) {
+	t.Parallel()
+
+	t.Run("search zooms timeline to matched items", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+
+		originalStart := m.chartStart
+		originalEnd := m.chartEnd
+
+		// Search for "build" (a job that doesn't span the full timeline)
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		for _, r := range "build" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+
+		// Chart bounds should be narrowed to the "build" job's time range
+		assert.False(t, m.chartStart.Equal(originalStart) && m.chartEnd.Equal(originalEnd),
+			"chart bounds should change when search is active")
+	})
+
+	t.Run("clearing search restores timeline bounds", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+
+		// Search for "build"
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+		m = newModel.(Model)
+		for _, r := range "build" {
+			newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			m = newModel.(Model)
+		}
+
+		// Exit search input and clear
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = newModel.(Model)
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		m = newModel.(Model)
+
+		// Chart bounds should be restored
+		assert.Equal(t, m.globalStart, m.chartStart)
+		assert.Equal(t, m.globalEnd, m.chartEnd)
 	})
 }

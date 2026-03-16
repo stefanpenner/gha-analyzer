@@ -4,27 +4,31 @@ import "github.com/charmbracelet/bubbles/key"
 
 // KeyMap defines all key bindings for the TUI
 type KeyMap struct {
-	Up          key.Binding
-	Down        key.Binding
-	ShiftUp     key.Binding
-	ShiftDown   key.Binding
-	Left        key.Binding
-	Right       key.Binding
-	Enter       key.Binding
-	Space       key.Binding
-	Open        key.Binding
-	Info        key.Binding
-	Focus       key.Binding
-	Reload      key.Binding
+	Up              key.Binding
+	Down            key.Binding
+	ShiftUp         key.Binding
+	ShiftDown       key.Binding
+	Left            key.Binding
+	Right           key.Binding
+	Enter           key.Binding
+	Space           key.Binding
+	Open            key.Binding
+	Info            key.Binding
+	Focus           key.Binding
+	Reload          key.Binding
 	ToggleExpandAll key.Binding
-	Perfetto    key.Binding
-	Search      key.Binding
-	Mouse       key.Binding
-	GoTop       key.Binding
-	GoBottom    key.Binding
-	LogicalEnd  key.Binding
-	Help        key.Binding
-	Quit        key.Binding
+	Perfetto        key.Binding
+	Search          key.Binding
+	Mouse           key.Binding
+	GoTop           key.Binding
+	GoBottom        key.Binding
+	LogicalEnd      key.Binding
+	Sort            key.Binding
+	ResizeLeft      key.Binding
+	ResizeRight     key.Binding
+	Yank            key.Binding
+	Help            key.Binding
+	Quit            key.Binding
 }
 
 // DefaultKeyMap returns the default key bindings
@@ -106,6 +110,22 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("e"),
 			key.WithHelp("e", "mark end"),
 		),
+		Sort: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("s", "cycle sort"),
+		),
+		ResizeLeft: key.NewBinding(
+			key.WithKeys("["),
+			key.WithHelp("[", "narrow tree"),
+		),
+		ResizeRight: key.NewBinding(
+			key.WithKeys("]"),
+			key.WithHelp("]", "widen tree"),
+		),
+		Yank: key.NewBinding(
+			key.WithKeys("y"),
+			key.WithHelp("y", "copy"),
+		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
 			key.WithHelp("?", "help"),
@@ -117,9 +137,33 @@ func DefaultKeyMap() KeyMap {
 	}
 }
 
-// ShortHelp returns a short help string for the footer
+// HelpMode represents the current UI context for help text
+type HelpMode int
+
+const (
+	HelpModeNormal HelpMode = iota
+	HelpModeSearch
+	HelpModeSearchActive // search filter active but not typing
+	HelpModeModal
+)
+
+// ShortHelpForMode returns context-sensitive help for the footer
+func (k KeyMap) ShortHelpForMode(mode HelpMode) string {
+	switch mode {
+	case HelpModeSearch:
+		return "type to search • enter confirm • esc cancel"
+	case HelpModeSearchActive:
+		return "↑↓ nav • enter/esc clear • / new search • s sort • ? help • q quit"
+	case HelpModeModal:
+		return "↑↓ scroll • ←→ prev/next • esc close"
+	default:
+		return "↑↓ nav • ←→ tree • s sort • [/] resize • / search • y copy • ? help • q quit"
+	}
+}
+
+// ShortHelp returns a short help string for the footer (default mode)
 func (k KeyMap) ShortHelp() string {
-	return "↑↓ nav • gg/GG top/bottom • ←→ expand/collapse • c toggle all • e mark end • space toggle • / search • ? help • q quit"
+	return k.ShortHelpForMode(HelpModeNormal)
 }
 
 // FullHelp returns all key bindings for the help modal
@@ -140,6 +184,9 @@ func (k KeyMap) FullHelp() [][]string {
 		{"GG", "Go to bottom"},
 		{"c", "Toggle expand/collapse all"},
 		{"e", "Mark logical end"},
+		{"s", "Cycle sort (start/duration↓/duration↑)"},
+		{"[/]", "Resize tree/timeline split"},
+		{"y", "Copy URL/ID to clipboard"},
 		{"r", "Reload data"},
 		{"p", "Open in Perfetto"},
 		{"/", "Search/filter"},

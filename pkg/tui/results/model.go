@@ -1,6 +1,7 @@
 package results
 
 import (
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -100,6 +101,13 @@ type Model struct {
 	// Logical end marker
 	logicalEndID   string    // ID of marked item ("" = no marker)
 	logicalEndTime time.Time // EndTime of marked item
+	// Sort mode
+	sortMode SortMode
+	// Resizable tree width
+	treeWidth int
+	// Clipboard flash message
+	yankFlash     string
+	yankFlashTime time.Time
 }
 
 // ReloadFunc is the function signature for reloading data
@@ -130,6 +138,7 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 		openPerfettoFunc: openPerfettoFunc,
 		spinner:          s,
 		spans:            spans,
+		treeWidth:        defaultTreeWidth,
 	}
 
 	// Calculate summary statistics
@@ -375,6 +384,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchMatchIDs = nil
 				m.searchAncIDs = nil
 				m.rebuildItems()
+				m.recalculateChartBounds()
 				return m, nil
 			case tea.KeyEnter, tea.KeyDown, tea.KeyTab:
 				// Exit search input but keep filter active
@@ -411,6 +421,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searchMatchIDs = nil
 			m.searchAncIDs = nil
 			m.rebuildItems()
+			m.recalculateChartBounds()
 			// Restore cursor to the same item in the unfiltered list
 			if curID != "" {
 				for i, item := range m.visibleItems {
@@ -540,6 +551,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, m.keys.LogicalEnd):
 			m.toggleLogicalEnd()
 			return m, nil
+
+		case key.Matches(msg, m.keys.Sort):
+			m.sortMode = m.sortMode.Next()
+			m.rebuildItems()
+			return m, nil
+
+		case key.Matches(msg, m.keys.ResizeLeft):
+			if m.treeWidth-treeWidthStep >= minTreeWidth {
+				m.treeWidth -= treeWidthStep
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.ResizeRight):
+			if m.treeWidth+treeWidthStep <= maxTreeWidth {
+				m.treeWidth += treeWidthStep
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.Yank):
+			cmd := m.yankToClipboard()
+			return m, cmd
 
 		case key.Matches(msg, m.keys.Help):
 			m.showHelpModal = true
@@ -772,7 +804,7 @@ func (m Model) View() string {
 			padTotalWidth = 80
 		}
 		// Match the structure: │ tree │ timeline │
-		treeW := 55 // treeWidth constant
+		treeW := m.treeWidth
 		availableW := padTotalWidth - 3
 		timelineW := availableW - treeW
 		if timelineW < 10 {
@@ -850,11 +882,13 @@ func addHorizontalPadding(content string, pad int) string {
 }
 
 // applySearchFilter computes searchMatchIDs and searchAncIDs based on searchQuery.
-// It also auto-expands ancestors of matching items.
+// It also auto-expands ancestors of matching items and zooms the timeline to match range.
 func (m *Model) applySearchFilter() {
 	if m.searchQuery == "" {
 		m.searchMatchIDs = nil
 		m.searchAncIDs = nil
+		// Restore original chart bounds
+		m.recalculateChartBounds()
 		return
 	}
 
@@ -863,6 +897,7 @@ func (m *Model) applySearchFilter() {
 	m.searchAncIDs = make(map[string]bool)
 
 	// Walk tree items recursively looking for matches
+	var earliest, latest time.Time
 	var walk func(items []*TreeItem)
 	walk = func(items []*TreeItem) {
 		for _, item := range items {
@@ -870,11 +905,24 @@ func (m *Model) applySearchFilter() {
 				m.searchMatchIDs[item.ID] = true
 				// Collect and expand ancestors
 				m.addAncestors(item.ParentID)
+				// Track time range of matched items for filter-zoom
+				if !item.StartTime.IsZero() && (earliest.IsZero() || item.StartTime.Before(earliest)) {
+					earliest = item.StartTime
+				}
+				if !item.EndTime.IsZero() && (latest.IsZero() || item.EndTime.After(latest)) {
+					latest = item.EndTime
+				}
 			}
 			walk(item.Children)
 		}
 	}
 	walk(m.treeItems)
+
+	// Zoom timeline to matched items' time range
+	if !earliest.IsZero() && !latest.IsZero() {
+		m.chartStart = earliest
+		m.chartEnd = latest
+	}
 }
 
 // addAncestors walks up the tree from parentID, adding each ancestor to searchAncIDs
@@ -930,6 +978,28 @@ func (m *Model) toggleLogicalEnd() {
 	}
 }
 
+// yankToClipboard copies the current item's URL (or ID) to the clipboard via OSC 52.
+// Returns a tea.Cmd that writes the OSC 52 escape sequence.
+func (m *Model) yankToClipboard() tea.Cmd {
+	if m.cursor >= len(m.visibleItems) {
+		return nil
+	}
+	item := m.visibleItems[m.cursor]
+
+	// Prefer URL, fall back to ID
+	text := item.Hints.URL
+	if text == "" {
+		text = item.ID
+	}
+
+	m.yankFlash = text
+	m.yankFlashTime = time.Now()
+
+	// OSC 52 clipboard escape: \x1b]52;c;BASE64\x07
+	encoded := base64.StdEncoding.EncodeToString([]byte(text))
+	return tea.Printf("\x1b]52;c;%s\x07", encoded)
+}
+
 // logicalEndCol returns the timeline column position for the logical end marker.
 // Returns -1 if no marker is set or the position is outside the chart bounds.
 func (m *Model) logicalEndCol(timelineW int) int {
@@ -963,7 +1033,7 @@ func (m *Model) isAfterLogicalEnd(item TreeItem) bool {
 // rebuildItems rebuilds the flattened item list based on expanded state
 func (m *Model) rebuildItems() {
 	m.treeItems = BuildTreeItems(m.roots, m.expandedState, m.inputURLs)
-	m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState)
+	m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState, m.sortMode)
 
 	// Apply search filter if active
 	if m.searchQuery != "" && (m.searchMatchIDs != nil || m.searchAncIDs != nil) {
