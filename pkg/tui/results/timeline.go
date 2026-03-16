@@ -324,12 +324,15 @@ func buildBarWithDuration(barChar string, barLength int, item TreeItem, barStyle
 	// Center the label in the bar
 	leftBars := (barLength - len(label)) / 2
 	rightBars := barLength - leftBars - len(label)
+	// Use explicit labelStyle if provided, otherwise derive one from barStyle
+	// with a subtle dark background so the numbers stand out slightly
+	ls := barStyle.Background(ColorBarLabelBg)
 	if labelStyle != nil {
-		return barStyle.Render(strings.Repeat(barChar, leftBars)) +
-			labelStyle.Render(label) +
-			barStyle.Render(strings.Repeat(barChar, rightBars))
+		ls = *labelStyle
 	}
-	return barStyle.Render(strings.Repeat(barChar, leftBars) + label + strings.Repeat(barChar, rightBars))
+	return barStyle.Render(strings.Repeat(barChar, leftBars)) +
+		ls.Render(label) +
+		barStyle.Render(strings.Repeat(barChar, rightBars))
 }
 
 // getBarStyle returns the bar character and style based on item hints.
