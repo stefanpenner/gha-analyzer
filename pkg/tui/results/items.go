@@ -396,6 +396,32 @@ func itemTypeFromNode(node *analyzer.TreeNode) ItemType {
 	}
 }
 
+// SpanIndex provides O(1) lookups for tree items by various keys.
+type SpanIndex struct {
+	ByID       map[string]*TreeItem
+	ByParentID map[string][]*TreeItem
+}
+
+// BuildSpanIndex creates a SpanIndex from a tree of items.
+func BuildSpanIndex(items []*TreeItem) *SpanIndex {
+	idx := &SpanIndex{
+		ByID:       make(map[string]*TreeItem),
+		ByParentID: make(map[string][]*TreeItem),
+	}
+	var walk func(items []*TreeItem)
+	walk = func(items []*TreeItem) {
+		for _, item := range items {
+			idx.ByID[item.ID] = item
+			if item.ParentID != "" {
+				idx.ByParentID[item.ParentID] = append(idx.ByParentID[item.ParentID], item)
+			}
+			walk(item.Children)
+		}
+	}
+	walk(items)
+	return idx
+}
+
 func makeNodeID(parentID, name string, index int) string {
 	if parentID == "" {
 		return fmt.Sprintf("%s/%d", name, index)

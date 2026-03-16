@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 )
 
 // timelineHyperlink wraps text in OSC 8 hyperlink with underline disabled.
@@ -154,14 +155,13 @@ func RenderTimelineBar(item TreeItem, globalStart, globalEnd time.Time, width in
 	// Choose bar character and style based on status
 	barChar, style := getBarStyle(item)
 
-	// Build the bar - rightPad is guaranteed non-negative now
+	// Build the bar with optional duration label
 	leftPad := strings.Repeat(" ", startPos)
-	bar := strings.Repeat(barChar, barLength)
+	bar := buildBarWithDuration(barChar, barLength, item, style)
 	rightPad := strings.Repeat(" ", width-startPos-barLength)
 
 	// Wrap only the bar in hyperlink
-	styledBar := style.Render(bar)
-	return leftPad + timelineHyperlink(url, styledBar) + rightPad
+	return leftPad + timelineHyperlink(url, bar) + rightPad
 }
 
 // RenderTimelineBarSelected renders a timeline bar with dimmed colors and selection background
@@ -301,6 +301,27 @@ func renderTimelineBarWithBg(item TreeItem, globalStart, globalEnd time.Time, wi
 
 	styledBar := style.Render(bar)
 	return leftPad + timelineHyperlink(url, styledBar) + rightPad
+}
+
+// buildBarWithDuration renders a bar string, overlaying a short duration label
+// inside the bar when there's enough room (bar length >= label length + 2).
+func buildBarWithDuration(barChar string, barLength int, item TreeItem, style lipgloss.Style) string {
+	if item.StartTime.IsZero() || item.EndTime.IsZero() {
+		return style.Render(strings.Repeat(barChar, barLength))
+	}
+	dur := item.EndTime.Sub(item.StartTime).Seconds()
+	if dur <= 0 {
+		return style.Render(strings.Repeat(barChar, barLength))
+	}
+	label := utils.HumanizeTime(dur)
+	// Need at least 1 bar char on each side of the label
+	if barLength < len(label)+2 {
+		return style.Render(strings.Repeat(barChar, barLength))
+	}
+	// Center the label in the bar
+	leftBars := (barLength - len(label)) / 2
+	rightBars := barLength - leftBars - len(label)
+	return style.Render(strings.Repeat(barChar, leftBars) + label + strings.Repeat(barChar, rightBars))
 }
 
 // getBarStyle returns the bar character and style based on item hints.

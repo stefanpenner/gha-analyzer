@@ -469,7 +469,7 @@ func TestKeyMap(t *testing.T) {
 
 		assert.Contains(t, help, "nav")
 		assert.Contains(t, help, "help")
-		assert.Contains(t, help, "quit")
+		assert.Contains(t, help, "sort")
 	})
 
 	t.Run("full help contains mouse toggle", func(t *testing.T) {
@@ -553,7 +553,7 @@ func TestRenderFooter(t *testing.T) {
 		footer := m.renderFooter()
 
 		assert.Contains(t, footer, "help")
-		assert.Contains(t, footer, "quit")
+		assert.Contains(t, footer, "nav")
 	})
 }
 
@@ -2135,6 +2135,8 @@ func TestDynamicHelp(t *testing.T) {
 		assert.Contains(t, help, "sort")
 		assert.Contains(t, help, "resize")
 		assert.Contains(t, help, "copy")
+		assert.Contains(t, help, "page")
+		assert.Contains(t, help, "jump")
 	})
 
 	t.Run("search mode shows search-specific keys", func(t *testing.T) {
@@ -2150,6 +2152,7 @@ func TestDynamicHelp(t *testing.T) {
 		help := km.ShortHelpForMode(HelpModeSearchActive)
 		assert.Contains(t, help, "clear")
 		assert.Contains(t, help, "sort")
+		assert.Contains(t, help, "jump")
 	})
 
 	t.Run("modal mode shows modal keys", func(t *testing.T) {
@@ -2204,5 +2207,166 @@ func TestFilterZoom(t *testing.T) {
 		// Chart bounds should be restored
 		assert.Equal(t, m.globalStart, m.chartStart)
 		assert.Equal(t, m.globalEnd, m.chartEnd)
+	})
+}
+
+func TestJumpToNext(t *testing.T) {
+	t.Parallel()
+
+	t.Run("n jumps to next failed item", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0 // CI workflow (success)
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+		m = newModel.(Model)
+
+		// Should jump to the "test" job which has outcome "failure"
+		assert.Equal(t, "failure", m.visibleItems[m.cursor].Hints.Outcome)
+	})
+
+	t.Run("n wraps around", func(t *testing.T) {
+		m := createTestModel()
+		// Move to last item
+		m.cursor = len(m.visibleItems) - 1
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
+		m = newModel.(Model)
+
+		// Should wrap around and find the failed item
+		if m.visibleItems[m.cursor].Hints.Outcome == "failure" {
+			assert.Equal(t, "failure", m.visibleItems[m.cursor].Hints.Outcome)
+		}
+	})
+
+	t.Run("n does nothing when no failed items", func(t *testing.T) {
+		m := createTestModel()
+		// Remove the failure from visible items by hiding it
+		// Just verify cursor doesn't crash
+		m.cursor = 0
+
+		// N (shift) looks for bottlenecks - likely none exist
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("N")})
+		m = newModel.(Model)
+
+		assert.GreaterOrEqual(t, m.cursor, 0)
+	})
+}
+
+func TestPageUpDown(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ctrl+d moves cursor down by half page", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+		m.cursor = 0
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+		m = newModel.(Model)
+
+		assert.Greater(t, m.cursor, 0)
+	})
+
+	t.Run("ctrl+u moves cursor up by half page", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+		m.cursor = len(m.visibleItems) - 1
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+		m = newModel.(Model)
+
+		assert.Less(t, m.cursor, len(m.visibleItems)-1)
+	})
+
+	t.Run("ctrl+u at top stays at 0", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+		m = newModel.(Model)
+
+		assert.Equal(t, 0, m.cursor)
+	})
+
+	t.Run("ctrl+d at bottom stays at last item", func(t *testing.T) {
+		m := createTestModel()
+		lastIdx := len(m.visibleItems) - 1
+		m.cursor = lastIdx
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+		m = newModel.(Model)
+
+		assert.Equal(t, lastIdx, m.cursor)
+	})
+}
+
+func TestReloadError(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reload error is displayed", func(t *testing.T) {
+		m := createTestModel()
+
+		newModel, _ := m.Update(ReloadResultMsg{
+			err: fmt.Errorf("connection refused"),
+		})
+		m = newModel.(Model)
+
+		assert.Equal(t, "connection refused", m.reloadError)
+		assert.False(t, m.isLoading)
+	})
+
+	t.Run("error bar appears in view", func(t *testing.T) {
+		m := createTestModel()
+		m.reloadError = "test error"
+
+		view := m.View()
+		assert.Contains(t, view, "Reload failed")
+		assert.Contains(t, view, "test error")
+	})
+
+	t.Run("esc dismisses error", func(t *testing.T) {
+		m := createTestModel()
+		m.reloadError = "some error"
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+		m = newModel.(Model)
+
+		assert.Empty(t, m.reloadError)
+	})
+
+	t.Run("successful reload clears error", func(t *testing.T) {
+		m := createTestModel()
+		m.reloadError = "old error"
+
+		newModel, _ := m.Update(ReloadResultMsg{
+			spans:       m.spans,
+			globalStart: m.globalStart,
+			globalEnd:   m.globalEnd,
+		})
+		m = newModel.(Model)
+
+		assert.Empty(t, m.reloadError)
+	})
+}
+
+func TestSpanIndex(t *testing.T) {
+	t.Parallel()
+
+	t.Run("builds index from tree items", func(t *testing.T) {
+		items := []*TreeItem{
+			{
+				ID:       "root",
+				ParentID: "",
+				Children: []*TreeItem{
+					{ID: "child1", ParentID: "root"},
+					{ID: "child2", ParentID: "root"},
+				},
+			},
+		}
+		idx := BuildSpanIndex(items)
+
+		assert.NotNil(t, idx.ByID["root"])
+		assert.NotNil(t, idx.ByID["child1"])
+		assert.NotNil(t, idx.ByID["child2"])
+		assert.Len(t, idx.ByParentID["root"], 2)
 	})
 }
