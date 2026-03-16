@@ -15,6 +15,10 @@ import (
 // cacheTTL controls how long cached responses remain valid.
 const cacheTTL = 5 * time.Minute
 
+// cacheVersion is incremented to invalidate all existing cached responses.
+// Bump this when response parsing or enrichment logic changes.
+const cacheVersion = "v2"
+
 // CachedTransport implements http.RoundTripper and caches GET requests to disk.
 type CachedTransport struct {
 	Base     http.RoundTripper
@@ -60,12 +64,12 @@ func (t *CachedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func (t *CachedTransport) getCacheKey(req *http.Request) string {
-	// Use URL and certain headers to create a unique hash
+	// Use version + URL + headers to create a unique hash.
+	// Bumping cacheVersion invalidates all existing entries.
 	h := sha256.New()
+	h.Write([]byte(cacheVersion))
 	h.Write([]byte(req.URL.String()))
 	h.Write([]byte(req.Header.Get("Accept")))
-	// We don't include Authorization header to avoid leaking tokens in hash, 
-	// though the file content itself is more sensitive.
 	return hex.EncodeToString(h.Sum(nil))
 }
 

@@ -26,7 +26,10 @@ type KeyMap struct {
 	Sort            key.Binding
 	ResizeLeft      key.Binding
 	ResizeRight     key.Binding
-	Yank            key.Binding
+	NextFailed      key.Binding
+	NextBottleneck  key.Binding
+	PageUp          key.Binding
+	PageDown        key.Binding
 	Help            key.Binding
 	Quit            key.Binding
 }
@@ -122,9 +125,21 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("]"),
 			key.WithHelp("]", "widen tree"),
 		),
-		Yank: key.NewBinding(
-			key.WithKeys("y"),
-			key.WithHelp("y", "copy"),
+		NextFailed: key.NewBinding(
+			key.WithKeys("n"),
+			key.WithHelp("n", "next failed"),
+		),
+		NextBottleneck: key.NewBinding(
+			key.WithKeys("N"),
+			key.WithHelp("N", "next bottleneck"),
+		),
+		PageUp: key.NewBinding(
+			key.WithKeys("ctrl+u", "pgup"),
+			key.WithHelp("ctrl+u", "page up"),
+		),
+		PageDown: key.NewBinding(
+			key.WithKeys("ctrl+d", "pgdown"),
+			key.WithHelp("ctrl+d", "page down"),
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
@@ -153,11 +168,11 @@ func (k KeyMap) ShortHelpForMode(mode HelpMode) string {
 	case HelpModeSearch:
 		return "type to search • enter confirm • esc cancel"
 	case HelpModeSearchActive:
-		return "↑↓ nav • enter/esc clear • / new search • s sort • ? help • q quit"
+		return "↑↓ nav • enter/esc clear • / new search • n/N jump • s sort • ? help • q quit"
 	case HelpModeModal:
 		return "↑↓ scroll • ←→ prev/next • esc close"
 	default:
-		return "↑↓ nav • ←→ tree • s sort • [/] resize • / search • y copy • ? help • q quit"
+		return "↑↓ nav • ^u/^d page • n/N jump • s sort • [/] resize • / search • ? help"
 	}
 }
 
@@ -173,10 +188,14 @@ func (k KeyMap) FullHelp() [][]string {
 		{"↓/j", "Move down"},
 		{"shift+↑/K", "Select up"},
 		{"shift+↓/J", "Select down"},
+		{"ctrl+u/pgup", "Page up (half screen)"},
+		{"ctrl+d/pgdn", "Page down (half screen)"},
 		{"←/h", "Collapse / go to parent"},
 		{"→/l", "Expand"},
 		{"enter", "Toggle expand"},
 		{"space", "Toggle chart visibility"},
+		{"n", "Jump to next failed item"},
+		{"N", "Jump to next bottleneck"},
 		{"o", "Open in browser"},
 		{"i", "Item info"},
 		{"f", "Focus on selection"},
@@ -186,7 +205,8 @@ func (k KeyMap) FullHelp() [][]string {
 		{"e", "Mark logical end"},
 		{"s", "Cycle sort (start/duration↓/duration↑)"},
 		{"[/]", "Resize tree/timeline split"},
-		{"y", "Copy URL/ID to clipboard"},
+
+
 		{"r", "Reload data"},
 		{"p", "Open in Perfetto"},
 		{"/", "Search/filter"},

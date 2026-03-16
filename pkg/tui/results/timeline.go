@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/stefanpenner/gha-analyzer/pkg/utils"
 )
 
 // timelineHyperlink wraps text in OSC 8 hyperlink with underline disabled.
@@ -154,14 +155,13 @@ func RenderTimelineBar(item TreeItem, globalStart, globalEnd time.Time, width in
 	// Choose bar character and style based on status
 	barChar, style := getBarStyle(item)
 
-	// Build the bar - rightPad is guaranteed non-negative now
+	// Build the bar with optional duration label
 	leftPad := strings.Repeat(" ", startPos)
-	bar := strings.Repeat(barChar, barLength)
+	bar := buildBarWithDuration(barChar, barLength, item, style, nil)
 	rightPad := strings.Repeat(" ", width-startPos-barLength)
 
 	// Wrap only the bar in hyperlink
-	styledBar := style.Render(bar)
-	return leftPad + timelineHyperlink(url, styledBar) + rightPad
+	return leftPad + timelineHyperlink(url, bar) + rightPad
 }
 
 // RenderTimelineBarSelected renders a timeline bar with dimmed colors and selection background
@@ -224,13 +224,15 @@ func RenderTimelineBarSelected(item TreeItem, globalStart, globalEnd time.Time, 
 
 	barChar, style := getBarStyleSelected(item)
 
+	// Use a bright label style so duration text is visible on the selection background
+	labelStyle := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelectionBg)
+
 	// Apply selection background to padding and bar
 	leftPad := SelectedBgStyle.Render(strings.Repeat(" ", startPos))
-	bar := strings.Repeat(barChar, barLength)
+	bar := buildBarWithDuration(barChar, barLength, item, style, &labelStyle)
 	rightPad := SelectedBgStyle.Render(strings.Repeat(" ", width-startPos-barLength))
 
-	styledBar := style.Render(bar)
-	return leftPad + timelineHyperlink(url, styledBar) + rightPad
+	return leftPad + timelineHyperlink(url, bar) + rightPad
 }
 
 // renderTimelineBarWithBg renders a timeline bar with normal colors but applies
@@ -301,6 +303,36 @@ func renderTimelineBarWithBg(item TreeItem, globalStart, globalEnd time.Time, wi
 
 	styledBar := style.Render(bar)
 	return leftPad + timelineHyperlink(url, styledBar) + rightPad
+}
+
+// buildBarWithDuration renders a bar string, overlaying a short duration label
+// inside the bar when there's enough room (bar length >= label length + 2).
+// labelStyle controls the style of the duration text; if nil, barStyle is used for everything.
+func buildBarWithDuration(barChar string, barLength int, item TreeItem, barStyle lipgloss.Style, labelStyle *lipgloss.Style) string {
+	if item.StartTime.IsZero() || item.EndTime.IsZero() {
+		return barStyle.Render(strings.Repeat(barChar, barLength))
+	}
+	dur := item.EndTime.Sub(item.StartTime).Seconds()
+	if dur <= 0 {
+		return barStyle.Render(strings.Repeat(barChar, barLength))
+	}
+	label := utils.HumanizeTime(dur)
+	// Need at least 1 bar char on each side of the label
+	if barLength < len(label)+2 {
+		return barStyle.Render(strings.Repeat(barChar, barLength))
+	}
+	// Center the label in the bar
+	leftBars := (barLength - len(label)) / 2
+	rightBars := barLength - leftBars - len(label)
+	// Use explicit labelStyle if provided, otherwise derive one from barStyle
+	// with a subtle dark background so the numbers stand out slightly
+	ls := barStyle.Background(ColorBarLabelBg)
+	if labelStyle != nil {
+		ls = *labelStyle
+	}
+	return barStyle.Render(strings.Repeat(barChar, leftBars)) +
+		ls.Render(label) +
+		barStyle.Render(strings.Repeat(barChar, rightBars))
 }
 
 // getBarStyle returns the bar character and style based on item hints.
@@ -540,18 +572,22 @@ func renderTimelineWithChildren(item TreeItem, globalStart, globalEnd time.Time,
 	i := 0
 	for i < width {
 		if i >= parentStartPos && i < parentStartPos+parentBarLen {
-			// Parent bar region — collect consecutive parent chars
+			// Parent bar region — render with duration label
 			end := parentStartPos + parentBarLen
 			if end > width {
 				end = width
 			}
 			count := end - i
-			bar := strings.Repeat(barChar, count)
-			styledBar := parentStyle.Render(bar)
-			if !selected && bgStyle == nil {
-				styledBar = timelineHyperlink(url, styledBar)
+			var labelStyle *lipgloss.Style
+			if selected {
+				ls := lipgloss.NewStyle().Foreground(ColorWhite).Background(ColorSelectionBg)
+				labelStyle = &ls
 			}
-			result.WriteString(styledBar)
+			bar := buildBarWithDuration(barChar, count, item, parentStyle, labelStyle)
+			if !selected && bgStyle == nil {
+				bar = timelineHyperlink(url, bar)
+			}
+			result.WriteString(bar)
 			i = end
 		} else if buf[i].isChild {
 			// Child marker

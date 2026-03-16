@@ -1,7 +1,6 @@
 package results
 
 import (
-	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -105,9 +104,10 @@ type Model struct {
 	sortMode SortMode
 	// Resizable tree width
 	treeWidth int
-	// Clipboard flash message
-	yankFlash     string
-	yankFlashTime time.Time
+	// Reload error
+	reloadError string
+	// Span index for O(1) lookups
+	spanIndex *SpanIndex
 }
 
 // ReloadFunc is the function signature for reloading data
@@ -256,9 +256,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loadingDetail = ""
 		m.loadingURL = ""
 		if msg.err != nil {
-			// TODO: show error in UI
+			m.reloadError = msg.err.Error()
 			return m, nil
 		}
+		m.reloadError = "" // clear previous error on success
 		// Update model with new data
 		m.globalStart = msg.globalStart
 		m.globalEnd = msg.globalEnd
@@ -314,6 +315,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if key.Matches(msg, m.keys.Quit) {
 				return m, tea.Quit
 			}
+			return m, nil
+		}
+
+		// Dismiss error bar on Esc
+		if m.reloadError != "" && msg.Type == tea.KeyEsc {
+			m.reloadError = ""
 			return m, nil
 		}
 
@@ -569,9 +576,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 
-		case key.Matches(msg, m.keys.Yank):
-			cmd := m.yankToClipboard()
-			return m, cmd
+		case key.Matches(msg, m.keys.NextFailed):
+			m.jumpToNext(func(item TreeItem) bool {
+				return item.Hints.Outcome == "failure"
+			})
+			return m, nil
+
+		case key.Matches(msg, m.keys.NextBottleneck):
+			m.jumpToNext(func(item TreeItem) bool {
+				return item.IsBottleneck
+			})
+			return m, nil
+
+		case key.Matches(msg, m.keys.PageUp):
+			m.selectionStart = -1
+			halfPage := m.pageSize() / 2
+			m.cursor -= halfPage
+			if m.cursor < 0 {
+				m.cursor = 0
+			}
+			return m, nil
+
+		case key.Matches(msg, m.keys.PageDown):
+			m.selectionStart = -1
+			halfPage := m.pageSize() / 2
+			m.cursor += halfPage
+			if m.cursor >= len(m.visibleItems) {
+				m.cursor = len(m.visibleItems) - 1
+			}
+			if m.cursor < 0 {
+				m.cursor = 0
+			}
+			return m, nil
 
 		case key.Matches(msg, m.keys.Help):
 			m.showHelpModal = true
@@ -693,6 +729,9 @@ func (m Model) View() string {
 	if searchActive {
 		headerLines++ // search bar takes one line
 	}
+	if m.reloadError != "" {
+		headerLines++ // error bar takes one line
+	}
 	availableHeight := height - headerLines - footerLines
 	if availableHeight < 1 {
 		availableHeight = 10
@@ -723,6 +762,12 @@ func (m Model) View() string {
 	// Search bar (between blank line and content)
 	if searchActive {
 		b.WriteString(m.renderSearchBar(contentWidth))
+		b.WriteString("\n")
+	}
+
+	// Error bar (shown after reload failure)
+	if m.reloadError != "" {
+		b.WriteString(m.renderErrorBar(contentWidth))
 		b.WriteString("\n")
 	}
 
@@ -978,26 +1023,40 @@ func (m *Model) toggleLogicalEnd() {
 	}
 }
 
-// yankToClipboard copies the current item's URL (or ID) to the clipboard via OSC 52.
-// Returns a tea.Cmd that writes the OSC 52 escape sequence.
-func (m *Model) yankToClipboard() tea.Cmd {
-	if m.cursor >= len(m.visibleItems) {
-		return nil
+// jumpToNext moves the cursor to the next item matching the predicate, wrapping around.
+func (m *Model) jumpToNext(pred func(TreeItem) bool) {
+	if len(m.visibleItems) == 0 {
+		return
 	}
-	item := m.visibleItems[m.cursor]
-
-	// Prefer URL, fall back to ID
-	text := item.Hints.URL
-	if text == "" {
-		text = item.ID
+	// Search forward from cursor+1, then wrap
+	for offset := 1; offset < len(m.visibleItems); offset++ {
+		idx := (m.cursor + offset) % len(m.visibleItems)
+		if pred(m.visibleItems[idx]) {
+			m.selectionStart = -1
+			m.cursor = idx
+			return
+		}
 	}
+}
 
-	m.yankFlash = text
-	m.yankFlashTime = time.Now()
-
-	// OSC 52 clipboard escape: \x1b]52;c;BASE64\x07
-	encoded := base64.StdEncoding.EncodeToString([]byte(text))
-	return tea.Printf("\x1b]52;c;%s\x07", encoded)
+// pageSize returns the number of visible rows in the viewport.
+func (m *Model) pageSize() int {
+	headerLines := 9
+	footerLines := 3
+	if m.hasEnrichmentLine() {
+		headerLines++
+	}
+	if m.isSearching || m.searchQuery != "" {
+		headerLines++
+	}
+	if m.reloadError != "" {
+		headerLines++
+	}
+	available := m.height - headerLines - footerLines
+	if available < 1 {
+		available = 10
+	}
+	return available
 }
 
 // logicalEndCol returns the timeline column position for the logical end marker.
@@ -1033,6 +1092,7 @@ func (m *Model) isAfterLogicalEnd(item TreeItem) bool {
 // rebuildItems rebuilds the flattened item list based on expanded state
 func (m *Model) rebuildItems() {
 	m.treeItems = BuildTreeItems(m.roots, m.expandedState, m.inputURLs)
+	m.spanIndex = BuildSpanIndex(m.treeItems)
 	m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState, m.sortMode)
 
 	// Apply search filter if active
@@ -1141,6 +1201,23 @@ func (m Model) renderSearchBar(contentWidth int) string {
 	}
 
 	return BorderStyle.Render("│") + prefix + query + cursor + strings.Repeat(" ", padWidth) + countStr + BorderStyle.Render("│")
+}
+
+// renderErrorBar renders a dismissible error bar after a failed reload
+func (m Model) renderErrorBar(contentWidth int) string {
+	errMsg := m.reloadError
+	prefix := " ✗ Reload failed: "
+	maxMsg := contentWidth - len(prefix) - 2 // account for borders
+	if len(errMsg) > maxMsg && maxMsg > 3 {
+		errMsg = errMsg[:maxMsg-3] + "..."
+	}
+	text := prefix + errMsg
+	textWidth := len(text)
+	padWidth := contentWidth - textWidth
+	if padWidth < 0 {
+		padWidth = 0
+	}
+	return BorderStyle.Render("│") + FailureStyle.Render(text) + strings.Repeat(" ", padWidth) + BorderStyle.Render("│")
 }
 
 // renderLoadingView renders the loading progress display

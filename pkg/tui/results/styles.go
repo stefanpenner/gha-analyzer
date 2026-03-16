@@ -22,6 +22,9 @@ var (
 	ColorRedDim    = lipgloss.Color("#9E3A3A")
 	ColorYellowDim = lipgloss.Color("#A08856")
 
+	// Subtle background for duration labels inside bars
+	ColorBarLabelBg = lipgloss.Color("#1A1A2A")
+
 	// Search match row background (subtle purple tint)
 	ColorSearchRowBg  = lipgloss.Color("#1E1A2E")
 	ColorSearchCharBg = lipgloss.Color("#2E2545")
