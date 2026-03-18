@@ -130,16 +130,17 @@ type WorkflowRunsResponse struct {
 }
 
 type WorkflowRun struct {
-	ID         int64   `json:"id"`
-	RunAttempt int64   `json:"run_attempt"`
-	Name       string  `json:"name"`
-	Path       string  `json:"path"`
-	Status     string  `json:"status"`
-	Conclusion string  `json:"conclusion"`
-	CreatedAt  string  `json:"created_at"`
-	UpdatedAt  string  `json:"updated_at"`
-	HeadSHA    string  `json:"head_sha"`
-	Repository RepoRef `json:"repository"`
+	ID           int64   `json:"id"`
+	RunAttempt   int64   `json:"run_attempt"`
+	Name         string  `json:"name"`
+	Path         string  `json:"path"`
+	Status       string  `json:"status"`
+	Conclusion   string  `json:"conclusion"`
+	CreatedAt    string  `json:"created_at"`
+	RunStartedAt string  `json:"run_started_at"`
+	UpdatedAt    string  `json:"updated_at"`
+	HeadSHA      string  `json:"head_sha"`
+	Repository   RepoRef `json:"repository"`
 }
 
 type RepoRef struct {

@@ -96,6 +96,198 @@ func (m *mockGitHubProvider) DownloadArtifact(ctx context.Context, url string) (
 	return args.Get(0).([]byte), args.Error(1)
 }
 
+func TestWorkflowQueueTimeSpan(t *testing.T) {
+	t.Run("emits workflow queue span when RunStartedAt is after CreatedAt", func(t *testing.T) {
+		mockClient := new(mockGitHubProvider)
+		builder := &SpanBuilder{}
+
+		run := githubapi.WorkflowRun{
+			ID:           100,
+			RunAttempt:   1,
+			Name:         "CI",
+			Status:       "completed",
+			Conclusion:   "success",
+			CreatedAt:    "2026-03-18T17:17:33Z",
+			RunStartedAt: "2026-03-18T17:47:58Z",
+			UpdatedAt:    "2026-03-18T18:50:30Z",
+			HeadSHA:      "abc123",
+			Repository: githubapi.RepoRef{
+				Owner: githubapi.RepoOwner{Login: "owner"},
+				Name:  "repo",
+			},
+		}
+
+		job := githubapi.Job{
+			ID:          200,
+			Name:        "Build",
+			Status:      "completed",
+			Conclusion:  "success",
+			CreatedAt:   "2026-03-18T17:47:58Z",
+			StartedAt:   "2026-03-18T17:56:49Z",
+			CompletedAt: "2026-03-18T18:47:19Z",
+			RunnerName:  "runner-1",
+		}
+
+		jobsURL := "https://api.github.com/repos/owner/repo/actions/runs/100/jobs?per_page=100"
+		mockClient.On("FetchJobsPaginated", mock.Anything, jobsURL).Return([]githubapi.Job{job}, nil)
+		mockClient.On("FetchCheckRunsForCommit", mock.Anything, "owner", "repo", "abc123").Return([]githubapi.CheckRun{}, nil)
+		mockClient.On("FetchRunTiming", mock.Anything, "owner", "repo", int64(100)).Return((*githubapi.RunTiming)(nil), nil)
+		mockClient.On("ListArtifacts", mock.Anything, "owner", "repo", int64(100)).Return([]githubapi.Artifact{}, nil)
+
+		createdAt, _ := utils.ParseTime(run.CreatedAt)
+		earliestTime := createdAt.UnixMilli()
+
+		_, traceEvents, _, _, err := processWorkflowRun(
+			context.Background(), run, 0, 1001, earliestTime,
+			"owner", "repo", "1", 0, "https://github.com/owner/repo/pull/1", "pr",
+			nil, mockClient, nil, builder, AnalyzeOptions{NoArtifacts: true},
+		)
+		assert.NoError(t, err)
+
+		// Check trace events for workflow queue span
+		var wfQueueFound bool
+		for _, event := range traceEvents {
+			if event.Cat == "queued" && event.Args["type"] == "workflow_queued" {
+				wfQueueFound = true
+				queueMs := event.Args["queue_time_ms"].(int64)
+				// 17:47:58 - 17:17:33 = 30m25s = 1825000ms
+				assert.Equal(t, int64(1825000), queueMs)
+				assert.Equal(t, int64(0), event.Ts, "should start at normalized time 0 (earliest)")
+			}
+		}
+		assert.True(t, wfQueueFound, "Workflow queue trace event not found")
+
+		// Check OTel spans for workflow queue span
+		spans := builder.Spans()
+		var otelQueueFound bool
+		for _, s := range spans {
+			if s.Name() == "⏳ Workflow Queued" {
+				otelQueueFound = true
+				attrs := map[string]interface{}{}
+				for _, a := range s.Attributes() {
+					attrs[string(a.Key)] = a.Value.AsInterface()
+				}
+				assert.Equal(t, "workflow_queued", attrs["type"])
+				assert.Equal(t, int64(1825000), attrs["queue_time_ms"])
+
+				expectedStart, _ := utils.ParseTime("2026-03-18T17:17:33Z")
+				expectedEnd, _ := utils.ParseTime("2026-03-18T17:47:58Z")
+				assert.Equal(t, expectedStart, s.StartTime())
+				assert.Equal(t, expectedEnd, s.EndTime())
+			}
+		}
+		assert.True(t, otelQueueFound, "Workflow queue OTel span not found")
+	})
+
+	t.Run("no queue span when RunStartedAt equals CreatedAt", func(t *testing.T) {
+		mockClient := new(mockGitHubProvider)
+		builder := &SpanBuilder{}
+
+		run := githubapi.WorkflowRun{
+			ID:           101,
+			RunAttempt:   1,
+			Name:         "CI",
+			Status:       "completed",
+			Conclusion:   "success",
+			CreatedAt:    "2026-03-18T17:17:33Z",
+			RunStartedAt: "2026-03-18T17:17:33Z",
+			UpdatedAt:    "2026-03-18T17:30:00Z",
+			HeadSHA:      "abc123",
+			Repository: githubapi.RepoRef{
+				Owner: githubapi.RepoOwner{Login: "owner"},
+				Name:  "repo",
+			},
+		}
+
+		job := githubapi.Job{
+			ID:          201,
+			Name:        "Build",
+			Status:      "completed",
+			Conclusion:  "success",
+			CreatedAt:   "2026-03-18T17:17:33Z",
+			StartedAt:   "2026-03-18T17:17:40Z",
+			CompletedAt: "2026-03-18T17:30:00Z",
+			RunnerName:  "runner-1",
+		}
+
+		jobsURL := "https://api.github.com/repos/owner/repo/actions/runs/101/jobs?per_page=100"
+		mockClient.On("FetchJobsPaginated", mock.Anything, jobsURL).Return([]githubapi.Job{job}, nil)
+		mockClient.On("FetchCheckRunsForCommit", mock.Anything, "owner", "repo", "abc123").Return([]githubapi.CheckRun{}, nil)
+		mockClient.On("FetchRunTiming", mock.Anything, "owner", "repo", int64(101)).Return((*githubapi.RunTiming)(nil), nil)
+		mockClient.On("ListArtifacts", mock.Anything, "owner", "repo", int64(101)).Return([]githubapi.Artifact{}, nil)
+
+		createdAt, _ := utils.ParseTime(run.CreatedAt)
+		earliestTime := createdAt.UnixMilli()
+
+		_, traceEvents, _, _, err := processWorkflowRun(
+			context.Background(), run, 0, 1001, earliestTime,
+			"owner", "repo", "1", 0, "https://github.com/owner/repo/pull/1", "pr",
+			nil, mockClient, nil, builder, AnalyzeOptions{NoArtifacts: true},
+		)
+		assert.NoError(t, err)
+
+		for _, event := range traceEvents {
+			if event.Args != nil && event.Args["type"] == "workflow_queued" {
+				t.Fatal("Should not emit workflow queue span when RunStartedAt == CreatedAt")
+			}
+		}
+	})
+
+	t.Run("no queue span when RunStartedAt is empty", func(t *testing.T) {
+		mockClient := new(mockGitHubProvider)
+		builder := &SpanBuilder{}
+
+		run := githubapi.WorkflowRun{
+			ID:           102,
+			RunAttempt:   1,
+			Name:         "CI",
+			Status:       "completed",
+			Conclusion:   "success",
+			CreatedAt:    "2026-03-18T17:17:33Z",
+			RunStartedAt: "",
+			UpdatedAt:    "2026-03-18T17:30:00Z",
+			HeadSHA:      "abc123",
+			Repository: githubapi.RepoRef{
+				Owner: githubapi.RepoOwner{Login: "owner"},
+				Name:  "repo",
+			},
+		}
+
+		job := githubapi.Job{
+			ID:          202,
+			Name:        "Build",
+			Status:      "completed",
+			Conclusion:  "success",
+			CreatedAt:   "2026-03-18T17:17:33Z",
+			StartedAt:   "2026-03-18T17:17:40Z",
+			CompletedAt: "2026-03-18T17:30:00Z",
+			RunnerName:  "runner-1",
+		}
+
+		jobsURL := "https://api.github.com/repos/owner/repo/actions/runs/102/jobs?per_page=100"
+		mockClient.On("FetchJobsPaginated", mock.Anything, jobsURL).Return([]githubapi.Job{job}, nil)
+		mockClient.On("FetchCheckRunsForCommit", mock.Anything, "owner", "repo", "abc123").Return([]githubapi.CheckRun{}, nil)
+		mockClient.On("FetchRunTiming", mock.Anything, "owner", "repo", int64(102)).Return((*githubapi.RunTiming)(nil), nil)
+		mockClient.On("ListArtifacts", mock.Anything, "owner", "repo", int64(102)).Return([]githubapi.Artifact{}, nil)
+
+		createdAt, _ := utils.ParseTime(run.CreatedAt)
+		earliestTime := createdAt.UnixMilli()
+
+		_, traceEvents, _, _, err := processWorkflowRun(
+			context.Background(), run, 0, 1001, earliestTime,
+			"owner", "repo", "1", 0, "https://github.com/owner/repo/pull/1", "pr",
+			nil, mockClient, nil, builder, AnalyzeOptions{NoArtifacts: true},
+		)
+		assert.NoError(t, err)
+
+		for _, event := range traceEvents {
+			if event.Args != nil && event.Args["type"] == "workflow_queued" {
+				t.Fatal("Should not emit workflow queue span when RunStartedAt is empty")
+			}
+		}
+	})
+}
+
 func TestSpanBuilderGeneration(t *testing.T) {
 	mockClient := new(mockGitHubProvider)
 
