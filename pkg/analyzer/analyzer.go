@@ -396,6 +396,45 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 		},
 	})
 
+	// Emit workflow-level queue span (CreatedAt → RunStartedAt)
+	if run.RunStartedAt != "" {
+		if runStartedAt, ok := utils.ParseTime(run.RunStartedAt); ok && runStartedAt.After(runStart) {
+			queueDurMs := runStartedAt.UnixMilli() - runStartTs
+			normalizedQueueStart := (runStartTs - earliestTime) * 1000
+			normalizedQueueEnd := (runStartedAt.UnixMilli() - earliestTime) * 1000
+			traceEvents = append(traceEvents, TraceEvent{
+				Name: fmt.Sprintf("⏳ Workflow Queued [%d]", urlIndex+1),
+				Ph:   "X",
+				Ts:   normalizedQueueStart,
+				Dur:  normalizedQueueEnd - normalizedQueueStart,
+				Pid:  processID,
+				Tid:  workflowThreadID,
+				Cat:  "queued",
+				Args: map[string]interface{}{
+					"type":          "workflow_queued",
+					"queue_time_ms": queueDurMs,
+				},
+			})
+
+			queueSID := githubapi.NewSpanIDFromString(fmt.Sprintf("wf-queued-%d", run.ID))
+			builder.Add(tracetest.SpanStub{
+				Name: "⏳ Workflow Queued",
+				SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
+					TraceID:    tid,
+					SpanID:     queueSID,
+					TraceFlags: trace.FlagsSampled,
+				}),
+				Parent:    wfSC,
+				StartTime: runStart,
+				EndTime:   runStartedAt,
+				Attributes: []attribute.KeyValue{
+					attribute.String("type", "workflow_queued"),
+					attribute.Int64("queue_time_ms", queueDurMs),
+				},
+			})
+		}
+	}
+
 	// Fetch annotations for failed check runs (best-effort)
 	jobAnnotations := map[string][]githubapi.Annotation{}
 	checkRuns, err := client.FetchCheckRunsForCommit(ctx, run.Repository.Owner.Login, run.Repository.Name, run.HeadSHA)
