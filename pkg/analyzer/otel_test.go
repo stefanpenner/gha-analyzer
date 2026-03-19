@@ -140,7 +140,7 @@ func TestWorkflowQueueTimeSpan(t *testing.T) {
 		_, traceEvents, _, _, err := processWorkflowRun(
 			context.Background(), run, 0, 1001, earliestTime,
 			"owner", "repo", "1", 0, "https://github.com/owner/repo/pull/1", "pr",
-			nil, mockClient, nil, builder, AnalyzeOptions{NoArtifacts: true},
+			nil, mockClient, nil, builder, NewTraceEmitter(builder), AnalyzeOptions{NoArtifacts: true},
 		)
 		assert.NoError(t, err)
 
@@ -222,7 +222,7 @@ func TestWorkflowQueueTimeSpan(t *testing.T) {
 		_, traceEvents, _, _, err := processWorkflowRun(
 			context.Background(), run, 0, 1001, earliestTime,
 			"owner", "repo", "1", 0, "https://github.com/owner/repo/pull/1", "pr",
-			nil, mockClient, nil, builder, AnalyzeOptions{NoArtifacts: true},
+			nil, mockClient, nil, builder, NewTraceEmitter(builder), AnalyzeOptions{NoArtifacts: true},
 		)
 		assert.NoError(t, err)
 
@@ -276,7 +276,7 @@ func TestWorkflowQueueTimeSpan(t *testing.T) {
 		_, traceEvents, _, _, err := processWorkflowRun(
 			context.Background(), run, 0, 1001, earliestTime,
 			"owner", "repo", "1", 0, "https://github.com/owner/repo/pull/1", "pr",
-			nil, mockClient, nil, builder, AnalyzeOptions{NoArtifacts: true},
+			nil, mockClient, nil, builder, NewTraceEmitter(builder), AnalyzeOptions{NoArtifacts: true},
 		)
 		assert.NoError(t, err)
 

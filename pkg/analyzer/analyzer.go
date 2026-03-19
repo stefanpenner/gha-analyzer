@@ -29,8 +29,8 @@ type SpanBuilder struct {
 
 func (b *SpanBuilder) Add(stub tracetest.SpanStub) {
 	// Stamp every span with our instrumentation scope.
-	if stub.InstrumentationLibrary.Name == "" {
-		stub.InstrumentationLibrary.Name = instrumentationName
+	if stub.InstrumentationScope.Name == "" {
+		stub.InstrumentationScope.Name = instrumentationName
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
