@@ -44,7 +44,6 @@ type RuleHints struct {
 }
 
 // LoadRules loads enrichment rules from a JSON file.
-// Also supports a simple YAML-like subset (key: value per line).
 func LoadRules(path string) (*RuleEnricher, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {

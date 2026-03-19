@@ -22,15 +22,12 @@ type Receiver struct {
 	spans  []sdktrace.ReadOnlySpan
 	server *http.Server
 	addr   string
-	done   chan struct{}
-	err    error
 }
 
 // New creates a new OTLP/HTTP receiver listening on the given address.
 func New(addr string) *Receiver {
 	return &Receiver{
 		addr: addr,
-		done: make(chan struct{}),
 	}
 }
 
@@ -94,12 +91,12 @@ func (r *Receiver) handleTraces(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	defer req.Body.Close()
 	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		http.Error(w, "failed to read body", http.StatusBadRequest)
 		return
 	}
-	defer req.Body.Close()
 
 	contentType := req.Header.Get("Content-Type")
 

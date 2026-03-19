@@ -391,6 +391,40 @@ func main() {
 
 	hasTraceBackend := cfg.tempoURL != "" || cfg.jaegerURL != ""
 
+	ctx := context.Background()
+
+	// Setup enricher chain (needed by both receiver and normal modes)
+	var enricher enrichment.Enricher
+	var enrichers []enrichment.Enricher
+	if len(args) > 0 {
+		enrichers = append(enrichers, &enrichment.GHAEnricher{})
+	}
+	enrichers = append(enrichers, &enrichment.CICDEnricher{})
+	if cfg.enrichmentFile != "" {
+		ruleEnricher, err := enrichment.LoadRules(cfg.enrichmentFile)
+		if err != nil {
+			printError(err, "failed to load enrichment rules")
+			os.Exit(1)
+		}
+		enrichers = append(enrichers, ruleEnricher)
+		fmt.Fprintf(os.Stderr, "Loaded %d enrichment rules from %s\n", len(ruleEnricher.Rules), cfg.enrichmentFile)
+	}
+	enrichers = append(enrichers, &enrichment.GenericEnricher{})
+	enricher = enrichment.NewChainEnricher(enrichers...)
+
+	// Setup span filter (needed by both receiver and normal modes)
+	var spanFilter *filter.Filter
+	if cfg.errorsOnly {
+		spanFilter = filter.ErrorsOnly()
+	} else if cfg.filterExpr != "" {
+		var err error
+		spanFilter, err = filter.Parse(cfg.filterExpr)
+		if err != nil {
+			printError(err, "invalid filter expression")
+			os.Exit(1)
+		}
+	}
+
 	// Handle OTLP receiver mode
 	if cfg.listenAddr != "" {
 		fmt.Fprintf(os.Stderr, "Starting OTLP/HTTP receiver on %s...\n", cfg.listenAddr)
@@ -401,24 +435,13 @@ func main() {
 		recv := receiver.New(cfg.listenAddr)
 		ctx, cancel := context.WithCancel(ctx)
 
-		// Listen for interrupt
-		go func() {
-			sigCh := make(chan os.Signal, 1)
-			// Use simple polling since we can't import signal in all environments
-			_ = sigCh
-			// Just wait for context cancellation
-		}()
-
-		// Run receiver in background, stop after timeout or signal
 		errCh := make(chan error, 1)
 		go func() {
 			errCh <- recv.Start(ctx)
 		}()
 
-		// If we also have trace files or URLs, collect those too
-		// Otherwise wait for user to send traces
+		// Pure receiver mode: wait for user input to stop
 		if len(args) == 0 && len(cfg.traceFiles) == 0 && !hasTraceBackend {
-			// Pure receiver mode - wait until stdin closes or a signal
 			fmt.Fprintf(os.Stderr, "  Waiting for traces... (press Enter to stop)\n")
 			buf := make([]byte, 1)
 			os.Stdin.Read(buf)
@@ -435,7 +458,6 @@ func main() {
 			fmt.Fprintf(os.Stderr, "After filtering: %d spans\n", len(receivedSpans))
 		}
 
-		// Lint mode
 		if cfg.lintMode {
 			lintData := buildLintData(receivedSpans)
 			results := enrichment.LintSpans(lintData)
@@ -503,7 +525,7 @@ func main() {
 		}
 	}
 
-	// 1. Setup GitHub Token (only required when GHA URLs are provided)
+	// Setup GitHub Token (only required when GHA URLs are provided)
 	var token string
 	if len(args) > 0 {
 		token = resolveGitHubToken()
@@ -524,42 +546,6 @@ func main() {
 		if token == "" {
 			printErrorMsg("GITHUB_TOKEN environment variable or token argument is required.\n  Tip: install the GitHub CLI (gh) and run `gh auth login` to authenticate automatically.")
 			printUsage()
-			os.Exit(1)
-		}
-	}
-
-	ctx := context.Background()
-
-	// 2. Choose enricher chain based on input source
-	var enricher enrichment.Enricher
-	var enrichers []enrichment.Enricher
-	if len(args) > 0 {
-		// GitHub URLs provided: GHA-specific enricher first
-		enrichers = append(enrichers, &enrichment.GHAEnricher{})
-	}
-	enrichers = append(enrichers, &enrichment.CICDEnricher{})
-	// Load rule-based enricher if provided
-	if cfg.enrichmentFile != "" {
-		ruleEnricher, err := enrichment.LoadRules(cfg.enrichmentFile)
-		if err != nil {
-			printError(err, "failed to load enrichment rules")
-			os.Exit(1)
-		}
-		enrichers = append(enrichers, ruleEnricher)
-		fmt.Fprintf(os.Stderr, "Loaded %d enrichment rules from %s\n", len(ruleEnricher.Rules), cfg.enrichmentFile)
-	}
-	enrichers = append(enrichers, &enrichment.GenericEnricher{})
-	enricher = enrichment.NewChainEnricher(enrichers...)
-
-	// Setup span filter
-	var spanFilter *filter.Filter
-	if cfg.errorsOnly {
-		spanFilter = filter.ErrorsOnly()
-	} else if cfg.filterExpr != "" {
-		var err error
-		spanFilter, err = filter.Parse(cfg.filterExpr)
-		if err != nil {
-			printError(err, "invalid filter expression")
 			os.Exit(1)
 		}
 	}
