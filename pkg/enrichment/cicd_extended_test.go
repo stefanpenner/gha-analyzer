@@ -20,8 +20,8 @@ func TestCICDEnricher_PipelineURL(t *testing.T) {
 
 	// Pipeline-level URL fallback
 	attrs2 := map[string]string{
-		"cicd.pipeline.name":              "build",
-		"cicd.pipeline.run.url.full":      "https://gitlab.example.com/project/-/pipelines/42",
+		"cicd.pipeline.name":         "build",
+		"cicd.pipeline.run.url.full": "https://gitlab.example.com/project/-/pipelines/42",
 	}
 	h2 := e.Enrich("build", attrs2, false)
 	if h2.URL != "https://gitlab.example.com/project/-/pipelines/42" {

@@ -13,9 +13,9 @@ import (
 
 	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
 	"github.com/stefanpenner/otel-analyzer/pkg/core"
+	"github.com/stefanpenner/otel-analyzer/pkg/enrichment"
 	otelexport "github.com/stefanpenner/otel-analyzer/pkg/export/otel"
 	perfettoexport "github.com/stefanpenner/otel-analyzer/pkg/export/perfetto"
-	"github.com/stefanpenner/otel-analyzer/pkg/enrichment"
 	"github.com/stefanpenner/otel-analyzer/pkg/export/terminal"
 	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
 	"github.com/stefanpenner/otel-analyzer/pkg/ingest/filter"
@@ -112,11 +112,11 @@ type config struct {
 	trendsMargin     float64
 	noArtifacts      bool
 	// OTel alignment features
-	filterExpr       string // --filter=<expr>
-	errorsOnly       bool   // --errors-only
-	listenAddr       string // --listen=<addr>
-	enrichmentFile   string // --enrichment=<file>
-	lintMode         bool   // --lint
+	filterExpr     string // --filter=<expr>
+	errorsOnly     bool   // --errors-only
+	listenAddr     string // --listen=<addr>
+	enrichmentFile string // --enrichment=<file>
+	lintMode       bool   // --lint
 }
 
 func parseArgs(args []string, terminal bool) (config, error) {
@@ -956,28 +956,11 @@ func buildLintData(spans []sdktrace.ReadOnlySpan) []enrichment.SpanData {
 		for _, a := range s.Attributes() {
 			attrs[string(a.Key)] = a.Value.AsString()
 		}
-		spanKind := ""
-		switch s.SpanKind() {
-		case 1:
-			spanKind = "INTERNAL"
-		case 2:
-			spanKind = "SERVER"
-		case 3:
-			spanKind = "CLIENT"
-		case 4:
-			spanKind = "PRODUCER"
-		case 5:
-			spanKind = "CONSUMER"
-		}
-		scopeName := ""
-		if scope := s.InstrumentationScope(); scope.Name != "" {
-			scopeName = scope.Name
-		}
 		data = append(data, enrichment.SpanData{
 			Name:      s.Name(),
 			Attrs:     attrs,
-			SpanKind:  spanKind,
-			ScopeName: scopeName,
+			SpanKind:  s.SpanKind().String(),
+			ScopeName: s.InstrumentationScope().Name,
 			HasEvents: len(s.Events()) > 0,
 		})
 	}

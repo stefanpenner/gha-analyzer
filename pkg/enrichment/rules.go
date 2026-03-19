@@ -4,21 +4,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
 // RuleEnricher applies user-defined rules to classify spans.
-// Rules are loaded from a YAML/JSON config file.
+// Rules are loaded from a JSON config file.
 type RuleEnricher struct {
 	Rules []Rule
 }
 
 // Rule defines a pattern-based enrichment rule.
 type Rule struct {
-	Name  string            `json:"name"`
-	Match RuleMatch         `json:"match"`
-	Hints RuleHints         `json:"hints"`
+	Name  string    `json:"name"`
+	Match RuleMatch `json:"match"`
+	Hints RuleHints `json:"hints"`
 }
 
 // RuleMatch specifies conditions for a rule to apply.
@@ -50,22 +49,11 @@ func LoadRules(path string) (*RuleEnricher, error) {
 		return nil, fmt.Errorf("reading rules file: %w", err)
 	}
 
-	ext := strings.ToLower(filepath.Ext(path))
-
 	var config struct {
 		Enrichers []Rule `json:"enrichers"`
 	}
-
-	switch ext {
-	case ".json":
-		if err := json.Unmarshal(data, &config); err != nil {
-			return nil, fmt.Errorf("parsing rules JSON: %w", err)
-		}
-	default:
-		// Try JSON first for any extension
-		if err := json.Unmarshal(data, &config); err != nil {
-			return nil, fmt.Errorf("parsing rules file (only JSON supported): %w", err)
-		}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("parsing rules file: %w", err)
 	}
 
 	return &RuleEnricher{Rules: config.Enrichers}, nil
@@ -107,14 +95,7 @@ func matchesRule(match RuleMatch, name string, attrs map[string]string) bool {
 	// Check all attribute patterns
 	for key, pattern := range match.Attributes {
 		val, ok := attrs[key]
-		if !ok {
-			// Attribute not present — "*" matches absence as "present with any value"
-			if pattern == "*" {
-				return false
-			}
-			return false
-		}
-		if !globMatch(pattern, val) {
+		if !ok || !globMatch(pattern, val) {
 			return false
 		}
 	}

@@ -216,25 +216,17 @@ func FormatLintResults(results []LintResult) string {
 		}
 	}
 
-	b.WriteString(fmt.Sprintf("Semconv Lint: %d issues found", len(results)))
+	var parts []string
 	if errors > 0 {
-		b.WriteString(fmt.Sprintf(" (%d errors", errors))
-	} else {
-		b.WriteString(" (")
+		parts = append(parts, fmt.Sprintf("%d errors", errors))
 	}
 	if warnings > 0 {
-		if errors > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString(fmt.Sprintf("%d warnings", warnings))
+		parts = append(parts, fmt.Sprintf("%d warnings", warnings))
 	}
 	if infos > 0 {
-		if errors > 0 || warnings > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString(fmt.Sprintf("%d info", infos))
+		parts = append(parts, fmt.Sprintf("%d info", infos))
 	}
-	b.WriteString(")\n\n")
+	b.WriteString(fmt.Sprintf("Semconv Lint: %d issues found (%s)\n\n", len(results), strings.Join(parts, ", ")))
 
 	// Deduplicate: group identical messages and count occurrences
 	type lintKey struct {
