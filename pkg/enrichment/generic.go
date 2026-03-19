@@ -1,6 +1,9 @@
 package enrichment
 
-import "strconv"
+import (
+	"fmt"
+	"strconv"
+)
 
 // GenericEnricher handles any OTel span that wasn't recognized by a more
 // specific enricher. It recognizes OTel semantic conventions for HTTP, database,
@@ -41,28 +44,109 @@ func (e *GenericEnricher) Enrich(name string, attrs map[string]string, isZeroDur
 		h.GroupKey = "artifact"
 	}
 
+	// Extract resource-level context
+	if svc := attrs["service.name"]; svc != "" {
+		h.ServiceName = svc
+	}
+	if env := attrs["deployment.environment"]; env != "" {
+		h.Environment = env
+	}
+
 	// Recognize OTel semantic conventions for common span types.
-	// These set category/icon but do NOT set IsRoot/IsLeaf — tree position
-	// is determined structurally, not by semconv.
+	// These set category/icon and extract Detail for richer display.
 	if !h.IsMarker {
 		switch {
 		case attrs["http.request.method"] != "" || attrs["http.method"] != "":
 			h.Category = "http"
 			h.Icon = "⇄ "
-			// HTTP error status codes
-			if code, err := strconv.Atoi(attrs["http.response.status_code"]); err == nil && code >= 400 {
-				h.Outcome = "failure"
-				h.Color = "red"
+			// Extract meaningful detail: "METHOD route" or "METHOD url_path"
+			method := attrs["http.request.method"]
+			if method == "" {
+				method = attrs["http.method"]
 			}
+			route := attrs["http.route"]
+			if route == "" {
+				route = attrs["url.path"]
+			}
+			if method != "" && route != "" {
+				h.Detail = method + " " + route
+			} else if method != "" {
+				h.Detail = method
+			}
+			// Add server context
+			if server := attrs["server.address"]; server != "" {
+				if port := attrs["server.port"]; port != "" {
+					h.Detail += fmt.Sprintf(" → %s:%s", server, port)
+				}
+			}
+			// HTTP error status codes
+			statusStr := attrs["http.response.status_code"]
+			if statusStr == "" {
+				statusStr = attrs["http.status_code"]
+			}
+			if code, err := strconv.Atoi(statusStr); err == nil {
+				if code >= 400 {
+					h.Outcome = "failure"
+					h.Color = "red"
+				}
+				if h.Detail != "" {
+					h.Detail += fmt.Sprintf(" [%d]", code)
+				}
+			}
+
 		case attrs["db.system"] != "":
 			h.Category = "database"
 			h.Icon = "⛁ "
+			// Extract DB detail: "system: statement"
+			dbSystem := attrs["db.system"]
+			h.Detail = dbSystem
+			if stmt := attrs["db.statement"]; stmt != "" {
+				// Truncate long statements
+				if len(stmt) > 80 {
+					stmt = stmt[:77] + "..."
+				}
+				h.Detail = dbSystem + ": " + stmt
+			} else if op := attrs["db.operation"]; op != "" {
+				h.Detail = dbSystem + ": " + op
+				if table := attrs["db.sql.table"]; table != "" {
+					h.Detail += " " + table
+				}
+			}
+
 		case attrs["rpc.system"] != "":
 			h.Category = "rpc"
 			h.Icon = "⇌ "
+			// Extract RPC detail: "system service/method"
+			rpcSystem := attrs["rpc.system"]
+			h.Detail = rpcSystem
+			if svc := attrs["rpc.service"]; svc != "" {
+				if method := attrs["rpc.method"]; method != "" {
+					h.Detail = rpcSystem + " " + svc + "/" + method
+				} else {
+					h.Detail = rpcSystem + " " + svc
+				}
+			}
+
 		case attrs["messaging.system"] != "":
 			h.Category = "messaging"
 			h.Icon = "✉ "
+			// Extract messaging detail: "system destination operation"
+			msgSystem := attrs["messaging.system"]
+			h.Detail = msgSystem
+			if dest := attrs["messaging.destination.name"]; dest != "" {
+				h.Detail += " " + dest
+			}
+			if op := attrs["messaging.operation"]; op != "" {
+				h.Detail += " (" + op + ")"
+			}
+
+		case attrs["faas.trigger"] != "":
+			h.Category = "faas"
+			h.Icon = "λ "
+			h.Detail = attrs["faas.trigger"]
+			if fname := attrs["faas.name"]; fname != "" {
+				h.Detail = fname + " (" + h.Detail + ")"
+			}
 		}
 	}
 

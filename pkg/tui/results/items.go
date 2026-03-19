@@ -85,6 +85,14 @@ type TreeItem struct {
 	Children     []*TreeItem
 	Hints        enrichment.SpanHints // enrichment hints from source node
 	sourceNode   *analyzer.TreeNode
+	// OTel metadata surfaced for display
+	Events        []analyzer.SpanEvent
+	Links         []analyzer.SpanLink
+	SpanID        string
+	TraceID       string
+	ScopeName     string
+	ScopeVersion  string
+	ResourceAttrs map[string]string
 }
 
 // BuildTreeItems converts TreeNodes into TreeItems for the TUI.
@@ -250,19 +258,26 @@ func convertNode(node *analyzer.TreeNode, parentID string, index, depth int, exp
 	itemType := itemTypeFromNode(node)
 
 	item := &TreeItem{
-		ID:          id,
-		Name:        node.Name,
-		DisplayName: node.Name,
-		StartTime:   node.StartTime,
-		EndTime:     node.EndTime,
-		Depth:       depth,
-		HasChildren: len(node.Children) > 0,
-		IsExpanded:  expandedState[id],
-		ItemType:    itemType,
-		ParentID:    parentID,
-		Children:    []*TreeItem{},
-		Hints:       node.Hints,
-		sourceNode:  node,
+		ID:            id,
+		Name:          node.Name,
+		DisplayName:   node.Name,
+		StartTime:     node.StartTime,
+		EndTime:       node.EndTime,
+		Depth:         depth,
+		HasChildren:   len(node.Children) > 0,
+		IsExpanded:    expandedState[id],
+		ItemType:      itemType,
+		ParentID:      parentID,
+		Children:      []*TreeItem{},
+		Hints:         node.Hints,
+		sourceNode:    node,
+		Events:        node.Events,
+		Links:         node.Links,
+		SpanID:        node.SpanID,
+		TraceID:       node.TraceID,
+		ScopeName:     node.ScopeName,
+		ScopeVersion:  node.ScopeVersion,
+		ResourceAttrs: node.ResourceAttrs,
 	}
 
 	// Partition children into regular and artifact groups.

@@ -18,6 +18,15 @@ type SpanHints struct {
 	SortPriority int    // tie-breaking (markers get -1)
 	DedupKey     string // non-empty → deduplicate
 	GroupKey     string // non-empty → group under synthetic parent ("activity" for markers)
+	// CI/CD extended context
+	VCSBranch   string // vcs.ref.head.name — branch context
+	VCSRevision string // vcs.revision — commit SHA
+	RunID       string // cicd.pipeline.run.id or cicd.pipeline.task.run.id
+	// Generic span detail (extracted from semconv attributes)
+	Detail string // e.g. "GET /api/users" for HTTP, "SELECT * FROM users" for DB
+	// Service context (from resource attributes)
+	ServiceName string // service.name from resource
+	Environment string // deployment.environment from resource
 }
 
 // Enricher extracts SpanHints from span name and attributes.

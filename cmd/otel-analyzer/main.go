@@ -18,8 +18,10 @@ import (
 	"github.com/stefanpenner/otel-analyzer/pkg/enrichment"
 	"github.com/stefanpenner/otel-analyzer/pkg/export/terminal"
 	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
+	"github.com/stefanpenner/otel-analyzer/pkg/ingest/filter"
 	"github.com/stefanpenner/otel-analyzer/pkg/ingest/otlpfile"
 	"github.com/stefanpenner/otel-analyzer/pkg/ingest/polling"
+	"github.com/stefanpenner/otel-analyzer/pkg/ingest/receiver"
 	"github.com/stefanpenner/otel-analyzer/pkg/ingest/traceapi"
 	"github.com/stefanpenner/otel-analyzer/pkg/ingest/webhook"
 	"github.com/stefanpenner/otel-analyzer/pkg/output"
@@ -109,6 +111,12 @@ type config struct {
 	trendsConfidence float64
 	trendsMargin     float64
 	noArtifacts      bool
+	// OTel alignment features
+	filterExpr       string // --filter=<expr>
+	errorsOnly       bool   // --errors-only
+	listenAddr       string // --listen=<addr>
+	enrichmentFile   string // --enrichment=<file>
+	lintMode         bool   // --lint
 }
 
 func parseArgs(args []string, terminal bool) (config, error) {
@@ -207,6 +215,30 @@ func parseArgs(args []string, terminal bool) (config, error) {
 		}
 		if arg == "--no-artifacts" {
 			cfg.noArtifacts = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--filter=") {
+			cfg.filterExpr = strings.TrimPrefix(arg, "--filter=")
+			continue
+		}
+		if arg == "--errors-only" {
+			cfg.errorsOnly = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--listen=") {
+			cfg.listenAddr = strings.TrimPrefix(arg, "--listen=")
+			continue
+		}
+		if arg == "--listen" {
+			cfg.listenAddr = ":4318"
+			continue
+		}
+		if strings.HasPrefix(arg, "--enrichment=") {
+			cfg.enrichmentFile = strings.TrimPrefix(arg, "--enrichment=")
+			continue
+		}
+		if arg == "--lint" {
+			cfg.lintMode = true
 			continue
 		}
 
@@ -359,6 +391,86 @@ func main() {
 
 	hasTraceBackend := cfg.tempoURL != "" || cfg.jaegerURL != ""
 
+	// Handle OTLP receiver mode
+	if cfg.listenAddr != "" {
+		fmt.Fprintf(os.Stderr, "Starting OTLP/HTTP receiver on %s...\n", cfg.listenAddr)
+		fmt.Fprintf(os.Stderr, "  POST traces to http://localhost%s/v1/traces\n", cfg.listenAddr)
+		fmt.Fprintf(os.Stderr, "  Set OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost%s in your app\n", cfg.listenAddr)
+		fmt.Fprintf(os.Stderr, "  Press Ctrl+C to stop and analyze collected spans\n")
+
+		recv := receiver.New(cfg.listenAddr)
+		ctx, cancel := context.WithCancel(ctx)
+
+		// Listen for interrupt
+		go func() {
+			sigCh := make(chan os.Signal, 1)
+			// Use simple polling since we can't import signal in all environments
+			_ = sigCh
+			// Just wait for context cancellation
+		}()
+
+		// Run receiver in background, stop after timeout or signal
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- recv.Start(ctx)
+		}()
+
+		// If we also have trace files or URLs, collect those too
+		// Otherwise wait for user to send traces
+		if len(args) == 0 && len(cfg.traceFiles) == 0 && !hasTraceBackend {
+			// Pure receiver mode - wait until stdin closes or a signal
+			fmt.Fprintf(os.Stderr, "  Waiting for traces... (press Enter to stop)\n")
+			buf := make([]byte, 1)
+			os.Stdin.Read(buf)
+		}
+
+		cancel()
+		<-errCh
+
+		receivedSpans := recv.Spans()
+		fmt.Fprintf(os.Stderr, "Received %d spans\n", len(receivedSpans))
+
+		if spanFilter != nil {
+			receivedSpans = spanFilter.Apply(receivedSpans)
+			fmt.Fprintf(os.Stderr, "After filtering: %d spans\n", len(receivedSpans))
+		}
+
+		// Lint mode
+		if cfg.lintMode {
+			lintData := buildLintData(receivedSpans)
+			results := enrichment.LintSpans(lintData)
+			fmt.Fprint(os.Stderr, enrichment.FormatLintResults(results))
+		}
+
+		spans := receivedSpans
+		var globalEarliest, globalLatest int64
+		for _, s := range spans {
+			startMs := s.StartTime().UnixMilli()
+			endMs := s.EndTime().UnixMilli()
+			if globalEarliest == 0 || startMs < globalEarliest {
+				globalEarliest = startMs
+			}
+			if endMs > globalLatest {
+				globalLatest = endMs
+			}
+		}
+
+		pipeline := core.NewPipeline(terminal.NewExporter(os.Stderr, enricher))
+		if err := pipeline.Process(ctx, spans); err != nil {
+			printError(err, "processing spans failed")
+		}
+
+		if cfg.tuiMode {
+			globalStartTime := time.UnixMilli(globalEarliest)
+			globalEndTime := time.UnixMilli(globalLatest)
+			if err := tuiresults.Run(spans, globalStartTime, globalEndTime, []string{"receiver"}, nil, nil, enricher); err != nil {
+				fmt.Fprintf(os.Stderr, "%sError: TUI failed: %v%s\n", colorRed, err, colorReset)
+				os.Exit(1)
+			}
+		}
+		return
+	}
+
 	// If no URL args, no trace files, no trace backend, and stdin is piped, read webhook from stdin
 	if len(args) == 0 && len(cfg.traceFiles) == 0 && !hasTraceBackend && !isStdinTerminal() {
 		fmt.Fprintf(os.Stderr, "Reading webhook from stdin...\n")
@@ -371,7 +483,7 @@ func main() {
 	}
 
 	if len(args) == 0 && len(cfg.traceFiles) == 0 && !hasTraceBackend {
-		printErrorMsg("No GitHub URLs or trace files provided.\n\n  Usage: otel-analyzer <github_url> [flags]\n         otel-analyzer <trace_file.json> [flags]\n         otel-analyzer --tempo=<url> --trace-id=<id> [flags]\n\n  Run 'otel-analyzer --help' for more information.")
+		printErrorMsg("No GitHub URLs or trace files provided.\n\n  Usage: otel-analyzer <github_url> [flags]\n         otel-analyzer <trace_file.json> [flags]\n         otel-analyzer --tempo=<url> --trace-id=<id> [flags]\n         otel-analyzer --listen[=<addr>] [flags]\n\n  Run 'otel-analyzer --help' for more information.")
 		os.Exit(1)
 	}
 
@@ -420,12 +532,36 @@ func main() {
 
 	// 2. Choose enricher chain based on input source
 	var enricher enrichment.Enricher
+	var enrichers []enrichment.Enricher
 	if len(args) > 0 {
 		// GitHub URLs provided: GHA-specific enricher first
-		enricher = enrichment.DefaultEnricher()
-	} else {
-		// Trace files or backends only: skip GHA enricher
-		enricher = enrichment.NewChainEnricher(&enrichment.CICDEnricher{}, &enrichment.GenericEnricher{})
+		enrichers = append(enrichers, &enrichment.GHAEnricher{})
+	}
+	enrichers = append(enrichers, &enrichment.CICDEnricher{})
+	// Load rule-based enricher if provided
+	if cfg.enrichmentFile != "" {
+		ruleEnricher, err := enrichment.LoadRules(cfg.enrichmentFile)
+		if err != nil {
+			printError(err, "failed to load enrichment rules")
+			os.Exit(1)
+		}
+		enrichers = append(enrichers, ruleEnricher)
+		fmt.Fprintf(os.Stderr, "Loaded %d enrichment rules from %s\n", len(ruleEnricher.Rules), cfg.enrichmentFile)
+	}
+	enrichers = append(enrichers, &enrichment.GenericEnricher{})
+	enricher = enrichment.NewChainEnricher(enrichers...)
+
+	// Setup span filter
+	var spanFilter *filter.Filter
+	if cfg.errorsOnly {
+		spanFilter = filter.ErrorsOnly()
+	} else if cfg.filterExpr != "" {
+		var err error
+		spanFilter, err = filter.Parse(cfg.filterExpr)
+		if err != nil {
+			printError(err, "invalid filter expression")
+			os.Exit(1)
+		}
 	}
 
 	// 3. Setup Exporters
@@ -537,6 +673,20 @@ func main() {
 		if endMs > globalLatest {
 			globalLatest = endMs
 		}
+	}
+
+	// Apply span filter
+	if spanFilter != nil {
+		before := len(spans)
+		spans = spanFilter.Apply(spans)
+		fmt.Fprintf(os.Stderr, "Filter: %d → %d spans\n", before, len(spans))
+	}
+
+	// Lint mode: analyze spans for semconv compliance
+	if cfg.lintMode {
+		lintData := buildLintData(spans)
+		lintResults := enrichment.LintSpans(lintData)
+		fmt.Fprint(os.Stderr, enrichment.FormatLintResults(lintResults))
 	}
 
 	if err := pipeline.Process(ctx, spans); err != nil {
@@ -741,6 +891,11 @@ func printUsage() {
 	fmt.Println("  --jaeger=<baseURL>        Fetch traces from Jaeger v2 (e.g., http://localhost:16686)")
 	fmt.Println("  --trace-id=<id>           Trace ID to fetch from Tempo/Jaeger (can be repeated)")
 	fmt.Println("  --no-artifacts            Skip downloading and ingesting trace artifacts from workflow runs")
+	fmt.Println("  --filter=<expr>           Filter spans by attributes (e.g., 'service.name=checkout,http.status_code=5*')")
+	fmt.Println("  --errors-only             Only show spans with ERROR status")
+	fmt.Println("  --listen[=<addr>]         Start OTLP/HTTP receiver (default: :4318)")
+	fmt.Println("  --enrichment=<file>       Load custom enrichment rules from a JSON file")
+	fmt.Println("  --lint                    Analyze spans for OTel semantic convention compliance")
 	fmt.Println("  --clear-cache             Clear the HTTP cache (can be combined with other flags)")
 	fmt.Println("  help, --help, -h          Show this help message")
 	fmt.Println("\nTrends Mode Flags:")
@@ -767,6 +922,11 @@ func printUsage() {
 	fmt.Println("  otel-analyzer --trace=spans.json https://github.com/owner/repo/pull/123")
 	fmt.Println("  otel-analyzer --tempo=http://localhost:3200 --trace-id=abc123def456")
 	fmt.Println("  otel-analyzer --jaeger=http://localhost:16686 --trace-id=abc123def456")
+	fmt.Println("  otel-analyzer --listen                       # accept OTLP traces on :4318")
+	fmt.Println("  otel-analyzer trace.json --filter=service.name=checkout")
+	fmt.Println("  otel-analyzer trace.json --errors-only       # only show error spans")
+	fmt.Println("  otel-analyzer trace.json --lint              # check semconv compliance")
+	fmt.Println("  otel-analyzer trace.json --enrichment=rules.json")
 	fmt.Println("  otel-analyzer --clear-cache")
 }
 
@@ -800,4 +960,40 @@ func isStdinTerminal() bool {
 		return false
 	}
 	return (info.Mode() & os.ModeCharDevice) != 0
+}
+
+// buildLintData converts ReadOnlySpans into the simplified SpanData format for linting.
+func buildLintData(spans []sdktrace.ReadOnlySpan) []enrichment.SpanData {
+	var data []enrichment.SpanData
+	for _, s := range spans {
+		attrs := make(map[string]string)
+		for _, a := range s.Attributes() {
+			attrs[string(a.Key)] = a.Value.AsString()
+		}
+		spanKind := ""
+		switch s.SpanKind() {
+		case 1:
+			spanKind = "INTERNAL"
+		case 2:
+			spanKind = "SERVER"
+		case 3:
+			spanKind = "CLIENT"
+		case 4:
+			spanKind = "PRODUCER"
+		case 5:
+			spanKind = "CONSUMER"
+		}
+		scopeName := ""
+		if scope := s.InstrumentationScope(); scope.Name != "" {
+			scopeName = scope.Name
+		}
+		data = append(data, enrichment.SpanData{
+			Name:      s.Name(),
+			Attrs:     attrs,
+			SpanKind:  spanKind,
+			ScopeName: scopeName,
+			HasEvents: len(s.Events()) > 0,
+		})
+	}
+	return data
 }

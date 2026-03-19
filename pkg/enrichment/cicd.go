@@ -20,9 +20,21 @@ func (e *CICDEnricher) Enrich(name string, attrs map[string]string, isZeroDurati
 		BarChar: "█",
 	}
 
-	// URL from VCS attributes
-	if url := attrs["vcs.repository.url.full"]; url != "" {
+	// URL from CI/CD task URL or VCS attributes
+	if url := attrs["cicd.pipeline.task.run.url.full"]; url != "" {
 		h.URL = url
+	} else if url := attrs["cicd.pipeline.run.url.full"]; url != "" {
+		h.URL = url
+	} else if url := attrs["vcs.repository.url.full"]; url != "" {
+		h.URL = url
+	}
+
+	// Extract VCS context for display
+	if branch := attrs["vcs.ref.head.name"]; branch != "" {
+		h.VCSBranch = branch
+	}
+	if rev := attrs["vcs.revision"]; rev != "" {
+		h.VCSRevision = rev
 	}
 
 	// Pipeline-level span (root)
@@ -31,6 +43,17 @@ func (e *CICDEnricher) Enrich(name string, attrs map[string]string, isZeroDurati
 		h.IsRoot = true
 		h.Icon = "▶ "
 		h.Color = "blue"
+
+		// Distinguish pipeline types
+		if pipelineType := attrs["cicd.pipeline.type"]; pipelineType != "" {
+			h.Icon = pipelineIconFromType(pipelineType)
+		}
+
+		// Extract run ID for correlation
+		if runID := attrs["cicd.pipeline.run.id"]; runID != "" {
+			h.RunID = runID
+		}
+
 		enrichCICDOutcome(&h, attrs)
 		return h
 	}
@@ -40,11 +63,31 @@ func (e *CICDEnricher) Enrich(name string, attrs map[string]string, isZeroDurati
 		h.Category = "task"
 		h.Icon = taskIconFromType(taskType)
 		h.Color = "blue"
+
+		// Extract run ID for correlation
+		if runID := attrs["cicd.pipeline.task.run.id"]; runID != "" {
+			h.RunID = runID
+		}
+
 		enrichCICDOutcome(&h, attrs)
 		return h
 	}
 
 	return SpanHints{}
+}
+
+// pipelineIconFromType returns an icon based on the CI/CD pipeline type.
+func pipelineIconFromType(pipelineType string) string {
+	switch pipelineType {
+	case "deploy":
+		return "🚀 "
+	case "build":
+		return "🔨 "
+	case "test":
+		return "🧪 "
+	default:
+		return "▶ "
+	}
 }
 
 // taskIconFromType returns an icon based on the CI/CD task type.
@@ -64,6 +107,9 @@ func taskIconFromType(taskType string) string {
 // enrichCICDOutcome maps cicd.pipeline.task.run.result to outcome/color.
 func enrichCICDOutcome(h *SpanHints, attrs map[string]string) {
 	result := attrs["cicd.pipeline.task.run.result"]
+	if result == "" {
+		result = attrs["cicd.pipeline.run.result"]
+	}
 	switch result {
 	case "success":
 		h.Outcome = "success"

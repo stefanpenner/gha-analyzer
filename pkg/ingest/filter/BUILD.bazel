@@ -1,0 +1,17 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "filter",
+    srcs = ["filter.go"],
+    importpath = "github.com/stefanpenner/otel-analyzer/pkg/ingest/filter",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@io_opentelemetry_go_otel_sdk//trace",
+    ],
+)
+
+go_test(
+    name = "filter_test",
+    srcs = ["filter_test.go"],
+    embed = [":filter"],
+)
