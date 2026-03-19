@@ -1,0 +1,111 @@
+name: Check OTel Semconv Updates
+
+on:
+  schedule:
+    # Every Monday at 9:00 UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch: # Allow manual trigger
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-semconv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check latest OTel semconv release
+        id: check
+        run: |
+          # Fetch the latest release tag from the OTel semantic-conventions repo
+          LATEST=$(curl -s https://api.github.com/repos/open-telemetry/semantic-conventions/releases/latest | jq -r '.tag_name')
+          echo "latest=$LATEST" >> "$GITHUB_OUTPUT"
+
+          # Read current version from our registry
+          CURRENT=$(grep 'SemconvVersion' pkg/enrichment/semconv_version.go 2>/dev/null | grep -oP '"[^"]*"' | tr -d '"' || echo "unknown")
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+
+          if [ "$LATEST" != "$CURRENT" ] && [ "$LATEST" != "null" ]; then
+            echo "needs_update=true" >> "$GITHUB_OUTPUT"
+            echo "New semconv version available: $LATEST (current: $CURRENT)"
+          else
+            echo "needs_update=false" >> "$GITHUB_OUTPUT"
+            echo "Semconv is up to date: $CURRENT"
+          fi
+
+      - name: Fetch semconv changelog
+        if: steps.check.outputs.needs_update == 'true'
+        id: changelog
+        run: |
+          LATEST="${{ steps.check.outputs.latest }}"
+          # Fetch release notes
+          BODY=$(curl -s "https://api.github.com/repos/open-telemetry/semantic-conventions/releases/latest" | jq -r '.body' | head -50)
+          echo "body<<EOF" >> "$GITHUB_OUTPUT"
+          echo "$BODY" >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Update version file
+        if: steps.check.outputs.needs_update == 'true'
+        run: |
+          LATEST="${{ steps.check.outputs.latest }}"
+          cat > pkg/enrichment/semconv_version.go << GOEOF
+          package enrichment
+
+          // SemconvVersion is the latest known OTel semantic conventions version.
+          // Updated automatically by .github/workflows/semconv-check.yml
+          const SemconvVersion = "$LATEST"
+          GOEOF
+
+          # Format the file
+          gofmt -w pkg/enrichment/semconv_version.go
+
+      - name: Create PR
+        if: steps.check.outputs.needs_update == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          LATEST="${{ steps.check.outputs.latest }}"
+          CURRENT="${{ steps.check.outputs.current }}"
+          BRANCH="chore/semconv-update-${LATEST}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$BRANCH"
+          git add pkg/enrichment/semconv_version.go
+          git commit -m "chore: update OTel semconv version to $LATEST
+
+          Automated update from semantic-conventions $CURRENT → $LATEST.
+          Review the changelog and update domain enrichers as needed."
+
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "chore: OTel semconv update $CURRENT → $LATEST" \
+            --body "## OTel Semantic Conventions Update
+
+          **Version**: \`$CURRENT\` → \`$LATEST\`
+
+          ### What changed
+
+          ${{ steps.changelog.outputs.body }}
+
+          ### Action required
+
+          Review the [release notes](https://github.com/open-telemetry/semantic-conventions/releases/tag/$LATEST) and check if any domain enrichers in \`pkg/enrichment/domain_*.go\` need updates:
+
+          - [ ] New attribute keys to recognize
+          - [ ] Deprecated attributes to add to lint checks
+          - [ ] New semconv domains to add as enrichers
+          - [ ] Stability changes (experimental → stable)
+
+          ### Registry domains
+
+          Run \`go test ./pkg/enrichment/...\` to verify all domain enrichers still pass.
+
+          ---
+          *This PR was automatically created by the [semconv-check workflow](/.github/workflows/semconv-check.yml).*" \
+            --base main \
+            --draft
