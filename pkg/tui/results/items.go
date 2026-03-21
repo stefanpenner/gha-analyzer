@@ -47,6 +47,7 @@ const (
 	ItemTypeLeaf
 	ItemTypeMarker
 	ItemTypeActivityGroup
+	ItemTypeInfo // synthetic metadata item (no timeline bar)
 )
 
 // String returns a human-readable string for the ItemType
@@ -64,6 +65,8 @@ func (t ItemType) String() string {
 		return "Marker"
 	case ItemTypeActivityGroup:
 		return "ActivityGroup"
+	case ItemTypeInfo:
+		return "Info"
 	default:
 		return "Unknown"
 	}
@@ -96,17 +99,22 @@ type TreeItem struct {
 }
 
 // BuildTreeItems converts TreeNodes into TreeItems for the TUI.
-// When multiple inputURLs are provided, roots are grouped under URL group items.
+// Each input URL becomes a top-level URL group node containing its workflows.
 func BuildTreeItems(roots []*analyzer.TreeNode, expandedState map[string]bool, inputURLs []string) []*TreeItem {
-	if len(inputURLs) <= 1 {
-		// Single URL or no URLs: partition into workflows + Activity group
-		return partitionAndGroup(roots, "", 0, expandedState)
+	// Ensure expandedState is non-nil
+	if expandedState == nil {
+		expandedState = make(map[string]bool)
 	}
 
-	// Multiple URLs: group roots by URLIndex
+	// Group roots by URLIndex
 	grouped := make(map[int][]*analyzer.TreeNode)
 	for _, root := range roots {
 		grouped[root.URLIndex] = append(grouped[root.URLIndex], root)
+	}
+
+	// If no inputURLs provided, synthesize one group for all roots
+	if len(inputURLs) == 0 {
+		inputURLs = []string{""}
 	}
 
 	var items []*TreeItem
@@ -125,16 +133,21 @@ func BuildTreeItems(roots []*analyzer.TreeNode, expandedState map[string]bool, i
 				}
 				displayName = fmt.Sprintf("commit %s (%s/%s)", id, parsed.Owner, parsed.Repo)
 			}
-		} else if !strings.HasPrefix(inputURL, "http") {
+		} else if !strings.HasPrefix(inputURL, "http") && inputURL != "" {
 			// Not a URL — treat as a trace file name
 			displayName = fmt.Sprintf("◇ %s", inputURL)
 		}
 
 		groupID := fmt.Sprintf("url-group/%d", urlIdx)
 
-		// Calculate time bounds from children
+		// Calculate time bounds from non-marker children only.
+		// Activity markers (review/merge events) can happen hours after CI,
+		// so including them would inflate the parent's duration.
 		var earliest, latest time.Time
 		for _, child := range children {
+			if child.Hints.IsMarker || child.Hints.GroupKey == "activity" {
+				continue
+			}
 			if !child.StartTime.IsZero() && (earliest.IsZero() || child.StartTime.Before(earliest)) {
 				earliest = child.StartTime
 			}
@@ -145,6 +158,13 @@ func BuildTreeItems(roots []*analyzer.TreeNode, expandedState map[string]bool, i
 
 		// Compute aggregate outcome
 		outcome := aggregateOutcome(children)
+
+		// Default to expanded for single-URL case
+		if len(inputURLs) == 1 {
+			if _, explicit := expandedState[groupID]; !explicit {
+				expandedState[groupID] = true
+			}
+		}
 
 		groupItem := &TreeItem{
 			ID:          groupID,
@@ -163,7 +183,10 @@ func BuildTreeItems(roots []*analyzer.TreeNode, expandedState map[string]bool, i
 			},
 		}
 
-		groupItem.Children = partitionAndGroup(children, groupID, 1, expandedState)
+		// Add VCS changed files info from the first workflow root (shared across all workflows)
+		groupItem.Children = append(groupItem.Children, buildURLGroupInfoItems(children, groupID, 1)...)
+
+		groupItem.Children = append(groupItem.Children, partitionAndGroup(children, groupID, 1, expandedState)...)
 
 		items = append(items, groupItem)
 	}
@@ -174,6 +197,40 @@ func BuildTreeItems(roots []*analyzer.TreeNode, expandedState map[string]bool, i
 	})
 
 	return items
+}
+
+// buildURLGroupInfoItems creates info items that belong at the URL group level
+// (e.g. VCS changed files which are shared across all workflows in the group).
+func buildURLGroupInfoItems(roots []*analyzer.TreeNode, parentID string, depth int) []*TreeItem {
+	// Find VCS change stats from the first non-marker root
+	for _, root := range roots {
+		if root.Hints.IsMarker || root.Hints.GroupKey == "activity" {
+			continue
+		}
+		c := root.Attrs["vcs.changes.count"]
+		if c == "" || c == "0" {
+			continue
+		}
+		add := root.Attrs["vcs.changes.additions"]
+		del := root.Attrs["vcs.changes.deletions"]
+		var filesURL string
+		if repoURL := root.Attrs["vcs.repository.url.full"]; repoURL != "" {
+			if sha := root.Attrs["vcs.revision"]; sha != "" {
+				filesURL = fmt.Sprintf("%s/commit/%s", repoURL, sha)
+			}
+		}
+		id := makeNodeID(parentID, "_info", 0)
+		return []*TreeItem{{
+			ID:          id,
+			Name:        fmt.Sprintf("Files: %s changed (+%s / -%s)", c, add, del),
+			DisplayName: fmt.Sprintf("Files: %s changed (+%s / -%s)", c, add, del),
+			Depth:       depth,
+			ItemType:    ItemTypeInfo,
+			ParentID:    parentID,
+			Hints:       enrichment.SpanHints{Icon: "  ", Category: "diff", URL: filesURL},
+		}}
+	}
+	return nil
 }
 
 // aggregateOutcome returns an aggregate outcome from child nodes using Hints.
@@ -257,10 +314,18 @@ func convertNode(node *analyzer.TreeNode, parentID string, index, depth int, exp
 
 	itemType := itemTypeFromNode(node)
 
+	displayName := node.Name
+	// For workflow roots, append the definition file path to the name
+	if itemType == ItemTypeRoot {
+		if p := node.Attrs["cicd.pipeline.definition"]; p != "" {
+			displayName = fmt.Sprintf("%s · %s", node.Name, p)
+		}
+	}
+
 	item := &TreeItem{
 		ID:            id,
-		Name:          node.Name,
-		DisplayName:   node.Name,
+		Name:          displayName,
+		DisplayName:   displayName,
 		StartTime:     node.StartTime,
 		EndTime:       node.EndTime,
 		Depth:         depth,
@@ -300,63 +365,12 @@ func convertNode(node *analyzer.TreeNode, parentID string, index, depth int, exp
 		item.Children = append(item.Children, childItem)
 	}
 
-	// Group artifact children under a synthetic node labeled by source
-	if len(artifactChildren) > 0 {
-		// Collect unique artifact names and first download URL
-		seen := make(map[string]bool)
-		var names []string
-		var artifactURL string
-		for _, ac := range artifactChildren {
-			if n := ac.Attrs["github.artifact_name"]; n != "" && !seen[n] {
-				seen[n] = true
-				names = append(names, n)
-			}
-			if artifactURL == "" {
-				if u := ac.Attrs["github.artifact.download_url"]; u != "" {
-					artifactURL = u
-				}
-			}
-		}
-		groupLabel := "Embedded traces"
-		if len(names) > 0 {
-			groupLabel = strings.Join(names, ", ")
-		}
-		groupID := makeNodeID(id, "Artifacts", 0)
-
-		var earliest, latest time.Time
-		var groupChildren []*TreeItem
-		for i, ac := range artifactChildren {
-			child := convertNode(ac, groupID, i, depth+2, expandedState)
-			groupChildren = append(groupChildren, child)
-			if !ac.StartTime.IsZero() && (earliest.IsZero() || ac.StartTime.Before(earliest)) {
-				earliest = ac.StartTime
-			}
-			if !ac.EndTime.IsZero() && (latest.IsZero() || ac.EndTime.After(latest)) {
-				latest = ac.EndTime
-			}
-		}
-
-		artifactGroup := &TreeItem{
-			ID:          groupID,
-			Name:        groupLabel,
-			DisplayName: groupLabel,
-			StartTime:   earliest,
-			EndTime:     latest,
-			Depth:       depth + 1,
-			HasChildren: true,
-			IsExpanded:  expandedState[groupID],
-			ItemType:    ItemTypeActivityGroup,
-			ParentID:    id,
-			Children:    groupChildren,
-			Hints: enrichment.SpanHints{
-				Category: "artifact",
-				Icon:     "◈ ",
-				BarChar:  "█",
-				Color:    "blue",
-				URL:      artifactURL,
-			},
-		}
-		item.Children = append(item.Children, artifactGroup)
+	// Build artifacts folder: contains all artifacts, with trace spans nested
+	// under their source artifact.
+	hasArtifactMetadata := node.Attrs["cicd.pipeline.artifacts.count"] != "" && node.Attrs["cicd.pipeline.artifacts.count"] != "0"
+	if hasArtifactMetadata || len(artifactChildren) > 0 {
+		folder := buildArtifactFolder(node, id, depth+1, artifactChildren, expandedState)
+		item.Children = append(item.Children, folder)
 		item.HasChildren = true
 	}
 
@@ -455,6 +469,164 @@ func BuildSpanIndex(items []*TreeItem) *SpanIndex {
 	}
 	walk(items)
 	return idx
+}
+
+
+// buildArtifactFolder creates a collapsible folder of artifacts, with trace spans
+// nested under their source artifact.
+func buildArtifactFolder(node *analyzer.TreeNode, parentID string, depth int, artifactChildren []*analyzer.TreeNode, expandedState map[string]bool) *TreeItem {
+	folderID := makeNodeID(parentID, "Artifacts", 0)
+
+	// Parse per-artifact metadata from indexed attributes
+	type artifactMeta struct {
+		Name string
+		Size string
+	}
+	var allArtifacts []artifactMeta
+	for i := 0; ; i++ {
+		name := node.Attrs[fmt.Sprintf("cicd.pipeline.artifact.%d.name", i)]
+		if name == "" {
+			break
+		}
+		size := node.Attrs[fmt.Sprintf("cicd.pipeline.artifact.%d.size", i)]
+		allArtifacts = append(allArtifacts, artifactMeta{Name: name, Size: size})
+	}
+
+	// Group trace spans by their source artifact name
+	traceByArtifact := make(map[string][]*analyzer.TreeNode)
+	for _, ac := range artifactChildren {
+		name := ac.Attrs["github.artifact_name"]
+		if name == "" {
+			name = "_unknown"
+		}
+		traceByArtifact[name] = append(traceByArtifact[name], ac)
+	}
+
+	// Build per-artifact children
+	var children []*TreeItem
+	var earliest, latest time.Time
+	seenNames := make(map[string]bool)
+	childIdx := 0
+
+	for _, meta := range allArtifacts {
+		seenNames[meta.Name] = true
+		artifactID := makeNodeID(folderID, meta.Name, childIdx)
+		childIdx++
+
+		label := meta.Name
+		if meta.Size != "" {
+			label += " (" + meta.Size + ")"
+		}
+
+		traceSpans := traceByArtifact[meta.Name]
+		artifactItem := &TreeItem{
+			ID:          artifactID,
+			Name:        label,
+			DisplayName: label,
+			Depth:       depth + 1,
+			HasChildren: len(traceSpans) > 0,
+			IsExpanded:  expandedState[artifactID],
+			ItemType:    ItemTypeLeaf,
+			ParentID:    folderID,
+			Children:    []*TreeItem{},
+			Hints: enrichment.SpanHints{
+				Icon:     "  ",
+				Color:    "blue",
+				Category: "artifact",
+			},
+		}
+
+		// If this artifact has trace data, nest the trace spans under it
+		if len(traceSpans) > 0 {
+			artifactItem.ItemType = ItemTypeIntermediate
+			artifactItem.Hints.Icon = "◈ "
+			for i, ac := range traceSpans {
+				child := convertNode(ac, artifactID, i, depth+2, expandedState)
+				artifactItem.Children = append(artifactItem.Children, child)
+				if !ac.StartTime.IsZero() && (earliest.IsZero() || ac.StartTime.Before(earliest)) {
+					earliest = ac.StartTime
+				}
+				if !ac.EndTime.IsZero() && (latest.IsZero() || ac.EndTime.After(latest)) {
+					latest = ac.EndTime
+				}
+			}
+		}
+		children = append(children, artifactItem)
+	}
+
+	// Any trace spans from artifacts not in the metadata (shouldn't happen, but be safe)
+	for name, spans := range traceByArtifact {
+		if seenNames[name] {
+			continue
+		}
+		artifactID := makeNodeID(folderID, name, childIdx)
+		childIdx++
+		artifactItem := &TreeItem{
+			ID:          artifactID,
+			Name:        name,
+			DisplayName: name,
+			Depth:       depth + 1,
+			HasChildren: true,
+			IsExpanded:  expandedState[artifactID],
+			ItemType:    ItemTypeIntermediate,
+			ParentID:    folderID,
+			Children:    []*TreeItem{},
+			Hints: enrichment.SpanHints{
+				Icon:     "◈ ",
+				Color:    "blue",
+				Category: "artifact",
+			},
+		}
+		for i, ac := range spans {
+			child := convertNode(ac, artifactID, i, depth+2, expandedState)
+			artifactItem.Children = append(artifactItem.Children, child)
+			if !ac.StartTime.IsZero() && (earliest.IsZero() || ac.StartTime.Before(earliest)) {
+				earliest = ac.StartTime
+			}
+			if !ac.EndTime.IsZero() && (latest.IsZero() || ac.EndTime.After(latest)) {
+				latest = ac.EndTime
+			}
+		}
+		children = append(children, artifactItem)
+	}
+
+	totalSize := node.Attrs["cicd.pipeline.artifacts.size"]
+	count := len(children)
+	var folderLabel string
+	switch {
+	case totalSize != "" && count > 0:
+		folderLabel = fmt.Sprintf("Artifacts: %d (%s)", count, totalSize)
+	case count > 0:
+		folderLabel = fmt.Sprintf("Artifacts: %d", count)
+	default:
+		folderLabel = "Artifacts"
+	}
+
+	// Link to the workflow run page where artifacts are listed
+	var folderURL string
+	if runURL := node.Attrs["cicd.pipeline.run.url.full"]; runURL != "" {
+		folderURL = runURL
+	}
+
+	return &TreeItem{
+		ID:          folderID,
+		Name:        folderLabel,
+		DisplayName: folderLabel,
+		StartTime:   earliest,
+		EndTime:     latest,
+		Depth:       depth,
+		HasChildren: len(children) > 0,
+		IsExpanded:  expandedState[folderID],
+		ItemType:    ItemTypeActivityGroup,
+		ParentID:    parentID,
+		Children:    children,
+		Hints: enrichment.SpanHints{
+			Category: "artifact",
+			Icon:     "📁",
+			Color:    "blue",
+			URL:      folderURL,
+		},
+	}
 }
 
 func makeNodeID(parentID, name string, index int) string {

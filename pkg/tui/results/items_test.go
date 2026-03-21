@@ -72,11 +72,15 @@ func TestBuildTreeItems(t *testing.T) {
 
 		items := BuildTreeItems(roots, nil, nil)
 
+		// Single URL group wrapping the workflow
 		assert.Len(t, items, 1)
-		assert.Equal(t, "CI", items[0].Name)
-		assert.Equal(t, ItemTypeRoot, items[0].ItemType)
-		assert.Equal(t, 0, items[0].Depth)
-		assert.False(t, items[0].HasChildren)
+		assert.Equal(t, ItemTypeURLGroup, items[0].ItemType)
+		children := items[0].Children
+		assert.Len(t, children, 1)
+		assert.Equal(t, "CI", children[0].Name)
+		assert.Equal(t, ItemTypeRoot, children[0].ItemType)
+		assert.Equal(t, 1, children[0].Depth)
+		assert.False(t, children[0].HasChildren)
 	})
 
 	t.Run("converts nested hierarchy", func(t *testing.T) {
@@ -100,23 +104,23 @@ func TestBuildTreeItems(t *testing.T) {
 		items := BuildTreeItems(roots, nil, nil)
 
 		assert.Len(t, items, 1)
-		assert.True(t, items[0].HasChildren)
-		assert.Len(t, items[0].Children, 1)
-		assert.Equal(t, "build", items[0].Children[0].Name)
-		assert.Equal(t, ItemTypeIntermediate, items[0].Children[0].ItemType)
-		assert.Equal(t, 1, items[0].Children[0].Depth)
-		assert.Len(t, items[0].Children[0].Children, 2)
+		ci := items[0].Children[0]
+		assert.True(t, ci.HasChildren)
+		assert.Equal(t, "build", ci.Children[0].Name)
+		assert.Equal(t, ItemTypeIntermediate, ci.Children[0].ItemType)
+		assert.Equal(t, 2, ci.Children[0].Depth)
+		assert.Len(t, ci.Children[0].Children, 2)
 	})
 
 	t.Run("respects expanded state", func(t *testing.T) {
 		roots := []*analyzer.TreeNode{
 			{Name: "CI", Hints: enrichment.SpanHints{Category: "workflow", IsRoot: true}},
 		}
-		expandedState := map[string]bool{"CI/0": true}
+		expandedState := map[string]bool{"url-group/0/CI/0": true}
 
 		items := BuildTreeItems(roots, expandedState, nil)
 
-		assert.True(t, items[0].IsExpanded)
+		assert.True(t, items[0].Children[0].IsExpanded)
 	})
 
 	t.Run("preserves marker attributes under Activity group", func(t *testing.T) {
@@ -130,12 +134,15 @@ func TestBuildTreeItems(t *testing.T) {
 		items := BuildTreeItems(roots, nil, nil)
 
 		assert.Len(t, items, 1)
-		assert.Equal(t, ItemTypeActivityGroup, items[0].ItemType)
-		assert.Equal(t, "Activity", items[0].Name)
-		assert.True(t, items[0].HasChildren)
-		assert.Len(t, items[0].Children, 1)
+		children := items[0].Children
+		assert.Len(t, children, 1)
+		actGroup := children[0]
+		assert.Equal(t, ItemTypeActivityGroup, actGroup.ItemType)
+		assert.Equal(t, "Activity", actGroup.Name)
+		assert.True(t, actGroup.HasChildren)
+		assert.Len(t, actGroup.Children, 1)
 
-		marker := items[0].Children[0]
+		marker := actGroup.Children[0]
 		assert.Equal(t, "reviewer", marker.Hints.User)
 		assert.Equal(t, "approved", marker.Hints.EventType)
 		assert.Equal(t, ItemTypeMarker, marker.ItemType)
@@ -157,19 +164,23 @@ func TestBuildTreeItemsPartitioning(t *testing.T) {
 
 		items := BuildTreeItems(roots, nil, nil)
 
-		assert.Len(t, items, 3)
-		assert.Equal(t, ItemTypeActivityGroup, items[0].ItemType)
-		assert.Equal(t, "Activity", items[0].Name)
-		assert.Equal(t, ItemTypeRoot, items[1].ItemType)
-		assert.Equal(t, "Tests", items[1].Name)
-		assert.Equal(t, ItemTypeRoot, items[2].ItemType)
-		assert.Equal(t, "Deploy", items[2].Name)
+		// Single-URL: one URL group wrapper, children contain the partitioned items
+		assert.Len(t, items, 1)
+		assert.Equal(t, ItemTypeURLGroup, items[0].ItemType)
+		children := items[0].Children
+		assert.Len(t, children, 3)
+		assert.Equal(t, ItemTypeActivityGroup, children[0].ItemType)
+		assert.Equal(t, "Activity", children[0].Name)
+		assert.Equal(t, ItemTypeRoot, children[1].ItemType)
+		assert.Equal(t, "Tests", children[1].Name)
+		assert.Equal(t, ItemTypeRoot, children[2].ItemType)
+		assert.Equal(t, "Deploy", children[2].Name)
 
-		assert.Len(t, items[0].Children, 2)
-		assert.Equal(t, ItemTypeMarker, items[0].Children[0].ItemType)
-		assert.Equal(t, "bob", items[0].Children[0].Hints.User)
-		assert.Equal(t, ItemTypeMarker, items[0].Children[1].ItemType)
-		assert.Equal(t, "alice", items[0].Children[1].Hints.User)
+		assert.Len(t, children[0].Children, 2)
+		assert.Equal(t, ItemTypeMarker, children[0].Children[0].ItemType)
+		assert.Equal(t, "bob", children[0].Children[0].Hints.User)
+		assert.Equal(t, ItemTypeMarker, children[0].Children[1].ItemType)
+		assert.Equal(t, "alice", children[0].Children[1].Hints.User)
 	})
 
 	t.Run("no markers means no Activity group", func(t *testing.T) {
@@ -180,8 +191,10 @@ func TestBuildTreeItemsPartitioning(t *testing.T) {
 
 		items := BuildTreeItems(roots, nil, nil)
 
-		assert.Len(t, items, 2)
-		for _, item := range items {
+		assert.Len(t, items, 1)
+		children := items[0].Children
+		assert.Len(t, children, 2)
+		for _, item := range children {
 			assert.Equal(t, ItemTypeRoot, item.ItemType)
 		}
 	})
@@ -194,8 +207,10 @@ func TestBuildTreeItemsPartitioning(t *testing.T) {
 		items := BuildTreeItems(roots, nil, nil)
 
 		assert.Len(t, items, 1)
-		assert.Equal(t, ItemTypeActivityGroup, items[0].ItemType)
-		assert.Len(t, items[0].Children, 1)
+		children := items[0].Children
+		assert.Len(t, children, 1)
+		assert.Equal(t, ItemTypeActivityGroup, children[0].ItemType)
+		assert.Len(t, children[0].Children, 1)
 	})
 
 	t.Run("Activity group aggregates time bounds", func(t *testing.T) {
@@ -206,8 +221,9 @@ func TestBuildTreeItemsPartitioning(t *testing.T) {
 
 		items := BuildTreeItems(roots, nil, nil)
 
-		assert.Equal(t, now.Add(2*time.Minute), items[0].StartTime)
-		assert.Equal(t, now.Add(5*time.Minute), items[0].EndTime)
+		children := items[0].Children
+		assert.Equal(t, now.Add(2*time.Minute), children[0].StartTime)
+		assert.Equal(t, now.Add(5*time.Minute), children[0].EndTime)
 	})
 
 	t.Run("multi-URL mode groups markers under Activity per URL group", func(t *testing.T) {

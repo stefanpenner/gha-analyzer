@@ -120,6 +120,12 @@ var (
 				Foreground(ColorYellow)
 )
 
+// Hidden badge style (shows when item is excluded from chart via x key)
+var (
+	HiddenBadgeStyle = lipgloss.NewStyle().
+				Foreground(ColorGrayDim)
+)
+
 // Timeline bar colors
 var (
 	BarSuccessStyle = lipgloss.NewStyle().

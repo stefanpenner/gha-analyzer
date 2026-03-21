@@ -148,29 +148,75 @@ func OutputStyledResults(w io.Writer, urlResults []analyzer.URLResult, combined 
 		fmt.Fprintln(w, buildLeftLine(labelStyle.Render("Runners: ")+strings.Join(runnerParts, "  ")))
 	}
 
-	// Changed files line (extracted from workflow span attributes)
-	for _, s := range spans {
-		var filesCount, filesAdd, filesDel string
-		for _, a := range s.Attributes() {
-			switch string(a.Key) {
-			case "vcs.changes.count":
-				filesCount = a.Value.AsString()
-			case "vcs.changes.additions":
-				filesAdd = a.Value.AsString()
-			case "vcs.changes.deletions":
-				filesDel = a.Value.AsString()
+	// Changed files + artifacts line (extracted from workflow span attributes)
+	{
+		var parts []string
+		for _, s := range spans {
+			var filesCount, filesAdd, filesDel, artCount, artSize string
+			for _, a := range s.Attributes() {
+				switch string(a.Key) {
+				case "vcs.changes.count":
+					filesCount = a.Value.AsString()
+				case "vcs.changes.additions":
+					filesAdd = a.Value.AsString()
+				case "vcs.changes.deletions":
+					filesDel = a.Value.AsString()
+				case "cicd.pipeline.artifacts.count":
+					artCount = a.Value.AsString()
+				case "cicd.pipeline.artifacts.size":
+					artSize = a.Value.AsString()
+				}
+			}
+			if filesCount != "" && filesCount != "0" {
+				parts = append(parts,
+					labelStyle.Render("Files: ")+numStyle.Render(filesCount)+labelStyle.Render(" changed")+
+						labelStyle.Render(" (")+
+						lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render("+"+filesAdd)+
+						labelStyle.Render(" / ")+
+						lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("-"+filesDel)+
+						labelStyle.Render(")"))
+			}
+			if artCount != "" && artCount != "0" {
+				artPart := labelStyle.Render("Artifacts: ") + numStyle.Render(artCount) +
+					labelStyle.Render(" (") + numStyle.Render(artSize) + labelStyle.Render(")")
+				// Include artifact names
+				for _, a := range s.Attributes() {
+					if string(a.Key) == "cicd.pipeline.artifacts.names" {
+						names := a.Value.AsString()
+						if names != "" {
+							artPart += labelStyle.Render(" — ") + numStyle.Render(names)
+						}
+						break
+					}
+				}
+				parts = append(parts, artPart)
+			}
+			if len(parts) > 0 {
+				break
 			}
 		}
-		if filesCount != "" && filesCount != "0" {
-			filesLine := labelStyle.Render("Files: ") +
-				numStyle.Render(filesCount) + labelStyle.Render(" changed") +
-				labelStyle.Render(" (") +
-				lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render("+"+filesAdd) +
-				labelStyle.Render(" / ") +
-				lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("-"+filesDel) +
-				labelStyle.Render(")")
-			fmt.Fprintln(w, buildLeftLine(filesLine))
-			break
+		if len(parts) > 0 {
+			fmt.Fprintln(w, buildLeftLine(strings.Join(parts, sep)))
+		}
+	}
+
+	// Workflow files line (extracted from workflow span attributes)
+	{
+		seen := make(map[string]bool)
+		var wfPaths []string
+		for _, s := range spans {
+			for _, a := range s.Attributes() {
+				if string(a.Key) == "cicd.pipeline.definition" {
+					p := a.Value.AsString()
+					if p != "" && !seen[p] {
+						seen[p] = true
+						wfPaths = append(wfPaths, p)
+					}
+				}
+			}
+		}
+		if len(wfPaths) > 0 {
+			fmt.Fprintln(w, buildLeftLine(labelStyle.Render("Workflows: ")+numStyle.Render(strings.Join(wfPaths, ", "))))
 		}
 	}
 

@@ -433,8 +433,9 @@ type childMarkerPos struct {
 	style lipgloss.Style
 }
 
-// computeChildPositions calculates the timeline position for each immediate child
-func computeChildPositions(children []*TreeItem, globalStart, globalEnd time.Time, width int, styleFn func(*TreeItem) lipgloss.Style) []childMarkerPos {
+// computeChildPositions calculates the timeline position for each immediate child.
+// Hidden children (present in hiddenState) are excluded from markers.
+func computeChildPositions(children []*TreeItem, globalStart, globalEnd time.Time, width int, styleFn func(*TreeItem) lipgloss.Style, hiddenState map[string]bool) []childMarkerPos {
 	totalDuration := globalEnd.Sub(globalStart)
 	if totalDuration <= 0 || width <= 0 {
 		return nil
@@ -442,6 +443,9 @@ func computeChildPositions(children []*TreeItem, globalStart, globalEnd time.Tim
 
 	var positions []childMarkerPos
 	for _, child := range children {
+		if hiddenState[child.ID] {
+			continue
+		}
 		childStart := child.StartTime
 		if childStart.IsZero() {
 			continue
@@ -471,7 +475,7 @@ func computeChildPositions(children []*TreeItem, globalStart, globalEnd time.Tim
 // styleFn selects the appropriate child style variant (normal vs selected).
 // If bgStyle is non-nil, empty space gets that background (for search-match rows).
 // If selected is true, parent uses selected styles and padding gets selection bg.
-func renderTimelineWithChildren(item TreeItem, globalStart, globalEnd time.Time, width int, url string, selected bool, bgStyle *lipgloss.Style) string {
+func renderTimelineWithChildren(item TreeItem, globalStart, globalEnd time.Time, width int, url string, selected bool, bgStyle *lipgloss.Style, hiddenState map[string]bool) string {
 	if globalEnd.Before(globalStart) || globalEnd.Equal(globalStart) || width <= 0 {
 		if selected {
 			return SelectedBgStyle.Render(strings.Repeat(" ", width))
@@ -491,7 +495,7 @@ func renderTimelineWithChildren(item TreeItem, globalStart, globalEnd time.Time,
 	}
 
 	// Compute child marker positions
-	childPositions := computeChildPositions(item.Children, globalStart, globalEnd, width, childStyleFn)
+	childPositions := computeChildPositions(item.Children, globalStart, globalEnd, width, childStyleFn, hiddenState)
 
 	// Build buffer tracking what's at each position
 	type cell struct {
@@ -614,19 +618,22 @@ func renderTimelineWithChildren(item TreeItem, globalStart, globalEnd time.Time,
 	return result.String()
 }
 
-// RenderTimelineBarWithChildren renders a timeline bar with dimmed child markers for collapsed items
-func RenderTimelineBarWithChildren(item TreeItem, globalStart, globalEnd time.Time, width int, url string) string {
-	return renderTimelineWithChildren(item, globalStart, globalEnd, width, url, false, nil)
+// RenderTimelineBarWithChildren renders a timeline bar with dimmed child markers for collapsed items.
+// Hidden children are excluded from the child markers.
+func RenderTimelineBarWithChildren(item TreeItem, globalStart, globalEnd time.Time, width int, url string, hiddenState map[string]bool) string {
+	return renderTimelineWithChildren(item, globalStart, globalEnd, width, url, false, nil, hiddenState)
 }
 
-// RenderTimelineBarWithChildrenSelected renders a timeline bar with child markers and selection background
-func RenderTimelineBarWithChildrenSelected(item TreeItem, globalStart, globalEnd time.Time, width int, url string) string {
-	return renderTimelineWithChildren(item, globalStart, globalEnd, width, url, true, nil)
+// RenderTimelineBarWithChildrenSelected renders a timeline bar with child markers and selection background.
+// Hidden children are excluded from the child markers.
+func RenderTimelineBarWithChildrenSelected(item TreeItem, globalStart, globalEnd time.Time, width int, url string, hiddenState map[string]bool) string {
+	return renderTimelineWithChildren(item, globalStart, globalEnd, width, url, true, nil, hiddenState)
 }
 
-// renderTimelineBarWithChildrenBg renders a timeline bar with child markers and a custom background
-func renderTimelineBarWithChildrenBg(item TreeItem, globalStart, globalEnd time.Time, width int, url string, bg lipgloss.Style) string {
-	return renderTimelineWithChildren(item, globalStart, globalEnd, width, url, false, &bg)
+// renderTimelineBarWithChildrenBg renders a timeline bar with child markers and a custom background.
+// Hidden children are excluded from the child markers.
+func renderTimelineBarWithChildrenBg(item TreeItem, globalStart, globalEnd time.Time, width int, url string, bg lipgloss.Style, hiddenState map[string]bool) string {
+	return renderTimelineWithChildren(item, globalStart, globalEnd, width, url, false, &bg, hiddenState)
 }
 
 // RenderTimelineBarDimmed renders a timeline bar in gray for items after the logical end.

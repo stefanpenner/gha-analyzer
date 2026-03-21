@@ -73,11 +73,12 @@ func createTestModel() Model {
 		},
 	}
 
-	// Expand workflow by default
-	m.expandedState["CI/0"] = true
+	// Expand workflow by default (nested under URL group)
+	m.expandedState["url-group/0/CI/0"] = true
 
 	// Build tree items and visible items (like real code does)
 	m.rebuildItems()
+	m.recalculateChartBounds()
 
 	return m
 }
@@ -111,12 +112,12 @@ func TestModelView(t *testing.T) {
 		assert.Contains(t, view, "otel-analyzer")
 	})
 
-	t.Run("renders header with URL", func(t *testing.T) {
+	t.Run("renders URL group in tree", func(t *testing.T) {
 		m := createTestModel()
 		view := m.View()
 
-		// Header should contain the input URL (may be hyperlinked)
-		assert.Contains(t, view, "github.com/test/repo/pull/123")
+		// URL group should show parsed PR label in the tree
+		assert.Contains(t, view, "PR #123")
 	})
 
 	t.Run("renders tree items", func(t *testing.T) {
@@ -198,27 +199,30 @@ func TestModelExpandCollapse(t *testing.T) {
 
 	t.Run("expands item with right arrow", func(t *testing.T) {
 		m := createTestModel()
-		// Collapse workflow first
-		m.expandedState["CI/0"] = false
+		// Collapse workflow first (now nested under URL group)
+		wfID := "url-group/0/CI/0"
+		m.expandedState[wfID] = false
 		m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState, m.sortMode)
-		m.cursor = 0
+		// Cursor at 0 = URL group, 1 = first child (workflow)
+		m.cursor = 1
 
 		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
 		m = newModel.(Model)
 
-		assert.True(t, m.expandedState["CI/0"])
+		assert.True(t, m.expandedState[wfID])
 	})
 
 	t.Run("collapses item with left arrow", func(t *testing.T) {
 		m := createTestModel()
-		m.expandedState["CI/0"] = true
+		wfID := "url-group/0/CI/0"
+		m.expandedState[wfID] = true
 		m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState, m.sortMode)
-		m.cursor = 0
+		m.cursor = 1
 
 		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
 		m = newModel.(Model)
 
-		assert.False(t, m.expandedState["CI/0"])
+		assert.False(t, m.expandedState[wfID])
 	})
 
 	t.Run("expand all with c key (toggle)", func(t *testing.T) {
@@ -231,7 +235,7 @@ func TestModelExpandCollapse(t *testing.T) {
 		m = newModel.(Model)
 
 		// Should expand workflow and jobs
-		assert.True(t, m.expandedState["CI/0"])
+		assert.True(t, m.expandedState["url-group/0/CI/0"])
 	})
 
 	t.Run("collapse all with c key (toggle)", func(t *testing.T) {
@@ -242,8 +246,8 @@ func TestModelExpandCollapse(t *testing.T) {
 		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
 		m = newModel.(Model)
 
-		assert.False(t, m.expandedState["CI/0"])
-		assert.False(t, m.expandedState["CI/0/job/0"])
+		assert.False(t, m.expandedState["url-group/0/CI/0"])
+		assert.False(t, m.expandedState["url-group/0/CI/0/build/0"])
 	})
 }
 
@@ -531,30 +535,30 @@ func TestRenderItemFocusDim(t *testing.T) {
 	t.Parallel()
 
 	m := createTestModel()
-	// Expand so jobs are visible
-	m.expandedState["CI/0"] = true
+	// Expand so jobs are visible (now nested under URL group)
+	m.expandedState["url-group/0/CI/0"] = true
 	m.rebuildItems()
 
 	// Focus on build job
-	idx := findVisibleIndex(&m, "CI/0/build/0")
+	idx := findVisibleIndex(&m, "url-group/0/CI/0/build/0")
 	m.cursor = idx
 	m.toggleFocus()
 
 	// Verify focus state
 	assert.True(t, m.isFocused)
-	assert.True(t, m.focusedIDs["CI/0/build/0"])
-	assert.False(t, m.focusedIDs["CI/0"])
-	assert.False(t, m.focusedIDs["CI/0/test/1"])
+	assert.True(t, m.focusedIDs["url-group/0/CI/0/build/0"])
+	assert.False(t, m.focusedIDs["url-group/0/CI/0"])
+	assert.False(t, m.focusedIDs["url-group/0/CI/0/test/1"])
 
 	// Render focused item — should NOT contain FocusDimStyle color code
-	focusedItem := m.visibleItems[findVisibleIndex(&m, "CI/0/build/0")]
+	focusedItem := m.visibleItems[findVisibleIndex(&m, "url-group/0/CI/0/build/0")]
 	focusedResult := m.renderItem(focusedItem, false)
 	// FocusDimStyle uses ColorGray #565f89 → ANSI 38;2;86;95;137 or similar
 	// The focused item should NOT have this dim styling
 	t.Logf("focused render: %q", focusedResult)
 
 	// Render non-focused item — should NOT contain hyperlinks (dimmed items use plain text)
-	ciIdx := findVisibleIndex(&m, "CI/0")
+	ciIdx := findVisibleIndex(&m, "url-group/0/CI/0")
 	if ciIdx >= 0 {
 		unfocusedItem := m.visibleItems[ciIdx]
 		unfocusedResult := m.renderItem(unfocusedItem, false)
@@ -563,7 +567,7 @@ func TestRenderItemFocusDim(t *testing.T) {
 		assert.Contains(t, unfocusedResult, "CI")
 	}
 
-	testIdx := findVisibleIndex(&m, "CI/0/test/1")
+	testIdx := findVisibleIndex(&m, "url-group/0/CI/0/test/1")
 	if testIdx >= 0 {
 		testItem := m.visibleItems[testIdx]
 		testResult := m.renderItem(testItem, false)
@@ -582,11 +586,11 @@ func TestRenderHeader(t *testing.T) {
 		assert.Contains(t, header, "otel-analyzer")
 	})
 
-	t.Run("renders header with input URLs", func(t *testing.T) {
+	t.Run("header does not contain URLs (URLs are in tree)", func(t *testing.T) {
 		m := createTestModel()
 		header := m.renderHeader()
 
-		assert.Contains(t, header, "github.com/test/repo/pull/123")
+		assert.NotContains(t, header, "github.com/test/repo/pull/123")
 	})
 }
 
@@ -687,6 +691,7 @@ func createMultiURLTestModel() Model {
 	// Expand URL groups and their workflows (depth 1)
 	m.expandAllToDepth(1)
 	m.rebuildItems()
+	m.recalculateChartBounds()
 
 	return m
 }
@@ -744,28 +749,26 @@ func TestFocusSingleURL(t *testing.T) {
 
 	t.Run("focus on workflow focuses entire subtree", func(t *testing.T) {
 		m := createTestModel()
-		// cursor is on the workflow (CI)
-		m.cursor = 0
+		// cursor 0 = URL group, 1 = CI workflow
+		m.cursor = 1
 		m.toggleFocus()
 
 		assert.True(t, m.isFocused)
 		focused := focusedIDs(&m)
 		// Workflow and all children should be focused
-		assert.True(t, focused["CI/0"])
-		assert.True(t, focused["CI/0/build/0"])
-		assert.True(t, focused["CI/0/test/1"])
-		assert.True(t, focused["CI/0/build/0/Checkout/0"])
-		assert.True(t, focused["CI/0/build/0/Build/1"])
+		assert.True(t, focused["url-group/0/CI/0"])
+		assert.True(t, focused["url-group/0/CI/0/build/0"])
+		assert.True(t, focused["url-group/0/CI/0/test/1"])
+		assert.True(t, focused["url-group/0/CI/0/build/0/Checkout/0"])
+		assert.True(t, focused["url-group/0/CI/0/build/0/Build/1"])
 	})
 
 	t.Run("focus on job focuses job and its steps", func(t *testing.T) {
 		m := createTestModel()
-		// Expand workflow to see jobs
-		m.expandedState["CI/0"] = true
 		m.rebuildItems()
 
 		// Move cursor to "build" job
-		idx := findVisibleIndex(&m, "CI/0/build/0")
+		idx := findVisibleIndex(&m, "url-group/0/CI/0/build/0")
 		assert.GreaterOrEqual(t, idx, 0, "build job should be visible")
 		m.cursor = idx
 		m.toggleFocus()
@@ -773,12 +776,12 @@ func TestFocusSingleURL(t *testing.T) {
 		assert.True(t, m.isFocused)
 		focused := focusedIDs(&m)
 		// Job and its steps should be focused
-		assert.True(t, focused["CI/0/build/0"])
-		assert.True(t, focused["CI/0/build/0/Checkout/0"])
-		assert.True(t, focused["CI/0/build/0/Build/1"])
+		assert.True(t, focused["url-group/0/CI/0/build/0"])
+		assert.True(t, focused["url-group/0/CI/0/build/0/Checkout/0"])
+		assert.True(t, focused["url-group/0/CI/0/build/0/Build/1"])
 		// Sibling job should be hidden
 		hidden := hiddenIDs(&m)
-		assert.True(t, hidden["CI/0/test/1"])
+		assert.True(t, hidden["url-group/0/CI/0/test/1"])
 	})
 
 	t.Run("focus on step focuses only that step", func(t *testing.T) {
@@ -786,29 +789,29 @@ func TestFocusSingleURL(t *testing.T) {
 		// Expand all to see steps
 		m.expandAll()
 
-		idx := findVisibleIndex(&m, "CI/0/build/0/Checkout/0")
+		idx := findVisibleIndex(&m, "url-group/0/CI/0/build/0/Checkout/0")
 		assert.GreaterOrEqual(t, idx, 0, "Checkout step should be visible")
 		m.cursor = idx
 		m.toggleFocus()
 
 		assert.True(t, m.isFocused)
 		focused := focusedIDs(&m)
-		assert.True(t, focused["CI/0/build/0/Checkout/0"])
+		assert.True(t, focused["url-group/0/CI/0/build/0/Checkout/0"])
 		// Sibling step should be hidden
 		hidden := hiddenIDs(&m)
-		assert.True(t, hidden["CI/0/build/0/Build/1"])
+		assert.True(t, hidden["url-group/0/CI/0/build/0/Build/1"])
 	})
 
 	t.Run("unfocus restores previous hidden state", func(t *testing.T) {
 		m := createTestModel()
 		// Hide a job first
-		m.hiddenState["CI/0/test/1"] = true
+		m.hiddenState["url-group/0/CI/0/test/1"] = true
 		originalHidden := make(map[string]bool)
 		for k, v := range m.hiddenState {
 			originalHidden[k] = v
 		}
 
-		m.cursor = 0
+		m.cursor = 1 // CI workflow
 		m.toggleFocus()
 		assert.True(t, m.isFocused)
 
@@ -822,8 +825,8 @@ func TestFocusZoomsChart(t *testing.T) {
 	t.Parallel()
 
 	m := createTestModel()
-	// Expand workflow so jobs are visible
-	m.expandedState["CI/0"] = true
+	// Expand workflow so jobs are visible (now nested under URL group)
+	m.expandedState["url-group/0/CI/0"] = true
 	m.rebuildItems()
 
 	// Chart initially spans full range
@@ -831,7 +834,7 @@ func TestFocusZoomsChart(t *testing.T) {
 	assert.Equal(t, m.globalEnd, m.chartEnd)
 
 	// Focus on "build" job (0-2min)
-	idx := findVisibleIndex(&m, "CI/0/build/0")
+	idx := findVisibleIndex(&m, "url-group/0/CI/0/build/0")
 	assert.GreaterOrEqual(t, idx, 0)
 	m.cursor = idx
 	m.toggleFocus()
@@ -842,9 +845,9 @@ func TestFocusZoomsChart(t *testing.T) {
 	assert.Equal(t, m.globalStart.Add(2*time.Minute), m.chartEnd, "chart end should match build end")
 
 	// Non-focused items should be dimmed (in focusedIDs check)
-	assert.True(t, m.focusedIDs["CI/0/build/0"], "build should be focused")
-	assert.False(t, m.focusedIDs["CI/0"], "workflow should NOT be focused")
-	assert.False(t, m.focusedIDs["CI/0/test/1"], "test should NOT be focused")
+	assert.True(t, m.focusedIDs["url-group/0/CI/0/build/0"], "build should be focused")
+	assert.False(t, m.focusedIDs["url-group/0/CI/0"], "workflow should NOT be focused")
+	assert.False(t, m.focusedIDs["url-group/0/CI/0/test/1"], "test should NOT be focused")
 }
 
 func TestFocusMultiURL(t *testing.T) {
@@ -1069,9 +1072,9 @@ func TestSearchMode(t *testing.T) {
 		assert.Equal(t, "build", m.searchQuery)
 		assert.True(t, m.isSearching)
 		// "build" job should match, plus its ancestor "CI" workflow
-		assert.True(t, m.searchMatchIDs["CI/0/build/0"], "build job should be a match")
+		assert.True(t, m.searchMatchIDs["url-group/0/CI/0/build/0"], "build job should be a match")
 		// CI workflow should be an ancestor (visible for context)
-		assert.True(t, m.searchAncIDs["CI/0"], "CI workflow should be an ancestor")
+		assert.True(t, m.searchAncIDs["url-group/0/CI/0"], "CI workflow should be an ancestor")
 	})
 
 	t.Run("search is case insensitive", func(t *testing.T) {
@@ -1087,7 +1090,7 @@ func TestSearchMode(t *testing.T) {
 		}
 
 		// "build" job should still match (case-insensitive)
-		assert.True(t, m.searchMatchIDs["CI/0/build/0"])
+		assert.True(t, m.searchMatchIDs["url-group/0/CI/0/build/0"])
 	})
 
 	t.Run("search filters visible items", func(t *testing.T) {
@@ -1256,7 +1259,7 @@ func TestSearchMode(t *testing.T) {
 		// Collapse everything first
 		m.expandedState = make(map[string]bool)
 		m.rebuildItems()
-		assert.Equal(t, 1, len(m.visibleItems)) // only CI workflow visible
+		assert.Equal(t, 2, len(m.visibleItems)) // URL group (auto-expanded) + CI workflow
 
 		// Search for "Checkout" (a step nested under CI > build)
 		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
@@ -1267,8 +1270,8 @@ func TestSearchMode(t *testing.T) {
 		}
 
 		// Ancestors should be expanded and visible
-		assert.True(t, m.expandedState["CI/0"], "CI workflow should be expanded")
-		assert.True(t, m.expandedState["CI/0/build/0"], "build job should be expanded")
+		assert.True(t, m.expandedState["url-group/0/CI/0"], "CI workflow should be expanded")
+		assert.True(t, m.expandedState["url-group/0/CI/0/build/0"], "build job should be expanded")
 		// Checkout should be visible
 		found := false
 		for _, item := range m.visibleItems {
@@ -2077,6 +2080,224 @@ func TestChartBoundsRecalculation(t *testing.T) {
 		m = newModel.(Model)
 
 		assert.Equal(t, originalChartEnd, m.chartEnd)
+	})
+}
+
+func TestEffectiveTimesRecalculation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("hiding child shrinks parent effective time bounds", func(t *testing.T) {
+		// createTestModel builds:
+		//   url-group/0 (PR #123)
+		//     CI (0–5m)
+		//       build (0–2m)
+		//       test  (2m–5m)
+		m := createTestModel()
+		m.expandAll()
+
+		// Get the CI workflow item — its time should span both jobs
+		ciIdx := findVisibleIndex(&m, "url-group/0/CI/0")
+		assert.True(t, ciIdx >= 0, "CI item should be visible")
+		ciItem := m.visibleItems[ciIdx]
+		originalEnd := ciItem.EndTime
+
+		// Hide the "test" job (2m–5m) — CI should shrink to build's end (2m)
+		testIdx := findVisibleIndex(&m, "url-group/0/CI/0/test/1")
+		assert.True(t, testIdx >= 0, "test item should be visible")
+		m.cursor = testIdx
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = newModel.(Model)
+
+		ciIdx = findVisibleIndex(&m, "url-group/0/CI/0")
+		ciItem = m.visibleItems[ciIdx]
+		assert.True(t, ciItem.EndTime.Before(originalEnd),
+			"CI endTime %v should be before original %v after hiding test job", ciItem.EndTime, originalEnd)
+	})
+
+	t.Run("unhiding child restores parent effective time bounds", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+
+		ciIdx := findVisibleIndex(&m, "url-group/0/CI/0")
+		originalStart := m.visibleItems[ciIdx].StartTime
+		originalEnd := m.visibleItems[ciIdx].EndTime
+
+		// Hide test job
+		testIdx := findVisibleIndex(&m, "url-group/0/CI/0/test/1")
+		m.cursor = testIdx
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = newModel.(Model)
+
+		// Verify shrunk
+		ciIdx = findVisibleIndex(&m, "url-group/0/CI/0")
+		assert.True(t, m.visibleItems[ciIdx].EndTime.Before(originalEnd))
+
+		// Unhide test job
+		testIdx = findVisibleIndex(&m, "url-group/0/CI/0/test/1")
+		m.cursor = testIdx
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = newModel.(Model)
+
+		ciIdx = findVisibleIndex(&m, "url-group/0/CI/0")
+		assert.Equal(t, originalStart, m.visibleItems[ciIdx].StartTime, "start should restore")
+		assert.Equal(t, originalEnd, m.visibleItems[ciIdx].EndTime, "end should restore")
+	})
+
+	t.Run("hiding all children zeroes parent time bounds", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+
+		// Hide the entire CI workflow (hides it + all children)
+		ciIdx := findVisibleIndex(&m, "url-group/0/CI/0")
+		m.cursor = ciIdx
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = newModel.(Model)
+
+		// URL group should have zero times (no active children)
+		urlIdx := findVisibleIndex(&m, "url-group/0")
+		urlItem := m.visibleItems[urlIdx]
+		assert.True(t, urlItem.StartTime.IsZero(), "url group start should be zero when all children hidden")
+		assert.True(t, urlItem.EndTime.IsZero(), "url group end should be zero when all children hidden")
+	})
+
+	t.Run("effective times propagate through multiple levels", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+
+		// The URL group derives from CI, which derives from build+test
+		// Hide test (2m–5m) → CI shrinks to 0–2m → URL group shrinks to 0–2m
+		testIdx := findVisibleIndex(&m, "url-group/0/CI/0/test/1")
+		m.cursor = testIdx
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = newModel.(Model)
+
+		urlIdx := findVisibleIndex(&m, "url-group/0")
+		urlItem := m.visibleItems[urlIdx]
+		buildIdx := findVisibleIndex(&m, "url-group/0/CI/0/build/0")
+		buildItem := m.visibleItems[buildIdx]
+
+		// URL group should end when build ends
+		assert.Equal(t, buildItem.EndTime, urlItem.EndTime,
+			"url group end should match build end after hiding test")
+	})
+}
+
+func TestComputeTimeUsesOriginalSpanTimes(t *testing.T) {
+	t.Parallel()
+
+	t.Run("compute time unaffected by hiding steps within a job", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+
+		// Record original compute time
+		origCompute := m.displayedComputeMs
+
+		// Hide a step within "build" — the build job is still active,
+		// so its compute time should still use original span duration
+		checkoutIdx := findVisibleIndex(&m, "url-group/0/CI/0/build/0/Checkout/0")
+		if checkoutIdx >= 0 {
+			m.cursor = checkoutIdx
+			newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+			m = newModel.(Model)
+
+			assert.Equal(t, origCompute, m.displayedComputeMs,
+				"compute time should use original span times, not effective times")
+		}
+	})
+
+	t.Run("compute time excludes hidden jobs", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+
+		origCompute := m.displayedComputeMs
+		assert.True(t, origCompute > 0, "should have nonzero compute time")
+
+		// Hide the test job (2m–5m = 180000ms)
+		testIdx := findVisibleIndex(&m, "url-group/0/CI/0/test/1")
+		m.cursor = testIdx
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = newModel.(Model)
+
+		assert.True(t, m.displayedComputeMs < origCompute,
+			"compute %d should be less than original %d after hiding test job",
+			m.displayedComputeMs, origCompute)
+		assert.True(t, m.displayedComputeMs > 0,
+			"compute time should still include build job")
+	})
+
+	t.Run("unhiding job restores compute time", func(t *testing.T) {
+		m := createTestModel()
+		m.expandAll()
+		origCompute := m.displayedComputeMs
+
+		// Hide test job
+		testIdx := findVisibleIndex(&m, "url-group/0/CI/0/test/1")
+		m.cursor = testIdx
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = newModel.(Model)
+		assert.True(t, m.displayedComputeMs < origCompute)
+
+		// Unhide test job
+		testIdx = findVisibleIndex(&m, "url-group/0/CI/0/test/1")
+		m.cursor = testIdx
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = newModel.(Model)
+
+		assert.Equal(t, origCompute, m.displayedComputeMs,
+			"compute time should restore after unhiding")
+	})
+}
+
+func TestHiddenNodesDontContributeToAncestors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("hidden items excluded from header stats", func(t *testing.T) {
+		m := createMultiURLTestModel()
+		m.expandAll()
+
+		origJobs := m.displayedSummary.TotalJobs
+		assert.True(t, origJobs >= 2, "should have at least 2 jobs")
+
+		// Hide url-group/1 (Deploy workflow with deploy-prod job)
+		idx := findVisibleIndex(&m, "url-group/1")
+		m.cursor = idx
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = newModel.(Model)
+
+		assert.True(t, m.displayedSummary.TotalJobs < origJobs,
+			"total jobs %d should be less than original %d", m.displayedSummary.TotalJobs, origJobs)
+	})
+
+	t.Run("hidden items excluded from wall time", func(t *testing.T) {
+		m := createMultiURLTestModel()
+		m.expandAll()
+		origWall := m.displayedWallTimeMs
+
+		// Hide url-group/1 which extends to globalEnd (10m)
+		idx := findVisibleIndex(&m, "url-group/1")
+		m.cursor = idx
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+		m = newModel.(Model)
+
+		assert.True(t, m.displayedWallTimeMs < origWall,
+			"wall time %d should be less than original %d", m.displayedWallTimeMs, origWall)
+	})
+
+	t.Run("focus mode excludes non-focused from stats", func(t *testing.T) {
+		m := createMultiURLTestModel()
+		m.expandAll()
+		origRuns := m.displayedSummary.TotalRuns
+
+		// Focus on just the CI workflow in url-group/0
+		ciIdx := findVisibleIndex(&m, "url-group/0/CI/0")
+		assert.True(t, ciIdx >= 0)
+		m.cursor = ciIdx
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f")})
+		m = newModel.(Model)
+
+		assert.True(t, m.displayedSummary.TotalRuns < origRuns,
+			"focused runs %d should be less than original %d", m.displayedSummary.TotalRuns, origRuns)
 	})
 }
 

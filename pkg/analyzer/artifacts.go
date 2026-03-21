@@ -18,10 +18,11 @@ import (
 // IngestTraceArtifacts downloads artifacts matching "gha-trace.*" from a workflow run,
 // parses them as OTLP JSON or Chrome trace format, and adds spans to the builder.
 // Artifact root spans are re-parented under parentSC so they appear as children of the workflow.
-func IngestTraceArtifacts(ctx context.Context, client githubapi.GitHubProvider, owner, repo string, runID int64, builder *SpanBuilder, urlIndex int, parentSC oteltrace.SpanContext) error {
+// Returns the full artifact list so callers can surface metadata without an extra API call.
+func IngestTraceArtifacts(ctx context.Context, client githubapi.GitHubProvider, owner, repo string, runID int64, builder *SpanBuilder, urlIndex int, parentSC oteltrace.SpanContext) ([]githubapi.Artifact, error) {
 	artifacts, err := client.ListArtifacts(ctx, owner, repo, runID)
 	if err != nil {
-		return nil // best-effort
+		return nil, nil // best-effort
 	}
 
 	for _, artifact := range artifacts {
@@ -77,7 +78,7 @@ func IngestTraceArtifacts(ctx context.Context, client githubapi.GitHubProvider, 
 		}
 	}
 
-	return nil
+	return artifacts, nil
 }
 
 // extractSpansFromZip unzips artifact data and parses any JSON files as OTLP or Chrome traces.

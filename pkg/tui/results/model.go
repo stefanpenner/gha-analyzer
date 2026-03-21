@@ -110,10 +110,18 @@ type Model struct {
 	reloadError string
 	// Span index for O(1) lookups
 	spanIndex *SpanIndex
+	// Original time bounds per item (set once at build time, used to restore after toggle)
+	origTimes map[string][2]time.Time
 	// VCS changed files (extracted from root span attributes)
 	changedFilesCount int
 	changedFilesAdd   int
 	changedFilesDel   int
+	// Uploaded artifacts (from root span attributes)
+	artifactsCount int
+	artifactsSize  string
+	artifactNames  string
+	// Workflow definition files
+	workflowFiles []string
 }
 
 // ReloadFunc is the function signature for reloading data
@@ -164,13 +172,22 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 	// Build tree from spans
 	m.roots = analyzer.BuildTreeFromSpans(spans, globalStart, globalEnd, m.enricher)
 
-	// Extract VCS changed file stats from root span attributes
+	// Extract VCS, artifact, and workflow file stats from root span attributes
+	seenFiles := make(map[string]bool)
 	for _, root := range m.roots {
 		if n, _ := strconv.Atoi(root.Attrs["vcs.changes.count"]); n > 0 {
 			m.changedFilesCount = n
 			m.changedFilesAdd, _ = strconv.Atoi(root.Attrs["vcs.changes.additions"])
 			m.changedFilesDel, _ = strconv.Atoi(root.Attrs["vcs.changes.deletions"])
-			break // all workflow spans share the same file set
+		}
+		if n, _ := strconv.Atoi(root.Attrs["cicd.pipeline.artifacts.count"]); n > 0 {
+			m.artifactsCount += n
+			m.artifactsSize = root.Attrs["cicd.pipeline.artifacts.size"]
+			m.artifactNames = root.Attrs["cicd.pipeline.artifacts.names"]
+		}
+		if p := root.Attrs["cicd.pipeline.definition"]; p != "" && !seenFiles[p] {
+			seenFiles[p] = true
+			m.workflowFiles = append(m.workflowFiles, p)
 		}
 	}
 
@@ -183,6 +200,7 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 
 	m.rebuildItems()
 	m.hideActivityGroups()
+	m.recalculateEffectiveTimes()
 	m.recalculateChartBounds()
 	return m
 }
@@ -200,13 +218,15 @@ func calculateComputeAndSteps(spans []trace.ReadOnlySpan, enricher enrichment.En
 		if hints.Category == "" || hints.IsMarker {
 			continue
 		}
-		if !hints.IsRoot && !hints.IsLeaf {
-			// Intermediate spans (jobs, tasks) contribute to compute time
+		// Only direct jobs/tasks contribute to compute time,
+		// not nested intermediate spans from embedded traces (e.g. Bazel).
+		if hints.Category == "job" || hints.Category == "task" {
 			duration := s.EndTime().Sub(s.StartTime()).Milliseconds()
 			if duration > 0 {
 				computeMs += duration
 			}
-		} else if hints.IsLeaf {
+		}
+		if hints.IsLeaf {
 			stepCount++
 		}
 	}
@@ -297,6 +317,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.rebuildItems()
 		m.hideActivityGroups()
+		m.recalculateEffectiveTimes()
 		m.recalculateChartBounds()
 		m.cursor = 0
 		m.selectionStart = -1
@@ -736,8 +757,10 @@ func (m Model) View() string {
 	var b strings.Builder
 
 	// Calculate available height for items
-	headerLines := 9 // header box (6 lines) + 1 newline + time axis + 1 blank line
-	footerLines := 3 // blank line + help line + bottom border
+	// Header: topBorder + statsLine1 + statsLine2 + timeAxis + blankLine = 5
+	// Footer: breadcrumb + statusLine + bottomBorder = 3
+	headerLines := 5
+	footerLines := 3
 	if m.hasEnrichmentLine() {
 		headerLines++ // queue/retry/billable line
 	}
@@ -893,18 +916,6 @@ func (m Model) View() string {
 		rowIdx++
 	}
 
-	// Blank line between content and footer (with borders)
-	{
-		footerTotalWidth := width - horizontalPad*2
-		if footerTotalWidth < 1 {
-			footerTotalWidth = 80
-		}
-		footerContentWidth := footerTotalWidth - 2
-		blankLine := BorderStyle.Render("│") + strings.Repeat(" ", footerContentWidth) + BorderStyle.Render("│")
-		b.WriteString(blankLine)
-		b.WriteString("\n")
-	}
-
 	// Footer
 	b.WriteString(m.renderFooter())
 
@@ -1057,7 +1068,7 @@ func (m *Model) jumpToNext(pred func(TreeItem) bool) {
 
 // pageSize returns the number of visible rows in the viewport.
 func (m *Model) pageSize() int {
-	headerLines := 9
+	headerLines := 5
 	footerLines := 3
 	if m.hasEnrichmentLine() {
 		headerLines++
@@ -1124,10 +1135,24 @@ func (m *Model) rebuildVisibleItems() {
 	}
 }
 
+// snapshotOrigTimes records every tree item's original time bounds into origTimes.
+func (m *Model) snapshotOrigTimes() {
+	m.origTimes = make(map[string][2]time.Time)
+	var walk func(items []*TreeItem)
+	walk = func(items []*TreeItem) {
+		for _, item := range items {
+			m.origTimes[item.ID] = [2]time.Time{item.StartTime, item.EndTime}
+			walk(item.Children)
+		}
+	}
+	walk(m.treeItems)
+}
+
 // rebuildItems rebuilds the flattened item list based on expanded state
 func (m *Model) rebuildItems() {
 	m.treeItems = BuildTreeItems(m.roots, m.expandedState, m.inputURLs)
 	m.spanIndex = BuildSpanIndex(m.treeItems)
+	m.snapshotOrigTimes()
 	m.rebuildVisibleItems()
 
 	// Ensure cursor is valid
@@ -1474,6 +1499,7 @@ func (m *Model) toggleFocus() {
 		hideAll(m.treeItems)
 		m.isFocused = true
 	}
+	m.recalculateEffectiveTimes()
 	m.rebuildVisibleItems()
 	m.recalculateChartBounds()
 }
@@ -1546,8 +1572,10 @@ func (m *Model) toggleChartVisibility() {
 		m.toggleChildrenVisibility(item.ID, targetHidden)
 	}
 
-	// Recalculate chart bounds
+	// Recalculate parent time bounds from active children, then chart bounds
+	m.recalculateEffectiveTimes()
 	m.recalculateChartBounds()
+	m.rebuildVisibleItems()
 }
 
 // toggleChildrenVisibility recursively sets visibility for all descendants in the tree
@@ -1576,6 +1604,67 @@ func (m *Model) toggleDescendants(items []*TreeItem, hidden bool) {
 		m.hiddenState[item.ID] = hidden
 		m.toggleDescendants(item.Children, hidden)
 	}
+}
+
+// recalculateEffectiveTimes walks the tree bottom-up and recalculates each parent's
+// time bounds from its active (non-hidden) children. Leaf items and items with no
+// children restore their original span times. This ensures inactive nodes do not
+// contribute to ancestor durations.
+func (m *Model) recalculateEffectiveTimes() {
+	var walk func(items []*TreeItem)
+	walk = func(items []*TreeItem) {
+		for _, item := range items {
+			// Recurse first (bottom-up)
+			walk(item.Children)
+
+			// Restore original times
+			if orig, ok := m.origTimes[item.ID]; ok {
+				item.StartTime = orig[0]
+				item.EndTime = orig[1]
+			}
+
+			// Items with children derive effective times from active children
+			if len(item.Children) == 0 {
+				continue
+			}
+			var earliest, latest time.Time
+			for _, child := range item.Children {
+				// Skip hidden children and info/marker items
+				if m.hiddenState[child.ID] {
+					continue
+				}
+				if child.ItemType == ItemTypeInfo {
+					continue
+				}
+				if !child.StartTime.IsZero() && (earliest.IsZero() || child.StartTime.Before(earliest)) {
+					earliest = child.StartTime
+				}
+				if !child.EndTime.IsZero() && (latest.IsZero() || child.EndTime.After(latest)) {
+					latest = child.EndTime
+				}
+			}
+			// If at least one active child, use derived bounds
+			if !earliest.IsZero() {
+				item.StartTime = earliest
+			}
+			if !latest.IsZero() {
+				item.EndTime = latest
+			}
+			// If ALL children are hidden, zero out times (no bar)
+			hasActiveChild := false
+			for _, child := range item.Children {
+				if !m.hiddenState[child.ID] && child.ItemType != ItemTypeInfo {
+					hasActiveChild = true
+					break
+				}
+			}
+			if !hasActiveChild {
+				item.StartTime = time.Time{}
+				item.EndTime = time.Time{}
+			}
+		}
+	}
+	walk(m.treeItems)
 }
 
 // recalculateChartBounds recalculates the chart time window and stats based on visible items
@@ -1621,15 +1710,28 @@ func (m *Model) recalculateChartBounds() {
 					}
 				}
 			case ItemTypeIntermediate:
-				totalJobs++
-				if item.Hints.Outcome == "failure" {
-					failedJobs++
-				}
-				// Compute time is sum of intermediate span durations
-				if !item.StartTime.IsZero() && !item.EndTime.IsZero() {
-					duration := item.EndTime.Sub(item.StartTime).Milliseconds()
-					if duration > 0 {
-						computeMs += duration
+				// Only count direct jobs (category: job/task) for stats and compute,
+				// not nested intermediate spans from embedded traces (e.g. Bazel).
+				cat := item.Hints.Category
+				if cat == "job" || cat == "task" {
+					totalJobs++
+					if item.Hints.Outcome == "failure" {
+						failedJobs++
+					}
+					// Compute time uses original span durations (not effective times
+					// which may be narrowed by hidden children)
+					if orig, ok := m.origTimes[item.ID]; ok {
+						if !orig[0].IsZero() && !orig[1].IsZero() {
+							duration := orig[1].Sub(orig[0]).Milliseconds()
+							if duration > 0 {
+								computeMs += duration
+							}
+						}
+					} else if !item.StartTime.IsZero() && !item.EndTime.IsZero() {
+						duration := item.EndTime.Sub(item.StartTime).Milliseconds()
+						if duration > 0 {
+							computeMs += duration
+						}
 					}
 				}
 			case ItemTypeLeaf:

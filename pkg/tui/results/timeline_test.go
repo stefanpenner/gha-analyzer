@@ -285,7 +285,7 @@ func TestRenderTimelineBarWithChildren(t *testing.T) {
 			},
 		}
 
-		result := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "")
+		result := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "", nil)
 
 		assert.Contains(t, result, "·", "Should contain child marker dots")
 		assert.NotEmpty(t, result)
@@ -302,7 +302,7 @@ func TestRenderTimelineBarWithChildren(t *testing.T) {
 			},
 		}
 
-		result := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "")
+		result := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "", nil)
 
 		assert.Contains(t, result, "█", "Parent bar should be present")
 		assert.NotContains(t, result, "·", "Child marker should be overwritten by parent bar")
@@ -317,7 +317,7 @@ func TestRenderTimelineBarWithChildren(t *testing.T) {
 			Children:    []*TreeItem{},
 		}
 
-		withChildren := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "")
+		withChildren := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "", nil)
 		normal := RenderTimelineBar(item, globalStart, globalEnd, width, "")
 
 		assert.Contains(t, withChildren, "█")
@@ -335,7 +335,7 @@ func TestRenderTimelineBarWithChildren(t *testing.T) {
 			},
 		}
 
-		result := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "")
+		result := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "", nil)
 
 		assert.Contains(t, result, "█", "Parent bar should be present")
 		assert.Contains(t, result, "·", "Child marker should be present")
@@ -346,7 +346,7 @@ func TestRenderTimelineBarWithChildren(t *testing.T) {
 			HasChildren: true,
 			Children:    []*TreeItem{},
 		}
-		result := RenderTimelineBarWithChildren(item, now, now.Add(-time.Second), width, "")
+		result := RenderTimelineBarWithChildren(item, now, now.Add(-time.Second), width, "", nil)
 		assert.Equal(t, strings.Repeat(" ", width), result)
 	})
 
@@ -361,7 +361,7 @@ func TestRenderTimelineBarWithChildren(t *testing.T) {
 			},
 		}
 
-		result := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "")
+		result := RenderTimelineBarWithChildren(item, globalStart, globalEnd, width, "", nil)
 
 		assert.NotContains(t, result, "·")
 		assert.Contains(t, result, "█", "Parent bar should still be present")
@@ -387,7 +387,7 @@ func TestRenderTimelineBarWithChildrenSelected(t *testing.T) {
 			},
 		}
 
-		result := RenderTimelineBarWithChildrenSelected(item, globalStart, globalEnd, width, "")
+		result := RenderTimelineBarWithChildrenSelected(item, globalStart, globalEnd, width, "", nil)
 
 		assert.Contains(t, result, "█", "Parent bar should be present")
 		assert.Contains(t, result, "·", "Child marker should be present")
@@ -398,7 +398,7 @@ func TestRenderTimelineBarWithChildrenSelected(t *testing.T) {
 			HasChildren: true,
 			Children:    []*TreeItem{},
 		}
-		result := RenderTimelineBarWithChildrenSelected(item, now, now.Add(-time.Second), width, "")
+		result := RenderTimelineBarWithChildrenSelected(item, now, now.Add(-time.Second), width, "", nil)
 		assert.NotEmpty(t, result)
 	})
 }
@@ -417,7 +417,7 @@ func TestComputeChildPositions(t *testing.T) {
 			{StartTime: globalEnd, Hints: enrichment.SpanHints{Outcome: "failure"}},
 		}
 
-		positions := computeChildPositions(children, globalStart, globalEnd, width, getChildMarkerStyle)
+		positions := computeChildPositions(children, globalStart, globalEnd, width, getChildMarkerStyle, nil)
 
 		assert.Len(t, positions, 2)
 		assert.Equal(t, 10, positions[0].pos)
@@ -429,7 +429,7 @@ func TestComputeChildPositions(t *testing.T) {
 			{Hints: enrichment.SpanHints{Outcome: "success"}},
 		}
 
-		positions := computeChildPositions(children, globalStart, globalEnd, width, getChildMarkerStyle)
+		positions := computeChildPositions(children, globalStart, globalEnd, width, getChildMarkerStyle, nil)
 
 		assert.Empty(t, positions)
 	})
@@ -439,7 +439,7 @@ func TestComputeChildPositions(t *testing.T) {
 			{StartTime: globalStart.Add(5 * time.Second), Hints: enrichment.SpanHints{Outcome: "success"}},
 		}
 
-		positions := computeChildPositions(children, globalStart, globalEnd, 0, getChildMarkerStyle)
+		positions := computeChildPositions(children, globalStart, globalEnd, 0, getChildMarkerStyle, nil)
 
 		assert.Nil(t, positions)
 	})
@@ -449,7 +449,7 @@ func TestComputeChildPositions(t *testing.T) {
 			{StartTime: globalStart.Add(-2 * time.Second), Hints: enrichment.SpanHints{Outcome: "success"}},
 		}
 
-		positions := computeChildPositions(children, globalStart, globalEnd, width, getChildMarkerStyle)
+		positions := computeChildPositions(children, globalStart, globalEnd, width, getChildMarkerStyle, nil)
 
 		assert.Len(t, positions, 1)
 		assert.Equal(t, 0, positions[0].pos)

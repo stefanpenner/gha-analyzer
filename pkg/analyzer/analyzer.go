@@ -474,9 +474,10 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 		}
 	}
 
-	// Ingest trace artifacts (best-effort)
+	// Ingest trace artifacts (best-effort) and capture full artifact list
+	var runArtifacts []githubapi.Artifact
 	if !opts.NoArtifacts {
-		_ = IngestTraceArtifacts(ctx, client, run.Repository.Owner.Login, run.Repository.Name, run.ID, builder, urlIndex, wfSC)
+		runArtifacts, _ = IngestTraceArtifacts(ctx, client, run.Repository.Owner.Login, run.Repository.Name, run.ID, builder, urlIndex, wfSC)
 	}
 
 	// Build workflow span stub (after processing jobs so runEnd may be adjusted)
@@ -494,6 +495,7 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 		attribute.String("github.repo", fmt.Sprintf("%s/%s", owner, repo)),
 		attribute.String("github.url", workflowURL),
 		attribute.Int("github.url_index", urlIndex),
+		attribute.String("cicd.pipeline.definition", run.Path),
 	}
 	if run.HeadSHA != "" {
 		wfAttrs = append(wfAttrs, attribute.String("vcs.revision", run.HeadSHA))
@@ -518,6 +520,31 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 			attribute.String("vcs.changes.additions", fmt.Sprintf("%d", changedAdditions)),
 			attribute.String("vcs.changes.deletions", fmt.Sprintf("%d", changedDeletions)),
 		)
+	}
+
+	// Add uploaded artifact metadata (from ListArtifacts — already called, no extra API call)
+	if len(runArtifacts) > 0 {
+		var names []string
+		var totalSize int64
+		idx := 0
+		for _, a := range runArtifacts {
+			if !a.Expired {
+				names = append(names, a.Name)
+				totalSize += a.SizeInBytes
+				wfAttrs = append(wfAttrs,
+					attribute.String(fmt.Sprintf("cicd.pipeline.artifact.%d.name", idx), a.Name),
+					attribute.String(fmt.Sprintf("cicd.pipeline.artifact.%d.size", idx), formatBytes(a.SizeInBytes)),
+				)
+				idx++
+			}
+		}
+		if len(names) > 0 {
+			wfAttrs = append(wfAttrs,
+				attribute.String("cicd.pipeline.artifacts.count", fmt.Sprintf("%d", len(names))),
+				attribute.String("cicd.pipeline.artifacts.names", strings.Join(names, ", ")),
+				attribute.String("cicd.pipeline.artifacts.size", formatBytes(totalSize)),
+			)
+		}
 	}
 
 	// Collect review/merge events as span events on the workflow root span
@@ -1057,6 +1084,19 @@ func isJobRequired(jobName, workflowName string, requiredContexts []string) bool
 }
 
 // ghConclusionToResult maps a GitHub conclusion to a cicd.pipeline.run.result value.
+func formatBytes(b int64) string {
+	switch {
+	case b >= 1<<30:
+		return fmt.Sprintf("%.1f GB", float64(b)/float64(1<<30))
+	case b >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(b)/float64(1<<20))
+	case b >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(b)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
+}
+
 func ghConclusionToResult(conclusion string) string {
 	switch conclusion {
 	case "success":
