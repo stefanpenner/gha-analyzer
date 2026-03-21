@@ -300,9 +300,10 @@ func convertNode(node *analyzer.TreeNode, parentID string, index, depth int, exp
 		item.Children = append(item.Children, childItem)
 	}
 
-	// Group artifact children under a synthetic "Trace Artifacts" node
+	// Group artifact children under a synthetic node
 	if len(artifactChildren) > 0 {
-		groupID := makeNodeID(id, "Trace Artifacts", 0)
+		groupLabel := fmt.Sprintf("Artifacts (%d)", len(artifactChildren))
+		groupID := makeNodeID(id, "Artifacts", 0)
 
 		var earliest, latest time.Time
 		var groupChildren []*TreeItem
@@ -319,8 +320,8 @@ func convertNode(node *analyzer.TreeNode, parentID string, index, depth int, exp
 
 		artifactGroup := &TreeItem{
 			ID:          groupID,
-			Name:        "Trace Artifacts",
-			DisplayName: "Trace Artifacts",
+			Name:        groupLabel,
+			DisplayName: groupLabel,
 			StartTime:   earliest,
 			EndTime:     latest,
 			Depth:       depth + 1,
