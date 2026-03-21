@@ -214,6 +214,21 @@ func (m Model) renderHeader() string {
 		}
 	}
 
+	// Changed files line
+	lineFiles := ""
+	if m.changedFilesCount > 0 {
+		filesStyled := HeaderCountStyle.Render("Files: ") +
+			numStyle.Render(fmt.Sprintf("%d", m.changedFilesCount)) +
+			HeaderCountStyle.Render(" changed") +
+			HeaderCountStyle.Render(" (") +
+			lipgloss.NewStyle().Foreground(ColorGreen).Render(fmt.Sprintf("+%d", m.changedFilesAdd)) +
+			HeaderCountStyle.Render(" / ") +
+			lipgloss.NewStyle().Foreground(ColorRed).Render(fmt.Sprintf("-%d", m.changedFilesDel)) +
+			HeaderCountStyle.Render(")")
+		filesPlain := fmt.Sprintf("Files: %d changed (+%d / -%d)", m.changedFilesCount, m.changedFilesAdd, m.changedFilesDel)
+		lineFiles = "\n" + buildLeftLine(filesStyled, filesPlain)
+	}
+
 	// URL lines
 	lineURL := ""
 	for _, inputURL := range m.inputURLs {
@@ -226,7 +241,7 @@ func (m Model) renderHeader() string {
 		lineURL += "\n" + buildLeftLine(linkedURL, urlText)
 	}
 
-	return topBorder + "\n" + line1 + "\n" + line2 + line4 + lineURL
+	return topBorder + "\n" + line1 + "\n" + line2 + line4 + lineFiles + lineURL
 }
 
 // renderTimeAxis renders the time axis row that sits above the timeline

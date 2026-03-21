@@ -225,8 +225,10 @@ type CommitStats struct {
 }
 
 type CommitFile struct {
-	Filename string `json:"filename"`
-	Status   string `json:"status"`
+	Filename  string `json:"filename"`
+	Status    string `json:"status"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
 }
 
 type CommitAuthor struct {
@@ -658,6 +660,26 @@ func (c *Client) FetchCommit(ctx context.Context, baseURL, sha string) (*CommitR
 		return nil, err
 	}
 	return &commit, nil
+}
+
+func (c *Client) FetchPRFiles(ctx context.Context, owner, repo, prNumber string) ([]CommitFile, error) {
+	ctx, span := getTracer().Start(ctx, "FetchPRFiles", trace.WithAttributes(
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+		attribute.String("github.prNumber", prNumber),
+	))
+	defer span.End()
+
+	filesURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%s/files?per_page=100", owner, repo, prNumber)
+	resp, err := fetchWithAuth(ctx, c, filesURL, "")
+	if err != nil {
+		return nil, err
+	}
+	var files []CommitFile
+	if err := decodeJSON(resp, &files); err != nil {
+		return nil, err
+	}
+	return files, nil
 }
 
 func (c *Client) FetchPullRequest(ctx context.Context, baseURL, identifier string) (*PullRequest, error) {

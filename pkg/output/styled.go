@@ -148,6 +148,32 @@ func OutputStyledResults(w io.Writer, urlResults []analyzer.URLResult, combined 
 		fmt.Fprintln(w, buildLeftLine(labelStyle.Render("Runners: ")+strings.Join(runnerParts, "  ")))
 	}
 
+	// Changed files line (extracted from workflow span attributes)
+	for _, s := range spans {
+		var filesCount, filesAdd, filesDel string
+		for _, a := range s.Attributes() {
+			switch string(a.Key) {
+			case "vcs.changes.count":
+				filesCount = a.Value.AsString()
+			case "vcs.changes.additions":
+				filesAdd = a.Value.AsString()
+			case "vcs.changes.deletions":
+				filesDel = a.Value.AsString()
+			}
+		}
+		if filesCount != "" && filesCount != "0" {
+			filesLine := labelStyle.Render("Files: ") +
+				numStyle.Render(filesCount) + labelStyle.Render(" changed") +
+				labelStyle.Render(" (") +
+				lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Render("+"+filesAdd) +
+				labelStyle.Render(" / ") +
+				lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Render("-"+filesDel) +
+				labelStyle.Render(")")
+			fmt.Fprintln(w, buildLeftLine(filesLine))
+			break
+		}
+	}
+
 	// URL lines inside header box
 	for _, result := range urlResults {
 		urlText := result.DisplayURL

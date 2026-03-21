@@ -12,6 +12,7 @@ type GitHubProvider interface {
 	FetchCommitAssociatedPRs(ctx context.Context, owner, repo, sha string) ([]PullAssociated, error)
 	FetchCommit(ctx context.Context, baseURL, sha string) (*CommitResponse, error)
 	FetchPullRequest(ctx context.Context, baseURL, identifier string) (*PullRequest, error)
+	FetchPRFiles(ctx context.Context, owner, repo, prNumber string) ([]CommitFile, error)
 	FetchPRReviews(ctx context.Context, owner, repo, prNumber string) ([]Review, error)
 	FetchPRComments(ctx context.Context, owner, repo, prNumber string) ([]Review, error)
 	FetchJobsPaginated(ctx context.Context, urlValue string) ([]Job, error)

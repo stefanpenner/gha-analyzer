@@ -111,7 +111,7 @@ func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProv
 			}
 		}
 
-		result, err := buildURLResult(ctx, rawData.Parsed, urlIndex, rawData.HeadSHA, rawData.BranchName, rawData.DisplayName, rawData.DisplayURL, rawData.ReviewEvents, rawData.MergedAtMs, rawData.CommitTimeMs, rawData.CommitPushedAtMs, rawData.AllCommitRunsCount, rawData.AllCommitRunsComputeMs, rawData.Runs, rawData.RequiredContexts, client, reporter, urlEarliestTime, builder, emitter, opts)
+		result, err := buildURLResult(ctx, rawData.Parsed, urlIndex, rawData.HeadSHA, rawData.BranchName, rawData.DisplayName, rawData.DisplayURL, rawData.ReviewEvents, rawData.MergedAtMs, rawData.CommitTimeMs, rawData.CommitPushedAtMs, rawData.AllCommitRunsCount, rawData.AllCommitRunsComputeMs, rawData.Runs, rawData.RequiredContexts, rawData.ChangedFiles, client, reporter, urlEarliestTime, builder, emitter, opts)
 		if err != nil {
 			urlErrors = append(urlErrors, URLError{URL: githubURL, Err: err})
 			continue
@@ -161,7 +161,7 @@ func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProv
 	return urlResults, allTraceEvents, globalEarliestTime, globalLatestTime, builder.Spans(), urlErrors
 }
 
-func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchName, displayName, displayURL string, reviewEvents []ReviewEvent, mergedAtMs, commitTimeMs, commitPushedAtMs *int64, allCommitRunsCount int, allCommitRunsComputeMs int64, runs []githubapi.WorkflowRun, requiredContexts []string, client githubapi.GitHubProvider, reporter ProgressReporter, urlEarliestTime int64, builder *SpanBuilder, emitter *TraceEmitter, opts AnalyzeOptions) (*URLResult, error) {
+func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchName, displayName, displayURL string, reviewEvents []ReviewEvent, mergedAtMs, commitTimeMs, commitPushedAtMs *int64, allCommitRunsCount int, allCommitRunsComputeMs int64, runs []githubapi.WorkflowRun, requiredContexts []string, changedFiles []githubapi.CommitFile, client githubapi.GitHubProvider, reporter ProgressReporter, urlEarliestTime int64, builder *SpanBuilder, emitter *TraceEmitter, opts AnalyzeOptions) (*URLResult, error) {
 	if reporter != nil {
 		reporter.SetURLRuns(len(runs))
 		reporter.SetPhase("Processing workflow runs")
@@ -198,7 +198,7 @@ func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex 
 			defer wg.Done()
 			for job := range jobsCh {
 				processID := (urlIndex+1)*1000 + job.index + 1
-				runMetrics, runTrace, runStarts, runEnds, err := processWorkflowRun(ctx, job.run, job.index, processID, urlEarliestTime, parsed.Owner, parsed.Repo, parsed.Identifier, urlIndex, displayURL, parsed.Type, requiredContexts, client, reporter, builder, emitter, opts)
+				runMetrics, runTrace, runStarts, runEnds, err := processWorkflowRun(ctx, job.run, job.index, processID, urlEarliestTime, parsed.Owner, parsed.Repo, parsed.Identifier, urlIndex, displayURL, parsed.Type, requiredContexts, changedFiles, client, reporter, builder, emitter, opts)
 				resultsCh <- runResult{
 					metrics:     runMetrics,
 					traceEvents: runTrace,
@@ -259,7 +259,7 @@ func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex 
 	return &result, nil
 }
 
-func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex, processID int, earliestTime int64, owner, repo, identifier string, urlIndex int, displayURL, sourceType string, requiredContexts []string, client githubapi.GitHubProvider, reporter ProgressReporter, builder *SpanBuilder, emitter *TraceEmitter, opts AnalyzeOptions) (Metrics, []TraceEvent, []JobEvent, []JobEvent, error) {
+func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex, processID int, earliestTime int64, owner, repo, identifier string, urlIndex int, displayURL, sourceType string, requiredContexts []string, changedFiles []githubapi.CommitFile, client githubapi.GitHubProvider, reporter ProgressReporter, builder *SpanBuilder, emitter *TraceEmitter, opts AnalyzeOptions) (Metrics, []TraceEvent, []JobEvent, []JobEvent, error) {
 	metrics := InitializeMetrics()
 	traceEvents := []TraceEvent{}
 	jobStartTimes := []JobEvent{}
@@ -509,6 +509,23 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 	// Add billable timing attributes
 	for osName, ms := range metrics.BillableMs {
 		wfAttrs = append(wfAttrs, attribute.Int64(fmt.Sprintf("billable.%s_ms", strings.ToLower(osName)), ms))
+	}
+
+	// Add changed file info as VCS attributes
+	if len(changedFiles) > 0 {
+		var totalAdditions, totalDeletions int
+		filenames := make([]string, 0, len(changedFiles))
+		for _, f := range changedFiles {
+			filenames = append(filenames, f.Filename)
+			totalAdditions += f.Additions
+			totalDeletions += f.Deletions
+		}
+		wfAttrs = append(wfAttrs,
+			attribute.String("vcs.changes.count", fmt.Sprintf("%d", len(changedFiles))),
+			attribute.String("vcs.changes.additions", fmt.Sprintf("%d", totalAdditions)),
+			attribute.String("vcs.changes.deletions", fmt.Sprintf("%d", totalDeletions)),
+			attribute.StringSlice("vcs.changes.files", filenames),
+		)
 	}
 
 	// Collect review/merge events as span events on the workflow root span

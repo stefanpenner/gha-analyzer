@@ -2,6 +2,7 @@ package results
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -109,6 +110,10 @@ type Model struct {
 	reloadError string
 	// Span index for O(1) lookups
 	spanIndex *SpanIndex
+	// VCS changed files (extracted from root span attributes)
+	changedFilesCount int
+	changedFilesAdd   int
+	changedFilesDel   int
 }
 
 // ReloadFunc is the function signature for reloading data
@@ -158,6 +163,16 @@ func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inpu
 
 	// Build tree from spans
 	m.roots = analyzer.BuildTreeFromSpans(spans, globalStart, globalEnd, m.enricher)
+
+	// Extract VCS changed file stats from root span attributes
+	for _, root := range m.roots {
+		if n, _ := strconv.Atoi(root.Attrs["vcs.changes.count"]); n > 0 {
+			m.changedFilesCount = n
+			m.changedFilesAdd, _ = strconv.Atoi(root.Attrs["vcs.changes.additions"])
+			m.changedFilesDel, _ = strconv.Atoi(root.Attrs["vcs.changes.deletions"])
+			break // all workflow spans share the same file set
+		}
+	}
 
 	// Expand URL groups + workflows for multi-URL, just workflows for single
 	if len(inputURLs) > 1 {

@@ -26,6 +26,7 @@ type RawData struct {
 	AllCommitRunsCount     int
 	AllCommitRunsComputeMs int64
 	RequiredContexts       []string
+	ChangedFiles           []githubapi.CommitFile
 }
 
 // DataProvider handles fetching data from GitHub.
@@ -54,6 +55,7 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 	var commitTimeMs *int64
 	var commitPushedAtMs *int64
 	var runs []githubapi.WorkflowRun
+	var changedFiles []githubapi.CommitFile
 	allCommitRunsCount := 0
 	var allCommitRunsComputeMs int64
 	var requiredContexts []string
@@ -121,6 +123,11 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 				ms := t.UnixMilli()
 				mergedAtMs = &ms
 			}
+		}
+
+		// Fetch changed files for this PR (best-effort)
+		if files, ferr := p.client.FetchPRFiles(ctx, parsed.Owner, parsed.Repo, parsed.Identifier); ferr == nil {
+			changedFiles = files
 		}
 
 		if reporter != nil {
@@ -228,6 +235,7 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 		}
 		commitMeta, err := p.client.FetchCommit(ctx, baseURL, headSHA)
 		if err == nil {
+			changedFiles = commitMeta.Files
 			dateStr := commitMeta.Commit.Committer.Date
 			if dateStr == "" {
 				dateStr = commitMeta.Commit.Author.Date
@@ -404,6 +412,7 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 		AllCommitRunsCount:     allCommitRunsCount,
 		AllCommitRunsComputeMs: allCommitRunsComputeMs,
 		RequiredContexts:       requiredContexts,
+		ChangedFiles:           changedFiles,
 	}, nil
 }
 
