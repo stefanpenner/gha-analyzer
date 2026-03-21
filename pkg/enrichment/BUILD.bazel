@@ -7,16 +7,25 @@ go_library(
         "enricher.go",
         "generic.go",
         "gha.go",
+        "lint.go",
+        "rules.go",
     ],
     importpath = "github.com/stefanpenner/otel-analyzer/pkg/enrichment",
     visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/utils",
+    ],
 )
 
 go_test(
     name = "enrichment_test",
     srcs = [
+        "cicd_extended_test.go",
         "cicd_test.go",
         "enricher_test.go",
+        "generic_test.go",
+        "lint_test.go",
+        "rules_test.go",
     ],
     embed = [":enrichment"],
 )

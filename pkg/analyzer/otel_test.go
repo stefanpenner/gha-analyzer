@@ -140,7 +140,7 @@ func TestWorkflowQueueTimeSpan(t *testing.T) {
 		_, traceEvents, _, _, err := processWorkflowRun(
 			context.Background(), run, 0, 1001, earliestTime,
 			"owner", "repo", "1", 0, "https://github.com/owner/repo/pull/1", "pr",
-			nil, mockClient, nil, builder, AnalyzeOptions{NoArtifacts: true},
+			nil, mockClient, nil, builder, NewTraceEmitter(builder), AnalyzeOptions{NoArtifacts: true},
 		)
 		assert.NoError(t, err)
 
@@ -222,7 +222,7 @@ func TestWorkflowQueueTimeSpan(t *testing.T) {
 		_, traceEvents, _, _, err := processWorkflowRun(
 			context.Background(), run, 0, 1001, earliestTime,
 			"owner", "repo", "1", 0, "https://github.com/owner/repo/pull/1", "pr",
-			nil, mockClient, nil, builder, AnalyzeOptions{NoArtifacts: true},
+			nil, mockClient, nil, builder, NewTraceEmitter(builder), AnalyzeOptions{NoArtifacts: true},
 		)
 		assert.NoError(t, err)
 
@@ -276,7 +276,7 @@ func TestWorkflowQueueTimeSpan(t *testing.T) {
 		_, traceEvents, _, _, err := processWorkflowRun(
 			context.Background(), run, 0, 1001, earliestTime,
 			"owner", "repo", "1", 0, "https://github.com/owner/repo/pull/1", "pr",
-			nil, mockClient, nil, builder, AnalyzeOptions{NoArtifacts: true},
+			nil, mockClient, nil, builder, NewTraceEmitter(builder), AnalyzeOptions{NoArtifacts: true},
 		)
 		assert.NoError(t, err)
 
@@ -316,7 +316,7 @@ func TestSpanBuilderGeneration(t *testing.T) {
 			ReviewEvents: reviewEvents,
 		}, 0)
 
-		_, err := buildURLResult(context.Background(), parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, nil, mockClient, nil, 0, builder, AnalyzeOptions{})
+		_, err := buildURLResult(context.Background(), parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, nil, mockClient, nil, 0, builder, emitter, AnalyzeOptions{})
 		assert.NoError(t, err)
 
 		spans := builder.Spans()
@@ -355,7 +355,7 @@ func TestSpanBuilderGeneration(t *testing.T) {
 			CommitTimeMs: &commitTimeMs,
 		}, 0)
 
-		_, err := buildURLResult(context.Background(), parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, nil, mockClient, nil, 0, builder, AnalyzeOptions{})
+		_, err := buildURLResult(context.Background(), parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, nil, mockClient, nil, 0, builder, emitter, AnalyzeOptions{})
 		assert.NoError(t, err)
 
 		spans := builder.Spans()

@@ -11,10 +11,14 @@ import (
 	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
 	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// Instrumentation identity for all GHA-generated spans.
+const instrumentationName = "github.com/stefanpenner/otel-analyzer/pkg/analyzer"
 
 // SpanBuilder accumulates tracetest.SpanStubs and converts them to ReadOnlySpans.
 // Thread-safe for concurrent use by processWorkflowRun goroutines.
@@ -24,6 +28,10 @@ type SpanBuilder struct {
 }
 
 func (b *SpanBuilder) Add(stub tracetest.SpanStub) {
+	// Stamp every span with our instrumentation scope.
+	if stub.InstrumentationScope.Name == "" {
+		stub.InstrumentationScope.Name = instrumentationName
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.stubs = append(b.stubs, stub)
@@ -103,7 +111,7 @@ func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProv
 			}
 		}
 
-		result, err := buildURLResult(ctx, rawData.Parsed, urlIndex, rawData.HeadSHA, rawData.BranchName, rawData.DisplayName, rawData.DisplayURL, rawData.ReviewEvents, rawData.MergedAtMs, rawData.CommitTimeMs, rawData.CommitPushedAtMs, rawData.AllCommitRunsCount, rawData.AllCommitRunsComputeMs, rawData.Runs, rawData.RequiredContexts, client, reporter, urlEarliestTime, builder, opts)
+		result, err := buildURLResult(ctx, rawData.Parsed, urlIndex, rawData.HeadSHA, rawData.BranchName, rawData.DisplayName, rawData.DisplayURL, rawData.ReviewEvents, rawData.MergedAtMs, rawData.CommitTimeMs, rawData.CommitPushedAtMs, rawData.AllCommitRunsCount, rawData.AllCommitRunsComputeMs, rawData.Runs, rawData.RequiredContexts, client, reporter, urlEarliestTime, builder, emitter, opts)
 		if err != nil {
 			urlErrors = append(urlErrors, URLError{URL: githubURL, Err: err})
 			continue
@@ -153,7 +161,7 @@ func AnalyzeURLs(ctx context.Context, urls []string, client githubapi.GitHubProv
 	return urlResults, allTraceEvents, globalEarliestTime, globalLatestTime, builder.Spans(), urlErrors
 }
 
-func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchName, displayName, displayURL string, reviewEvents []ReviewEvent, mergedAtMs, commitTimeMs, commitPushedAtMs *int64, allCommitRunsCount int, allCommitRunsComputeMs int64, runs []githubapi.WorkflowRun, requiredContexts []string, client githubapi.GitHubProvider, reporter ProgressReporter, urlEarliestTime int64, builder *SpanBuilder, opts AnalyzeOptions) (*URLResult, error) {
+func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex int, headSHA, branchName, displayName, displayURL string, reviewEvents []ReviewEvent, mergedAtMs, commitTimeMs, commitPushedAtMs *int64, allCommitRunsCount int, allCommitRunsComputeMs int64, runs []githubapi.WorkflowRun, requiredContexts []string, client githubapi.GitHubProvider, reporter ProgressReporter, urlEarliestTime int64, builder *SpanBuilder, emitter *TraceEmitter, opts AnalyzeOptions) (*URLResult, error) {
 	if reporter != nil {
 		reporter.SetURLRuns(len(runs))
 		reporter.SetPhase("Processing workflow runs")
@@ -190,7 +198,7 @@ func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex 
 			defer wg.Done()
 			for job := range jobsCh {
 				processID := (urlIndex+1)*1000 + job.index + 1
-				runMetrics, runTrace, runStarts, runEnds, err := processWorkflowRun(ctx, job.run, job.index, processID, urlEarliestTime, parsed.Owner, parsed.Repo, parsed.Identifier, urlIndex, displayURL, parsed.Type, requiredContexts, client, reporter, builder, opts)
+				runMetrics, runTrace, runStarts, runEnds, err := processWorkflowRun(ctx, job.run, job.index, processID, urlEarliestTime, parsed.Owner, parsed.Repo, parsed.Identifier, urlIndex, displayURL, parsed.Type, requiredContexts, client, reporter, builder, emitter, opts)
 				resultsCh <- runResult{
 					metrics:     runMetrics,
 					traceEvents: runTrace,
@@ -251,7 +259,7 @@ func buildURLResult(ctx context.Context, parsed utils.ParsedGitHubURL, urlIndex 
 	return &result, nil
 }
 
-func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex, processID int, earliestTime int64, owner, repo, identifier string, urlIndex int, displayURL, sourceType string, requiredContexts []string, client githubapi.GitHubProvider, reporter ProgressReporter, builder *SpanBuilder, opts AnalyzeOptions) (Metrics, []TraceEvent, []JobEvent, []JobEvent, error) {
+func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex, processID int, earliestTime int64, owner, repo, identifier string, urlIndex int, displayURL, sourceType string, requiredContexts []string, client githubapi.GitHubProvider, reporter ProgressReporter, builder *SpanBuilder, emitter *TraceEmitter, opts AnalyzeOptions) (Metrics, []TraceEvent, []JobEvent, []JobEvent, error) {
 	metrics := InitializeMetrics()
 	traceEvents := []TraceEvent{}
 	jobStartTimes := []JobEvent{}
@@ -473,6 +481,12 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 
 	// Build workflow span stub (after processing jobs so runEnd may be adjusted)
 	wfAttrs := []attribute.KeyValue{
+		// OTel CI/CD semconv
+		attribute.String("cicd.pipeline.name", defaultRunName(run)),
+		attribute.String("cicd.pipeline.run.id", fmt.Sprintf("%d", run.ID)),
+		attribute.String("cicd.pipeline.run.url.full", workflowURL),
+		attribute.String("vcs.repository.url.full", fmt.Sprintf("https://github.com/%s/%s", owner, repo)),
+		// GitHub-specific (preserved for compatibility + no semconv equivalent)
 		attribute.String("type", "workflow"),
 		attribute.Int64("github.run_id", run.ID),
 		attribute.String("github.status", run.Status),
@@ -481,6 +495,14 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 		attribute.String("github.url", workflowURL),
 		attribute.Int("github.url_index", urlIndex),
 	}
+	if run.HeadSHA != "" {
+		wfAttrs = append(wfAttrs, attribute.String("vcs.revision", run.HeadSHA))
+	}
+	if run.HeadBranch != "" {
+		wfAttrs = append(wfAttrs, attribute.String("vcs.ref.head.name", run.HeadBranch))
+	}
+	// Map conclusion to cicd.pipeline.run.result
+	wfAttrs = append(wfAttrs, attribute.String("cicd.pipeline.run.result", ghConclusionToResult(run.Conclusion)))
 	if run.RunAttempt > 1 {
 		wfAttrs = append(wfAttrs, attribute.Int64("github.run_attempt", run.RunAttempt))
 	}
@@ -488,12 +510,37 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 	for osName, ms := range metrics.BillableMs {
 		wfAttrs = append(wfAttrs, attribute.Int64(fmt.Sprintf("billable.%s_ms", strings.ToLower(osName)), ms))
 	}
+
+	// Collect review/merge events as span events on the workflow root span
+	wfEvents := emitter.CollectEvents(urlIndex, tid)
+
+	// Build span links for retry attempts
+	var wfLinks []sdktrace.Link
+	if run.RunAttempt > 1 {
+		prevTID := githubapi.NewTraceID(run.ID, run.RunAttempt-1)
+		prevWfSID := githubapi.NewSpanID(run.ID)
+		wfLinks = append(wfLinks, sdktrace.Link{
+			SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
+				TraceID:    prevTID,
+				SpanID:     prevWfSID,
+				TraceFlags: trace.FlagsSampled,
+			}),
+			Attributes: []attribute.KeyValue{
+				attribute.String("link.type", "retry"),
+				attribute.Int64("github.previous_attempt", run.RunAttempt-1),
+			},
+		})
+	}
+
 	builder.Add(tracetest.SpanStub{
 		Name:        defaultRunName(run),
 		SpanContext: wfSC,
 		StartTime:   runStart,
 		EndTime:     runEnd,
 		Attributes:  wfAttrs,
+		Events:      wfEvents,
+		Links:       wfLinks,
+		Status:      ghConclusionToStatus(run.Conclusion),
 	})
 
 	return metrics, traceEvents, jobStartTimes, jobEndTimes, nil
@@ -692,13 +739,20 @@ func processJob(job githubapi.Job, jobIndex int, run githubapi.WorkflowRun, jobT
 	}
 
 	jobAttrs := []attribute.KeyValue{
+		// OTel CI/CD semconv
+		attribute.String("cicd.pipeline.task.name", job.Name),
+		attribute.String("cicd.pipeline.task.type", "build"),
+		attribute.String("cicd.pipeline.task.run.id", fmt.Sprintf("%d", job.ID)),
+		attribute.String("cicd.pipeline.task.run.url.full", jobURL),
+		attribute.String("cicd.pipeline.task.run.result", ghConclusionToResult(job.Conclusion)),
+		// GitHub-specific (preserved)
 		attribute.String("type", "job"),
 		attribute.Int64("github.job_id", job.ID),
 		attribute.String("github.status", job.Status),
 		attribute.String("github.conclusion", job.Conclusion),
 		attribute.String("github.runner_name", job.RunnerName),
 		attribute.String("github.url", jobURL),
-		attribute.Bool("is_required", isRequired),
+		attribute.Bool("github.is_required", isRequired),
 	}
 	if job.RunnerName != "" {
 		jobAttrs = append(jobAttrs, attribute.String("k8s.pod.name", job.RunnerName))
@@ -737,6 +791,7 @@ func processJob(job githubapi.Job, jobIndex int, run githubapi.WorkflowRun, jobT
 		EndTime:     jobEnd,
 		Attributes:  jobAttrs,
 		Events:      spanEvents,
+		Status:      ghConclusionToStatus(job.Conclusion),
 	})
 }
 
@@ -775,12 +830,19 @@ func processStep(step githubapi.Step, job githubapi.Job, run githubapi.WorkflowR
 		StartTime:   start,
 		EndTime:     end,
 		Attributes: []attribute.KeyValue{
+			// OTel CI/CD semconv
+			attribute.String("cicd.pipeline.task.name", step.Name),
+			attribute.String("cicd.pipeline.task.type", "build"),
+			attribute.String("cicd.pipeline.task.run.result", ghConclusionToResult(step.Conclusion)),
+			attribute.String("cicd.pipeline.task.run.url.full", stepURL),
+			// GitHub-specific
 			attribute.String("type", "step"),
 			attribute.Int("github.step_number", step.Number),
 			attribute.String("github.status", step.Status),
 			attribute.String("github.conclusion", step.Conclusion),
 			attribute.String("github.url", stepURL),
 		},
+		Status: ghConclusionToStatus(step.Conclusion),
 	})
 
 	metrics.TotalSteps++
@@ -983,6 +1045,40 @@ func isJobRequired(jobName, workflowName string, requiredContexts []string) bool
 		}
 	}
 	return false
+}
+
+// ghConclusionToResult maps a GitHub conclusion to a cicd.pipeline.run.result value.
+func ghConclusionToResult(conclusion string) string {
+	switch conclusion {
+	case "success":
+		return "success"
+	case "failure":
+		return "failure"
+	case "cancelled":
+		return "cancelled"
+	case "skipped":
+		return "skipped"
+	case "timed_out":
+		return "error"
+	default:
+		return conclusion
+	}
+}
+
+// ghConclusionToStatus maps a GitHub conclusion to an OTel span status.
+func ghConclusionToStatus(conclusion string) sdktrace.Status {
+	switch conclusion {
+	case "success":
+		return sdktrace.Status{Code: codes.Ok}
+	case "failure", "timed_out":
+		return sdktrace.Status{Code: codes.Error, Description: conclusion}
+	case "cancelled":
+		return sdktrace.Status{Code: codes.Ok, Description: "Cancelled"}
+	case "skipped":
+		return sdktrace.Status{Code: codes.Ok, Description: "Skipped"}
+	default:
+		return sdktrace.Status{Code: codes.Unset}
+	}
 }
 
 func mergeMetrics(target *Metrics, source Metrics) {

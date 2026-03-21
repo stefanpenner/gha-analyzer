@@ -940,6 +940,115 @@ func (m Model) renderDetailModal(maxHeight, maxWidth int) (string, int) {
 		lines = append(lines, "")
 	}
 
+	// OTel Identity
+	if item.TraceID != "" || item.SpanID != "" {
+		lines = append(lines, ModalTitleStyle.Render("── Trace Identity ──"))
+		if item.TraceID != "" {
+			addRow("Trace ID:", item.TraceID)
+		}
+		if item.SpanID != "" {
+			addRow("Span ID:", item.SpanID)
+		}
+		lines = append(lines, "")
+	}
+
+	// Service context from enrichment
+	if item.Hints.ServiceName != "" || item.Hints.Environment != "" || item.Hints.Detail != "" {
+		lines = append(lines, ModalTitleStyle.Render("── Context ──"))
+		if item.Hints.ServiceName != "" {
+			addRow("Service:", item.Hints.ServiceName)
+		}
+		if item.Hints.Environment != "" {
+			addRow("Environment:", item.Hints.Environment)
+		}
+		if item.Hints.Detail != "" {
+			addRow("Detail:", item.Hints.Detail)
+		}
+		if item.Hints.VCSBranch != "" {
+			addRow("Branch:", item.Hints.VCSBranch)
+		}
+		if item.Hints.VCSRevision != "" {
+			rev := item.Hints.VCSRevision
+			if len(rev) > 12 {
+				rev = rev[:12]
+			}
+			addRow("Revision:", rev)
+		}
+		if item.Hints.RunID != "" {
+			addRow("Run ID:", item.Hints.RunID)
+		}
+		lines = append(lines, "")
+	}
+
+	// InstrumentationScope
+	if item.ScopeName != "" {
+		lines = append(lines, ModalTitleStyle.Render("── Instrumentation ──"))
+		addRow("Library:", item.ScopeName)
+		if item.ScopeVersion != "" {
+			addRow("Version:", item.ScopeVersion)
+		}
+		lines = append(lines, "")
+	}
+
+	// Span Events (exceptions, logs)
+	if len(item.Events) > 0 {
+		lines = append(lines, ModalTitleStyle.Render("── Events ──"))
+		for _, ev := range item.Events {
+			timeStr := ""
+			if !ev.Time.IsZero() {
+				timeStr = " @ " + ev.Time.Format("15:04:05")
+			}
+			lines = append(lines, ModalValueStyle.Render(fmt.Sprintf("  %s%s", ev.Name, timeStr)))
+			// Show exception details prominently
+			if exType := ev.Attrs["exception.type"]; exType != "" {
+				addRow("    Type:", exType)
+			}
+			if exMsg := ev.Attrs["exception.message"]; exMsg != "" {
+				msg := exMsg
+				if len(msg) > 120 {
+					msg = msg[:117] + "..."
+				}
+				addRow("    Message:", msg)
+			}
+			if stack := ev.Attrs["exception.stacktrace"]; stack != "" {
+				// Show first 3 lines of stacktrace
+				stackLines := strings.SplitN(stack, "\n", 4)
+				for i, sl := range stackLines {
+					if i >= 3 {
+						addRow("    ...", fmt.Sprintf("(%d more lines)", strings.Count(stack, "\n")-3))
+						break
+					}
+					if sl != "" {
+						addRow("   ", sl)
+					}
+				}
+			}
+			// Show other event attributes
+			for k, v := range ev.Attrs {
+				if k != "exception.type" && k != "exception.message" && k != "exception.stacktrace" && v != "" {
+					addRow("    "+k+":", v)
+				}
+			}
+		}
+		lines = append(lines, "")
+	}
+
+	// Span Links (cross-trace references)
+	if len(item.Links) > 0 {
+		lines = append(lines, ModalTitleStyle.Render("── Links ──"))
+		for i, link := range item.Links {
+			lines = append(lines, ModalValueStyle.Render(fmt.Sprintf("  Link %d:", i+1)))
+			addRow("    Trace ID:", link.TraceID)
+			addRow("    Span ID:", link.SpanID)
+			for k, v := range link.Attrs {
+				if v != "" {
+					addRow("    "+k+":", v)
+				}
+			}
+		}
+		lines = append(lines, "")
+	}
+
 	// Span Attributes (from source node)
 	if item.sourceNode != nil && len(item.sourceNode.Attrs) > 0 {
 		lines = append(lines, ModalTitleStyle.Render("── Attributes ──"))
@@ -951,6 +1060,23 @@ func (m Model) renderDetailModal(maxHeight, maxWidth int) (string, int) {
 		sort.Strings(keys)
 		for _, k := range keys {
 			v := item.sourceNode.Attrs[k]
+			if v != "" {
+				addRow(k+":", v)
+			}
+		}
+		lines = append(lines, "")
+	}
+
+	// Resource Attributes
+	if len(item.ResourceAttrs) > 0 {
+		lines = append(lines, ModalTitleStyle.Render("── Resource ──"))
+		keys := make([]string, 0, len(item.ResourceAttrs))
+		for k := range item.ResourceAttrs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			v := item.ResourceAttrs[k]
 			if v != "" {
 				addRow(k+":", v)
 			}

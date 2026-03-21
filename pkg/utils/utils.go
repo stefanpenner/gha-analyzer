@@ -265,3 +265,22 @@ func StripANSI(str string) string {
 	}
 	return b.String()
 }
+
+// GlobMatch performs simple glob matching: "*" matches everything,
+// "prefix*" matches prefix, "*suffix" matches suffix, "*mid*" matches contains,
+// exact match otherwise.
+func GlobMatch(pattern, value string) bool {
+	if pattern == "*" {
+		return true
+	}
+	if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") {
+		return strings.Contains(value, pattern[1:len(pattern)-1])
+	}
+	if strings.HasPrefix(pattern, "*") {
+		return strings.HasSuffix(value, pattern[1:])
+	}
+	if strings.HasSuffix(pattern, "*") {
+		return strings.HasPrefix(value, pattern[:len(pattern)-1])
+	}
+	return pattern == value
+}

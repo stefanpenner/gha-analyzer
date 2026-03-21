@@ -140,6 +140,7 @@ type WorkflowRun struct {
 	RunStartedAt string  `json:"run_started_at"`
 	UpdatedAt    string  `json:"updated_at"`
 	HeadSHA      string  `json:"head_sha"`
+	HeadBranch   string  `json:"head_branch"`
 	Repository   RepoRef `json:"repository"`
 }
 

@@ -8,6 +8,20 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 
+// SpanEvent represents an event attached to a span (e.g., exception, log).
+type SpanEvent struct {
+	Name       string
+	Time       time.Time
+	Attrs      map[string]string
+}
+
+// SpanLink represents a link to another span (cross-trace causality).
+type SpanLink struct {
+	TraceID string
+	SpanID  string
+	Attrs   map[string]string
+}
+
 // TreeNode represents a node in the workflow/job/step hierarchy.
 // This is a shared data structure used by both TUI and CLI rendering.
 type TreeNode struct {
@@ -18,6 +32,16 @@ type TreeNode struct {
 	EndTime   time.Time
 	URLIndex  int // index of the input URL this node belongs to
 	Children  []*TreeNode
+	// OTel metadata surfaced for display
+	Events    []SpanEvent // span events (exceptions, logs)
+	Links     []SpanLink  // span links (cross-trace references)
+	SpanID    string      // span ID
+	TraceID   string      // trace ID
+	// InstrumentationScope
+	ScopeName    string // instrumentation library name
+	ScopeVersion string // instrumentation library version
+	// Resource attributes
+	ResourceAttrs map[string]string
 }
 
 // Duration returns the duration of this node
@@ -92,14 +116,72 @@ func BuildTreeFromSpans(spans []trace.ReadOnlySpan, globalEarliest, globalLatest
 			}
 		}
 
+		// Extract span events
+		var events []SpanEvent
+		for _, e := range sh.span.Events() {
+			eventAttrs := make(map[string]string)
+			for _, a := range e.Attributes {
+				eventAttrs[string(a.Key)] = a.Value.AsString()
+			}
+			events = append(events, SpanEvent{
+				Name:  e.Name,
+				Time:  e.Time,
+				Attrs: eventAttrs,
+			})
+		}
+
+		// Extract span links
+		var links []SpanLink
+		for _, l := range sh.span.Links() {
+			linkAttrs := make(map[string]string)
+			for _, a := range l.Attributes {
+				linkAttrs[string(a.Key)] = a.Value.AsString()
+			}
+			links = append(links, SpanLink{
+				TraceID: l.SpanContext.TraceID().String(),
+				SpanID:  l.SpanContext.SpanID().String(),
+				Attrs:   linkAttrs,
+			})
+		}
+
+		// Extract InstrumentationScope
+		scope := sh.span.InstrumentationScope()
+
+		// Extract resource attributes
+		resourceAttrs := make(map[string]string)
+		if sh.span.Resource() != nil {
+			for _, a := range sh.span.Resource().Attributes() {
+				resourceAttrs[string(a.Key)] = a.Value.AsString()
+			}
+		}
+
+		// Enrich hints with resource context
+		if sh.hints.ServiceName == "" {
+			if svc, ok := resourceAttrs["service.name"]; ok {
+				sh.hints.ServiceName = svc
+			}
+		}
+		if sh.hints.Environment == "" {
+			if env, ok := resourceAttrs["deployment.environment"]; ok {
+				sh.hints.Environment = env
+			}
+		}
+
 		node := &TreeNode{
-			Attrs:     sh.attrs,
-			Hints:     sh.hints,
-			Name:      sh.span.Name(),
-			StartTime: sh.span.StartTime(),
-			EndTime:   sh.span.EndTime(),
-			URLIndex:  urlIndex,
-			Children:  []*TreeNode{},
+			Attrs:         sh.attrs,
+			Hints:         sh.hints,
+			Name:          sh.span.Name(),
+			StartTime:     sh.span.StartTime(),
+			EndTime:       sh.span.EndTime(),
+			URLIndex:      urlIndex,
+			Children:      []*TreeNode{},
+			Events:        events,
+			Links:         links,
+			SpanID:        spanID,
+			TraceID:       sh.span.SpanContext().TraceID().String(),
+			ScopeName:     scope.Name,
+			ScopeVersion:  scope.Version,
+			ResourceAttrs: resourceAttrs,
 		}
 		nodes[spanID] = node
 	}

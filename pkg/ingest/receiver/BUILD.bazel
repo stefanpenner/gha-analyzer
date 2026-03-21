@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "receiver",
+    srcs = ["receiver.go"],
+    importpath = "github.com/stefanpenner/otel-analyzer/pkg/ingest/receiver",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/ingest/otlpfile",
+        "@io_opentelemetry_go_otel_sdk//trace",
+    ],
+)
+
+go_test(
+    name = "receiver_test",
+    srcs = ["receiver_test.go"],
+    embed = [":receiver"],
+)

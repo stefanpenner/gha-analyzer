@@ -3,27 +3,44 @@ package analyzer
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
 	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 	"go.opentelemetry.io/otel/attribute"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 )
 
-// TraceEmitter builds marker span stubs for workflow events.
+// TraceEmitter builds marker span stubs for workflow events and collects
+// span events for the canonical OTel mapping.
 type TraceEmitter struct {
 	builder *SpanBuilder
+	mu      sync.Mutex
+	// Accumulated raw data per urlIndex for CollectEvents
+	rawDataByURL map[int]*RawData
 }
 
 func NewTraceEmitter(builder *SpanBuilder) *TraceEmitter {
-	return &TraceEmitter{builder: builder}
+	return &TraceEmitter{
+		builder:      builder,
+		rawDataByURL: make(map[int]*RawData),
+	}
 }
 
+// EmitMarkers creates marker spans (backward compat) AND stores data for CollectEvents.
 func (e *TraceEmitter) EmitMarkers(data *RawData, urlIndex int) {
+	e.mu.Lock()
+	e.rawDataByURL[urlIndex] = data
+	e.mu.Unlock()
+
 	for _, event := range data.ReviewEvents {
-		eventTime, _ := utils.ParseTime(event.Time)
+		eventTime, ok := utils.ParseTime(event.Time)
+		if !ok {
+			continue // skip events with unparseable timestamps
+		}
 		name := "Marker"
 		eventType := event.Type
 
@@ -98,4 +115,85 @@ func (e *TraceEmitter) EmitMarkers(data *RawData, urlIndex int) {
 			},
 		})
 	}
+}
+
+// CollectEvents returns OTel span events for the workflow root span.
+// These represent reviews, merges, commits, and pushes as proper span events
+// rather than fake zero-duration spans.
+func (e *TraceEmitter) CollectEvents(urlIndex int, traceID trace.TraceID) []sdktrace.Event {
+	e.mu.Lock()
+	data := e.rawDataByURL[urlIndex]
+	e.mu.Unlock()
+
+	if data == nil {
+		return nil
+	}
+
+	var events []sdktrace.Event
+
+	for _, event := range data.ReviewEvents {
+		eventTime, ok := utils.ParseTime(event.Time)
+		if !ok {
+			continue
+		}
+		user := firstNonEmpty(event.Reviewer, event.MergedBy)
+
+		switch event.Type {
+		case "review":
+			events = append(events, sdktrace.Event{
+				Name: "github.review",
+				Time: eventTime,
+				Attributes: []attribute.KeyValue{
+					attribute.String("github.review.state", event.State),
+					attribute.String("github.user", user),
+					attribute.String("github.url", event.URL),
+				},
+			})
+		case "comment":
+			events = append(events, sdktrace.Event{
+				Name: "github.comment",
+				Time: eventTime,
+				Attributes: []attribute.KeyValue{
+					attribute.String("github.user", user),
+					attribute.String("github.url", event.URL),
+				},
+			})
+		case "merged":
+			attrs := []attribute.KeyValue{
+				attribute.String("github.user", user),
+				attribute.String("github.url", event.URL),
+			}
+			if event.PRNumber != 0 {
+				attrs = append(attrs, attribute.Int("github.pr_number", event.PRNumber))
+				attrs = append(attrs, attribute.String("github.pr_title", event.PRTitle))
+			}
+			events = append(events, sdktrace.Event{
+				Name:       "github.merge",
+				Time:       eventTime,
+				Attributes: attrs,
+			})
+		}
+	}
+
+	if data.CommitTimeMs != nil {
+		events = append(events, sdktrace.Event{
+			Name: "github.commit",
+			Time: time.UnixMilli(*data.CommitTimeMs),
+			Attributes: []attribute.KeyValue{
+				attribute.String("vcs.revision", data.HeadSHA),
+			},
+		})
+	}
+
+	if data.CommitPushedAtMs != nil {
+		events = append(events, sdktrace.Event{
+			Name: "github.push",
+			Time: time.UnixMilli(*data.CommitPushedAtMs),
+			Attributes: []attribute.KeyValue{
+				attribute.String("vcs.revision", data.HeadSHA),
+			},
+		})
+	}
+
+	return events
 }

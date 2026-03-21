@@ -1,0 +1,62 @@
+name: Check OTel Semconv Updates
+
+on:
+  schedule:
+    # Every Monday at 9:00 UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  check-semconv:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for new semconv release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          LATEST=$(curl -sf https://api.github.com/repos/open-telemetry/semantic-conventions/releases/latest | jq -r '.tag_name')
+          if [ -z "$LATEST" ] || [ "$LATEST" = "null" ]; then
+            echo "Failed to fetch latest semconv version"
+            exit 0
+          fi
+
+          # Check if we already have an open issue for this version
+          EXISTING=$(gh issue list --search "OTel semconv $LATEST" --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            echo "Issue #$EXISTING already exists for $LATEST"
+            exit 0
+          fi
+
+          # Check if this version was already handled (closed issue)
+          CLOSED=$(gh issue list --search "OTel semconv $LATEST" --state closed --json number --jq '.[0].number')
+          if [ -n "$CLOSED" ]; then
+            echo "Version $LATEST already handled in #$CLOSED"
+            exit 0
+          fi
+
+          NOTES=$(curl -sf https://api.github.com/repos/open-telemetry/semantic-conventions/releases/latest | jq -r '.body' | head -40)
+
+          gh issue create \
+            --title "OTel semconv $LATEST released — review enrichers" \
+            --label "dependencies" \
+            --body "A new [OTel semantic conventions release](https://github.com/open-telemetry/semantic-conventions/releases/tag/$LATEST) is available.
+
+          ## Checklist
+
+          Review the release notes and update enrichers in \`pkg/enrichment/\`:
+
+          - [ ] New attribute keys to recognize in \`generic.go\`
+          - [ ] Deprecated attributes to handle (old → new key fallbacks)
+          - [ ] New semconv domains to add as enricher cases
+          - [ ] Update lint rules in \`lint.go\` for new conventions
+
+          ## Release notes (excerpt)
+
+          $NOTES
+
+          ---
+          *Auto-created by [semconv-check.yml](/.github/workflows/semconv-check.yml)*"
