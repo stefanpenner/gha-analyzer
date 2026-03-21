@@ -613,6 +613,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return m, tea.Batch(m.spinner.Tick, m.doReload())
 				}
 				return m, nil
+			case "p":
+				if m.openPerfettoFunc != nil {
+					m.openPerfettoFunc()
+				}
+				return m, nil
 			case "g":
 				if m.inspectorFocusLeft {
 					m.inspectorSidebarIdx = 0
