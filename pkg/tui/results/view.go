@@ -53,6 +53,59 @@ func hyperlink(url, text string) string {
 	return fmt.Sprintf("\x1b]8;id=%s;%s\x07%s\x1b]8;;\x07", url, url, text)
 }
 
+// infoColorStyle returns a style for info items based on the color hint.
+func infoColorStyle(color string) lipgloss.Style {
+	switch color {
+	case "blue":
+		return lipgloss.NewStyle().Foreground(ColorBlue)
+	case "purple":
+		return lipgloss.NewStyle().Foreground(ColorPurple)
+	case "green":
+		return lipgloss.NewStyle().Foreground(ColorGreen)
+	case "red":
+		return lipgloss.NewStyle().Foreground(ColorRed)
+	default:
+		return FooterStyle
+	}
+}
+
+// renderDiffLabel renders a diff-style label like "Files: 3 changed (+45 / -23)"
+// with the additions in green and deletions in red.
+func renderDiffLabel(name, url string) string {
+	// Parse the structured format: "Files: N changed (+A / -D)"
+	addStyle := lipgloss.NewStyle().Foreground(ColorGreen)
+	delStyle := lipgloss.NewStyle().Foreground(ColorRed)
+	grayStyle := FooterStyle
+
+	// Find the (+...) and (-...) parts
+	plusIdx := strings.Index(name, "(+")
+	if plusIdx < 0 {
+		// Fallback: just render gray with hyperlink
+		return hyperlink(url, grayStyle.Render(name))
+	}
+
+	prefix := name[:plusIdx]
+	rest := name[plusIdx:]
+
+	// rest looks like "(+45 / -23)"
+	slashIdx := strings.Index(rest, " / ")
+	if slashIdx < 0 {
+		return hyperlink(url, grayStyle.Render(name))
+	}
+
+	addPart := rest[1:slashIdx]        // "+45"
+	delPart := rest[slashIdx+3:]        // "-23)"
+	delPart = strings.TrimSuffix(delPart, ")")
+
+	rendered := grayStyle.Render(prefix+"(") +
+		addStyle.Render(addPart) +
+		grayStyle.Render(" / ") +
+		delStyle.Render(delPart) +
+		grayStyle.Render(")")
+
+	return hyperlink(url, rendered)
+}
+
 // colorForRate returns a style based on the success rate value
 func colorForRate(rate float64) lipgloss.Style {
 	switch {
@@ -143,13 +196,7 @@ func (m Model) renderHeader() string {
 		sep + HeaderCountStyle.Render("Spans: ") + colorForRate(jobSuccessRate).Render(fmt.Sprintf("%.0f%%", jobSuccessRate))
 	leftPlain := fmt.Sprintf("Traces: %.0f%% • Spans: %.0f%%", successRate, jobSuccessRate)
 
-	// Right side: "1 traces • 3 spans • 21 leaves"
-	rightStyled := numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.TotalRuns)) + HeaderCountStyle.Render(" traces") +
-		sep + numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.TotalJobs)) + HeaderCountStyle.Render(" spans") +
-		sep + numStyle.Render(fmt.Sprintf("%d", m.displayedStepCount)) + HeaderCountStyle.Render(" leaves")
-	rightPlain := fmt.Sprintf("%d traces • %d spans • %d leaves", m.displayedSummary.TotalRuns, m.displayedSummary.TotalJobs, m.displayedStepCount)
-
-	line1 := buildLine(leftStyled, leftPlain, rightStyled, rightPlain)
+	line1 := buildLine(leftStyled, leftPlain, "", "")
 
 	// Line 3: Times (left) + Concurrency (right)
 	wallTime := utils.HumanizeTime(float64(m.displayedWallTimeMs) / 1000)
@@ -170,10 +217,7 @@ func (m Model) renderHeader() string {
 		leftPlain3 += fmt.Sprintf(" • Effective: %s", effectiveTime)
 	}
 
-	rightStyled3 := HeaderCountStyle.Render("Concurrency: ") + numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.MaxConcurrency))
-	rightPlain3 := fmt.Sprintf("Concurrency: %d", m.displayedSummary.MaxConcurrency)
-
-	line2 := buildLine(leftStyled3, leftPlain3, rightStyled3, rightPlain3)
+	line2 := buildLine(leftStyled3, leftPlain3, "", "")
 
 	// Line 4: Queue + Retry + Billable (conditional)
 	line4 := ""
@@ -214,34 +258,7 @@ func (m Model) renderHeader() string {
 		}
 	}
 
-	// Changed files line
-	lineFiles := ""
-	if m.changedFilesCount > 0 {
-		filesStyled := HeaderCountStyle.Render("Files: ") +
-			numStyle.Render(fmt.Sprintf("%d", m.changedFilesCount)) +
-			HeaderCountStyle.Render(" changed") +
-			HeaderCountStyle.Render(" (") +
-			lipgloss.NewStyle().Foreground(ColorGreen).Render(fmt.Sprintf("+%d", m.changedFilesAdd)) +
-			HeaderCountStyle.Render(" / ") +
-			lipgloss.NewStyle().Foreground(ColorRed).Render(fmt.Sprintf("-%d", m.changedFilesDel)) +
-			HeaderCountStyle.Render(")")
-		filesPlain := fmt.Sprintf("Files: %d changed (+%d / -%d)", m.changedFilesCount, m.changedFilesAdd, m.changedFilesDel)
-		lineFiles = "\n" + buildLeftLine(filesStyled, filesPlain)
-	}
-
-	// URL lines
-	lineURL := ""
-	for _, inputURL := range m.inputURLs {
-		urlText := inputURL
-		maxURLWidth := contentWidth
-		if lipgloss.Width(urlText) > maxURLWidth {
-			urlText = urlText[:maxURLWidth-3] + "..."
-		}
-		linkedURL := hyperlink(utils.ExpandGitHubURL(inputURL), urlText)
-		lineURL += "\n" + buildLeftLine(linkedURL, urlText)
-	}
-
-	return topBorder + "\n" + line1 + "\n" + line2 + line4 + lineFiles + lineURL
+	return topBorder + "\n" + line1 + "\n" + line2 + line4
 }
 
 // renderTimeAxis renders the time axis row that sits above the timeline
@@ -395,6 +412,44 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 		timelineW = 10
 	}
 
+	// Info items: colored metadata line with hyperlink, no timeline bar
+	if item.ItemType == ItemTypeInfo {
+		var indentBuf strings.Builder
+		for i := 0; i < item.Depth; i++ {
+			indentBuf.WriteString("  ")
+		}
+		indent := indentBuf.String() + "  "
+
+		isInfoHidden := m.hiddenState[item.ID]
+		isInfoDimmed := m.isFocused && !m.focusedIDs[item.ID]
+
+		var displayText string
+		if isInfoHidden || isInfoDimmed {
+			displayText = HiddenStyle.Render(item.Name)
+		} else if item.Hints.Category == "diff" {
+			displayText = renderDiffLabel(item.Name, item.Hints.URL)
+		} else {
+			infoStyle := infoColorStyle(item.Hints.Color)
+			displayText = hyperlink(item.Hints.URL, infoStyle.Render(item.Name))
+		}
+		label := FooterStyle.Render(indent) + displayText
+		labelWidth := lipgloss.Width(indent + item.Name)
+		pad := treeW - labelWidth
+		if pad < 0 {
+			pad = 0
+		}
+		midSep := SeparatorStyle.Render("│")
+		emptyTimeline := strings.Repeat(" ", timelineW)
+		if isSelected {
+			sel := SelectedStyle
+			selLabel := sel.Render(indent + item.Name)
+			selPad := SelectedBgStyle.Render(strings.Repeat(" ", pad))
+			selTimeline := SelectedBgStyle.Render(emptyTimeline)
+			return BorderStyle.Render("│") + selLabel + selPad + midSep + selTimeline + BorderStyle.Render("│")
+		}
+		return BorderStyle.Render("│") + label + strings.Repeat(" ", pad) + midSep + emptyTimeline + BorderStyle.Render("│")
+	}
+
 	// Build indent
 	// Steps align under their parent job icon, so use parent's depth
 	indentDepth := item.Depth
@@ -440,10 +495,19 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	isLogicalEnd := item.ID == m.logicalEndID
 	isAfterEnd := m.isAfterLogicalEnd(item)
 
+	// Check if item is hidden from chart (needed early for width calculation)
+	isHidden := m.hiddenState[item.ID]
+
 	// Add [end] badge for logical end marker
 	endBadgeWidth := 0
 	if isLogicalEnd {
 		endBadgeWidth = 6 // len(" [end]")
+	}
+
+	// Hidden badge width: " ⊘" = 2 chars
+	hiddenBadgeWidth := 0
+	if isHidden {
+		hiddenBadgeWidth = 2
 	}
 
 	// Build the name part
@@ -465,8 +529,8 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	}
 
 	// Calculate available space for name
-	// Format: indent + expand + space + icon + space + name + duration + badges + endBadge + space + status
-	usedWidth := indentWidth + expandWidth + 1 + iconWidth + 1 + durationWidth + badgesWidth + endBadgeWidth + 1 + statusWidth
+	// Format: indent + expand + space + icon + space + name + duration + badges + endBadge + hiddenBadge + space + status
+	usedWidth := indentWidth + expandWidth + 1 + iconWidth + 1 + durationWidth + badgesWidth + endBadgeWidth + hiddenBadgeWidth + 1 + statusWidth
 	maxNameWidth := treeW - usedWidth
 	if maxNameWidth < 5 {
 		maxNameWidth = 5
@@ -491,8 +555,8 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	}
 
 	// Calculate tree part width from known component widths (avoids issues with escape sequences)
-	// Format: indent + expand + space + icon + space + name + duration + badges + endBadge + space + status
-	treePartWidth := indentWidth + expandWidth + 1 + iconWidth + 1 + nameWidth + durationWidth + badgesWidth + endBadgeWidth + 1 + statusWidth
+	// Format: indent + expand + space + icon + space + name + duration + badges + endBadge + hiddenBadge + space + status
+	treePartWidth := indentWidth + expandWidth + 1 + iconWidth + 1 + nameWidth + durationWidth + badgesWidth + endBadgeWidth + hiddenBadgeWidth + 1 + statusWidth
 
 	// Pad tree part to fixed width
 	treePadding := treeW - treePartWidth
@@ -502,9 +566,6 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 
 	// Check if item has collapsed children (for sparkline markers)
 	hasCollapsedChildren := item.HasChildren && !m.expandedState[item.ID]
-
-	// Check if item is hidden from chart
-	isHidden := m.hiddenState[item.ID]
 
 	// Check if item is dimmed (not in focus set)
 	isDimmedByFocus := m.isFocused && !m.focusedIDs[item.ID]
@@ -550,6 +611,9 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 			treePart += LogicalEndBadgeStyle.Background(ColorSelectionBg).Render(" [end]")
 		}
 		treePart += sel.Render(" ") + getStyledStatusIconWithBg(item, ColorSelectionBg)
+		if isHidden {
+			treePart += HiddenBadgeStyle.Background(ColorSelectionBg).Render(" ⊘")
+		}
 	} else if isSearchMatch {
 		// Search match row: subtle purple-tinted background
 		row := SearchRowStyle
@@ -564,11 +628,23 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 			treePart += LogicalEndBadgeStyle.Background(ColorSearchRowBg).Render(" [end]")
 		}
 		treePart += row.Render(" ") + getStyledStatusIconWithBg(item, ColorSearchRowBg)
+		if isHidden {
+			treePart += HiddenBadgeStyle.Background(ColorSearchRowBg).Render(" ⊘")
+		}
 	} else if isDimmedByFocus {
 		// Not in focus: render entire line in dim style using plain text
 		// (avoids inner ANSI codes from indent guides/hyperlinks overriding the dim)
-		treePart = FocusDimStyle.Render(fmt.Sprintf("%s%s %s %s%s%s %s",
-			indentPlain, expandIndicator, icon, name, durationStr, badges, getStatusIcon(item)))
+		hiddenBadge := ""
+		if isHidden {
+			hiddenBadge = " ⊘"
+		}
+		treePart = FocusDimStyle.Render(fmt.Sprintf("%s%s %s %s%s%s %s%s",
+			indentPlain, expandIndicator, icon, name, durationStr, badges, getStatusIcon(item), hiddenBadge))
+	} else if isHidden {
+		// Hidden from chart: render in gray with ⊘ badge
+		treePart = HiddenStyle.Render(fmt.Sprintf("%s%s %s %s%s%s %s",
+			indentPlain, expandIndicator, icon, name, durationStr, badges, getStatusIcon(item))) +
+			HiddenBadgeStyle.Render(" ⊘")
 	} else if isAfterEnd {
 		// After logical end: render in gray (dimmed) using plain text to avoid inner ANSI overrides
 		treePart = HiddenStyle.Render(fmt.Sprintf("%s%s %s %s%s%s %s",
@@ -600,17 +676,17 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 		// After logical end: dimmed gray bar
 		timelineBar = RenderTimelineBarDimmed(item, m.chartStart, m.chartEnd, timelineW)
 	} else if isSelected && hasCollapsedChildren {
-		timelineBar = RenderTimelineBarWithChildrenSelected(item, m.chartStart, m.chartEnd, timelineW, "")
+		timelineBar = RenderTimelineBarWithChildrenSelected(item, m.chartStart, m.chartEnd, timelineW, "", m.hiddenState)
 	} else if isSelected {
 		// Render with dimmed colors and selection background
 		timelineBar = RenderTimelineBarSelected(item, m.chartStart, m.chartEnd, timelineW, "")
 	} else if isSearchMatch && hasCollapsedChildren {
-		timelineBar = renderTimelineBarWithChildrenBg(item, m.chartStart, m.chartEnd, timelineW, item.Hints.URL, SearchRowBgStyle)
+		timelineBar = renderTimelineBarWithChildrenBg(item, m.chartStart, m.chartEnd, timelineW, item.Hints.URL, SearchRowBgStyle, m.hiddenState)
 	} else if isSearchMatch {
 		// Search match: normal bar colors but with subtle row background on empty space
 		timelineBar = renderTimelineBarWithBg(item, m.chartStart, m.chartEnd, timelineW, item.Hints.URL, SearchRowBgStyle)
 	} else if hasCollapsedChildren {
-		timelineBar = RenderTimelineBarWithChildren(item, m.chartStart, m.chartEnd, timelineW, item.Hints.URL)
+		timelineBar = RenderTimelineBarWithChildren(item, m.chartStart, m.chartEnd, timelineW, item.Hints.URL, m.hiddenState)
 	} else {
 		// Normal: full colors, pass URL so bar is clickable
 		timelineBar = RenderTimelineBar(item, m.chartStart, m.chartEnd, timelineW, item.Hints.URL)
