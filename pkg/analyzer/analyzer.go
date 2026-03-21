@@ -531,9 +531,12 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 			if !a.Expired {
 				names = append(names, a.Name)
 				totalSize += a.SizeInBytes
+				artifactURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/artifacts/%d",
+					run.Repository.Owner.Login, run.Repository.Name, run.ID, a.ID)
 				wfAttrs = append(wfAttrs,
 					attribute.String(fmt.Sprintf("cicd.pipeline.artifact.%d.name", idx), a.Name),
 					attribute.String(fmt.Sprintf("cicd.pipeline.artifact.%d.size", idx), formatBytes(a.SizeInBytes)),
+					attribute.String(fmt.Sprintf("cicd.pipeline.artifact.%d.url", idx), artifactURL),
 				)
 				idx++
 			}
