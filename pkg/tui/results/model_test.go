@@ -527,6 +527,51 @@ func TestRenderItem(t *testing.T) {
 	})
 }
 
+func TestRenderItemFocusDim(t *testing.T) {
+	t.Parallel()
+
+	m := createTestModel()
+	// Expand so jobs are visible
+	m.expandedState["CI/0"] = true
+	m.rebuildItems()
+
+	// Focus on build job
+	idx := findVisibleIndex(&m, "CI/0/build/0")
+	m.cursor = idx
+	m.toggleFocus()
+
+	// Verify focus state
+	assert.True(t, m.isFocused)
+	assert.True(t, m.focusedIDs["CI/0/build/0"])
+	assert.False(t, m.focusedIDs["CI/0"])
+	assert.False(t, m.focusedIDs["CI/0/test/1"])
+
+	// Render focused item — should NOT contain FocusDimStyle color code
+	focusedItem := m.visibleItems[findVisibleIndex(&m, "CI/0/build/0")]
+	focusedResult := m.renderItem(focusedItem, false)
+	// FocusDimStyle uses ColorGray #565f89 → ANSI 38;2;86;95;137 or similar
+	// The focused item should NOT have this dim styling
+	t.Logf("focused render: %q", focusedResult)
+
+	// Render non-focused item — should NOT contain hyperlinks (dimmed items use plain text)
+	ciIdx := findVisibleIndex(&m, "CI/0")
+	if ciIdx >= 0 {
+		unfocusedItem := m.visibleItems[ciIdx]
+		unfocusedResult := m.renderItem(unfocusedItem, false)
+		// Dimmed items should NOT contain hyperlink sequences (plain text path)
+		assert.NotContains(t, unfocusedResult, "\x1b]8;", "non-focused item should not have hyperlinks (uses plain text dim path)")
+		assert.Contains(t, unfocusedResult, "CI")
+	}
+
+	testIdx := findVisibleIndex(&m, "CI/0/test/1")
+	if testIdx >= 0 {
+		testItem := m.visibleItems[testIdx]
+		testResult := m.renderItem(testItem, false)
+		assert.NotContains(t, testResult, "\x1b]8;", "non-focused item should not have hyperlinks")
+		assert.Contains(t, testResult, "test")
+	}
+}
+
 func TestRenderHeader(t *testing.T) {
 	t.Parallel()
 

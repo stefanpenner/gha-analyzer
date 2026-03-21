@@ -388,11 +388,14 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	}
 	// Build indent with vertical guides
 	var indentBuf strings.Builder
+	var indentPlainBuf strings.Builder
 	for i := 0; i < indentDepth; i++ {
 		indentBuf.WriteString(IndentGuideStyle.Render("│"))
 		indentBuf.WriteString(" ")
+		indentPlainBuf.WriteString("│ ")
 	}
 	indent := indentBuf.String()
+	indentPlain := indentPlainBuf.String()
 	indentWidth := indentDepth * 2
 
 	// Expand indicator
@@ -547,21 +550,14 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 		}
 		treePart += row.Render(" ") + getStyledStatusIconWithBg(item, ColorSearchRowBg)
 	} else if isDimmedByFocus {
-		// Not in focus: render very faintly
-		styledDuration := ""
-		if durationStr != "" {
-			styledDuration = FocusDimStyle.Render(durationStr)
-		}
-		treePart = FocusDimStyle.Render(fmt.Sprintf("%s%s %s %s", indent, expandIndicator, icon, displayName)) +
-			styledDuration + FocusDimStyle.Render(badges+" ") + FocusDimStyle.Render(getStatusIcon(item))
+		// Not in focus: render entire line in dim style using plain text
+		// (avoids inner ANSI codes from indent guides/hyperlinks overriding the dim)
+		treePart = FocusDimStyle.Render(fmt.Sprintf("%s%s %s %s%s%s %s",
+			indentPlain, expandIndicator, icon, name, durationStr, badges, getStatusIcon(item)))
 	} else if isAfterEnd {
-		// After logical end: render in gray (dimmed)
-		styledDuration := ""
-		if durationStr != "" {
-			styledDuration = HiddenStyle.Render(durationStr)
-		}
-		treePart = HiddenStyle.Render(fmt.Sprintf("%s%s %s %s", indent, expandIndicator, icon, displayName)) +
-			styledDuration + HiddenStyle.Render(badges+" ") + HiddenStyle.Render(getStatusIcon(item))
+		// After logical end: render in gray (dimmed) using plain text to avoid inner ANSI overrides
+		treePart = HiddenStyle.Render(fmt.Sprintf("%s%s %s %s%s%s %s",
+			indentPlain, expandIndicator, icon, name, durationStr, badges, getStatusIcon(item)))
 	} else {
 		styledDuration := ""
 		if durationStr != "" {
