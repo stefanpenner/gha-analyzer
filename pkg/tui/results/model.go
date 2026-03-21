@@ -1095,11 +1095,6 @@ func (m *Model) isAfterLogicalEnd(item TreeItem) bool {
 func (m *Model) rebuildVisibleItems() {
 	m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState, m.sortMode)
 
-	// Apply focus filter: only show focused items and their ancestors
-	if m.isFocused && m.focusedIDs != nil {
-		m.visibleItems = FilterVisibleItems(m.visibleItems, m.focusedIDs, nil)
-	}
-
 	// Apply search filter if active
 	if m.searchQuery != "" && (m.searchMatchIDs != nil || m.searchAncIDs != nil) {
 		m.visibleItems = FilterVisibleItems(m.visibleItems, m.searchMatchIDs, m.searchAncIDs)
