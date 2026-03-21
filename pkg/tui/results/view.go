@@ -798,40 +798,17 @@ func (m Model) renderFooter() string {
 		totalWidth = 80
 	}
 
-	// Mode pill (left side)
-	var modePill string
-	var modePlain string
-	if m.isSearching {
-		modePill = StatusModePill.
-			Foreground(ColorStatusMode).
-			Background(ColorStatusModeS).
-			Render("SEARCH")
-		modePlain = " SEARCH "
-	} else if m.showDetailModal {
-		modePill = StatusModePill.
-			Foreground(ColorStatusMode).
-			Background(ColorStatusModeI).
-			Render("INSPECT")
-		modePlain = " INSPECT "
-	} else if m.isFocused {
-		modePill = StatusModePill.
-			Foreground(ColorStatusMode).
-			Background(ColorPurple).
-			Render("FOCUS")
-		modePlain = " FOCUS "
-	} else {
-		modePill = StatusModePill.
-			Foreground(ColorStatusMode).
-			Background(ColorStatusModeN).
-			Render("TREE")
-		modePlain = " TREE "
-	}
-
 	sep := StatusSep.Render("│")
 
-	// Center segments: contextual info
+	// Left segments: contextual info
 	var segments []string
 	var segmentsPlain []string
+
+	if m.isFocused {
+		seg := StatusSegment.Foreground(ColorPurple).Render("focus")
+		segments = append(segments, seg)
+		segmentsPlain = append(segmentsPlain, " focus ")
+	}
 
 	if m.searchQuery != "" && !m.isSearching {
 		seg := StatusSegment.Foreground(ColorYellow).Render("/" + m.searchQuery)
@@ -869,13 +846,14 @@ func (m Model) renderFooter() string {
 	contentWidth := totalWidth - 2 // borders
 
 	// Assemble left part
-	left := modePill
-	leftPlain := modePlain
-	for _, seg := range segments {
-		left += sep + seg
-	}
-	for _, sp := range segmentsPlain {
-		leftPlain += "│" + sp
+	var left, leftPlain string
+	for i, seg := range segments {
+		if i > 0 {
+			left += sep
+			leftPlain += "│"
+		}
+		left += seg
+		leftPlain += segmentsPlain[i]
 	}
 
 	leftWidth := lipgloss.Width(leftPlain)
@@ -886,7 +864,7 @@ func (m Model) renderFooter() string {
 		midPad = 1
 	}
 
-	statusLine := BorderStyle.Render("│") + left + strings.Repeat(" ", midPad) + helpHint + BorderStyle.Render("│")
+	statusLine := BorderStyle.Render("│") + " " + left + strings.Repeat(" ", midPad) + helpHint + BorderStyle.Render("│")
 
 	// Breadcrumb line above status (only in normal mode with items)
 	breadcrumb := ""
