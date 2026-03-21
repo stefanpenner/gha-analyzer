@@ -546,8 +546,16 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 			treePart += LogicalEndBadgeStyle.Background(ColorSearchRowBg).Render(" [end]")
 		}
 		treePart += row.Render(" ") + getStyledStatusIconWithBg(item, ColorSearchRowBg)
-	} else if isAfterEnd || isDimmedByFocus {
-		// After logical end or not in focus: render in gray (dimmed)
+	} else if isDimmedByFocus {
+		// Not in focus: render very faintly
+		styledDuration := ""
+		if durationStr != "" {
+			styledDuration = FocusDimStyle.Render(durationStr)
+		}
+		treePart = FocusDimStyle.Render(fmt.Sprintf("%s%s %s %s", indent, expandIndicator, icon, displayName)) +
+			styledDuration + FocusDimStyle.Render(badges+" ") + FocusDimStyle.Render(getStatusIcon(item))
+	} else if isAfterEnd {
+		// After logical end: render in gray (dimmed)
 		styledDuration := ""
 		if durationStr != "" {
 			styledDuration = HiddenStyle.Render(durationStr)

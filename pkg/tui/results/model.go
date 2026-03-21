@@ -1431,7 +1431,7 @@ func (m *Model) toggleFocus() {
 			m.preFocusHiddenState[k] = v
 		}
 
-		// Get selected items
+		// Get selected items and their descendants (but not ancestors)
 		start, end := m.getSelectionRange()
 		selectedIDs := make(map[string]bool)
 		for i := start; i <= end && i < len(m.visibleItems); i++ {
@@ -1439,8 +1439,6 @@ func (m *Model) toggleFocus() {
 			selectedIDs[item.ID] = true
 			// Include all descendants (children, grandchildren, etc.)
 			m.collectDescendantIDs(item.ID, selectedIDs)
-			// Include ancestors so parent chain is also focused
-			m.collectAncestorIDs(item.ParentID, selectedIDs)
 		}
 
 		// Track focused IDs for dimming (items not in this set get grayed out)
