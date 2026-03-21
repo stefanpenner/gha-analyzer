@@ -19,14 +19,8 @@ type LintResult struct {
 func LintSpans(spans []SpanData) []LintResult {
 	var results []LintResult
 
-	// Track aggregate issues
-	scopeCounts := make(map[string]int)
-
 	for _, span := range spans {
 		results = append(results, lintSpan(span)...)
-		if span.ScopeName != "" {
-			scopeCounts[span.ScopeName]++
-		}
 	}
 
 	// Aggregate lint: check for missing instrumentation
@@ -226,7 +220,7 @@ func FormatLintResults(results []LintResult) string {
 	if infos > 0 {
 		parts = append(parts, fmt.Sprintf("%d info", infos))
 	}
-	b.WriteString(fmt.Sprintf("Semconv Lint: %d issues found (%s)\n\n", len(results), strings.Join(parts, ", ")))
+	fmt.Fprintf(&b, "Semconv Lint: %d issues found (%s)\n\n", len(results), strings.Join(parts, ", "))
 
 	// Deduplicate: group identical messages and count occurrences
 	type lintKey struct {
@@ -255,9 +249,9 @@ func FormatLintResults(results []LintResult) string {
 		if count > 1 {
 			countStr = fmt.Sprintf(" (×%d)", count)
 		}
-		b.WriteString(fmt.Sprintf("  %s %s%s\n", icon, key.Message, countStr))
+		fmt.Fprintf(&b, "  %s %s%s\n", icon, key.Message, countStr)
 		if key.Suggestion != "" {
-			b.WriteString(fmt.Sprintf("    → %s\n", key.Suggestion))
+			fmt.Fprintf(&b, "    → %s\n", key.Suggestion)
 		}
 	}
 

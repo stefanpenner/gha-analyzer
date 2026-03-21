@@ -46,7 +46,7 @@ func (e *CICDEnricher) Enrich(name string, attrs map[string]string, isZeroDurati
 
 		// Distinguish pipeline types
 		if pipelineType := attrs["cicd.pipeline.type"]; pipelineType != "" {
-			h.Icon = pipelineIconFromType(pipelineType)
+			h.Icon = cicdIconFromType(pipelineType, "▶ ")
 		}
 
 		// Extract run ID for correlation
@@ -61,7 +61,7 @@ func (e *CICDEnricher) Enrich(name string, attrs map[string]string, isZeroDurati
 	// Task-level span (intermediate)
 	if taskName != "" {
 		h.Category = "task"
-		h.Icon = taskIconFromType(taskType)
+		h.Icon = cicdIconFromType(taskType, "⚙ ")
 		h.Color = "blue"
 
 		// Extract run ID for correlation
@@ -76,9 +76,9 @@ func (e *CICDEnricher) Enrich(name string, attrs map[string]string, isZeroDurati
 	return SpanHints{}
 }
 
-// pipelineIconFromType returns an icon based on the CI/CD pipeline type.
-func pipelineIconFromType(pipelineType string) string {
-	switch pipelineType {
+// cicdIconFromType returns an icon based on the CI/CD pipeline or task type.
+func cicdIconFromType(cicdType, fallback string) string {
+	switch cicdType {
 	case "deploy":
 		return "🚀 "
 	case "build":
@@ -86,21 +86,7 @@ func pipelineIconFromType(pipelineType string) string {
 	case "test":
 		return "🧪 "
 	default:
-		return "▶ "
-	}
-}
-
-// taskIconFromType returns an icon based on the CI/CD task type.
-func taskIconFromType(taskType string) string {
-	switch taskType {
-	case "build":
-		return "🔨 "
-	case "test":
-		return "🧪 "
-	case "deploy":
-		return "🚀 "
-	default:
-		return "⚙ "
+		return fallback
 	}
 }
 

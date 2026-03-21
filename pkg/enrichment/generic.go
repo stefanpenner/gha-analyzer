@@ -101,9 +101,9 @@ func (e *GenericEnricher) Enrich(name string, attrs map[string]string, isZeroDur
 			dbSystem := attrs["db.system"]
 			h.Detail = dbSystem
 			if stmt := attrs["db.statement"]; stmt != "" {
-				// Truncate long statements
-				if len(stmt) > 80 {
-					stmt = stmt[:77] + "..."
+				const maxLen = 80
+				if len(stmt) > maxLen {
+					stmt = stmt[:maxLen-3] + "..."
 				}
 				h.Detail = dbSystem + ": " + stmt
 			} else if op := attrs["db.operation"]; op != "" {
