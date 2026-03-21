@@ -1090,16 +1090,35 @@ func (m *Model) isAfterLogicalEnd(item TreeItem) bool {
 	return item.StartTime.After(m.logicalEndTime)
 }
 
-// rebuildItems rebuilds the flattened item list based on expanded state
-func (m *Model) rebuildItems() {
-	m.treeItems = BuildTreeItems(m.roots, m.expandedState, m.inputURLs)
-	m.spanIndex = BuildSpanIndex(m.treeItems)
+// rebuildVisibleItems re-flattens and re-filters the visible item list
+// without rebuilding the tree from scratch.
+func (m *Model) rebuildVisibleItems() {
 	m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState, m.sortMode)
+
+	// Apply focus filter: only show focused items and their ancestors
+	if m.isFocused && m.focusedIDs != nil {
+		m.visibleItems = FilterVisibleItems(m.visibleItems, m.focusedIDs, nil)
+	}
 
 	// Apply search filter if active
 	if m.searchQuery != "" && (m.searchMatchIDs != nil || m.searchAncIDs != nil) {
 		m.visibleItems = FilterVisibleItems(m.visibleItems, m.searchMatchIDs, m.searchAncIDs)
 	}
+
+	// Ensure cursor is valid
+	if m.cursor >= len(m.visibleItems) {
+		m.cursor = len(m.visibleItems) - 1
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+}
+
+// rebuildItems rebuilds the flattened item list based on expanded state
+func (m *Model) rebuildItems() {
+	m.treeItems = BuildTreeItems(m.roots, m.expandedState, m.inputURLs)
+	m.spanIndex = BuildSpanIndex(m.treeItems)
+	m.rebuildVisibleItems()
 
 	// Ensure cursor is valid
 	if m.cursor >= len(m.visibleItems) {
@@ -1447,6 +1466,7 @@ func (m *Model) toggleFocus() {
 		hideAll(m.treeItems)
 		m.isFocused = true
 	}
+	m.rebuildVisibleItems()
 	m.recalculateChartBounds()
 }
 
