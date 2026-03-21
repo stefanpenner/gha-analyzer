@@ -71,11 +71,9 @@ func GetCharWidth(char string) int {
 	switch char {
 	case "📋", "⚙️", "❌":
 		return 2
-	case "◆", "✓", "✗", "▲", "|", "↳", "◷", "○", "▼", "▶", " ", "●":
+	case "◆", "✓", "✗", "▲", "|", "↳", "◷", "○", "▼", "▶", " ", "●", "◇", "◈", "★":
 		return 1
-	case "◆ ", "▲ ", "• ", "● ":
-		return 2
-	case "🔒", "🔥":
+	case "◆ ", "▲ ", "• ", "● ", "◇ ", "◈ ":
 		return 2
 	default:
 		return lipgloss.Width(char)

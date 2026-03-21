@@ -127,7 +127,7 @@ func BuildTreeItems(roots []*analyzer.TreeNode, expandedState map[string]bool, i
 			}
 		} else if !strings.HasPrefix(inputURL, "http") {
 			// Not a URL — treat as a trace file name
-			displayName = fmt.Sprintf("📄 %s", inputURL)
+			displayName = fmt.Sprintf("◇ %s", inputURL)
 		}
 
 		groupID := fmt.Sprintf("url-group/%d", urlIdx)
@@ -331,7 +331,7 @@ func convertNode(node *analyzer.TreeNode, parentID string, index, depth int, exp
 			Children:    groupChildren,
 			Hints: enrichment.SpanHints{
 				Category: "artifact",
-				Icon:     "📦 ",
+				Icon:     "◈ ",
 				BarChar:  "█",
 				Color:    "blue",
 			},

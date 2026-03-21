@@ -2,39 +2,53 @@ package results
 
 import "github.com/charmbracelet/lipgloss"
 
-// Color palette
+// Tokyo Night inspired color palette
 var (
-	ColorPurple   = lipgloss.Color("#7D56F4")
-	ColorGreen    = lipgloss.Color("#25A065")
-	ColorBlue     = lipgloss.Color("#4285F4")
-	ColorRed      = lipgloss.Color("#E05252")
-	ColorYellow   = lipgloss.Color("#E5C07B")
-	ColorGray     = lipgloss.Color("#626262")
-	ColorGrayDim  = lipgloss.Color("#404040")
-	ColorWhite    = lipgloss.Color("#FFFFFF")
-	ColorOffWhite    = lipgloss.Color("#D0D0D0")
-	ColorMagenta     = lipgloss.Color("#C678DD")
-	ColorSelectionBg = lipgloss.Color("#2D3B4D")
+	ColorPurple   = lipgloss.Color("#bb9af7")
+	ColorGreen    = lipgloss.Color("#9ece6a")
+	ColorBlue     = lipgloss.Color("#7aa2f7")
+	ColorRed      = lipgloss.Color("#f7768e")
+	ColorYellow   = lipgloss.Color("#e0af68")
+	ColorGray     = lipgloss.Color("#565f89")
+	ColorGrayDim  = lipgloss.Color("#3b4261")
+	ColorWhite    = lipgloss.Color("#c0caf5")
+	ColorOffWhite    = lipgloss.Color("#a9b1d6")
+	ColorMagenta     = lipgloss.Color("#bb9af7")
+	ColorSelectionBg = lipgloss.Color("#283457")
 
-	// Dimmed colors for selected state (darker shades that still show status)
-	ColorGreenDim  = lipgloss.Color("#1A7048")
-	ColorBlueDim   = lipgloss.Color("#2E5EA8")
-	ColorRedDim    = lipgloss.Color("#9E3A3A")
-	ColorYellowDim = lipgloss.Color("#A08856")
+	// Dimmed colors for selected state
+	ColorGreenDim  = lipgloss.Color("#5a7a3a")
+	ColorBlueDim   = lipgloss.Color("#4a6199")
+	ColorRedDim    = lipgloss.Color("#994455")
+	ColorYellowDim = lipgloss.Color("#8a6a3a")
 
 	// Subtle background for duration labels inside bars
-	ColorBarLabelBg = lipgloss.Color("#1A1A2A")
+	ColorBarLabelBg = lipgloss.Color("#1a1b26")
 
-	// Search match row background (subtle purple tint)
-	ColorSearchRowBg  = lipgloss.Color("#1E1A2E")
-	ColorSearchCharBg = lipgloss.Color("#2E2545")
+	// Search match backgrounds
+	ColorSearchRowBg  = lipgloss.Color("#1e2030")
+	ColorSearchCharBg = lipgloss.Color("#2e2a50")
+
+	// Indent guide color
+	ColorIndentGuide = lipgloss.Color("#292e42")
+
+	// Statusline segment colors
+	ColorStatusMode  = lipgloss.Color("#1a1b26") // bg for mode pill
+	ColorStatusModeN = lipgloss.Color("#7aa2f7") // NORMAL mode fg
+	ColorStatusModeS = lipgloss.Color("#e0af68") // SEARCH mode fg
+	ColorStatusModeI = lipgloss.Color("#bb9af7") // INFO/modal mode fg
+
+	// Surface colors for layered backgrounds
+	ColorSurface0 = lipgloss.Color("#1a1b26") // deepest
+	ColorSurface1 = lipgloss.Color("#24283b") // main bg
+	ColorSurface2 = lipgloss.Color("#292e42") // raised
 )
 
 // Header styles
 var (
 	HeaderStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(ColorPurple)
+			Foreground(ColorBlue)
 
 	HeaderCountStyle = lipgloss.NewStyle().
 				Foreground(ColorGray)
@@ -43,7 +57,7 @@ var (
 			Foreground(ColorGray)
 
 	BorderStyle = lipgloss.NewStyle().
-			Foreground(ColorGray)
+			Foreground(ColorGrayDim)
 
 	SeparatorStyle = lipgloss.NewStyle().
 			Foreground(ColorGrayDim)
@@ -56,12 +70,10 @@ var (
 			Foreground(ColorWhite).
 			Background(ColorSelectionBg)
 
-	// HiddenSelectedStyle combines hidden (gray text) with selection background
 	HiddenSelectedStyle = lipgloss.NewStyle().
 				Foreground(ColorGray).
 				Background(ColorSelectionBg)
 
-	// SelectedBgStyle applies only the selection background (no foreground override)
 	SelectedBgStyle = lipgloss.NewStyle().
 			Background(ColorSelectionBg)
 
@@ -71,12 +83,16 @@ var (
 			Foreground(ColorGray)
 
 	WorkflowStyle = lipgloss.NewStyle().
-			Foreground(ColorPurple)
+			Foreground(ColorBlue)
 
 	GroupStyle = lipgloss.NewStyle().
 			Foreground(ColorBlue)
 
 	JobStyle = lipgloss.NewStyle()
+
+	// Indent guide style
+	IndentGuideStyle = lipgloss.NewStyle().
+				Foreground(ColorIndentGuide)
 )
 
 // Status styles
@@ -118,7 +134,7 @@ var (
 			Foreground(ColorGray)
 )
 
-// Timeline bar colors for collapsed child markers (dimmed to not compete with parent bar)
+// Timeline bar colors for collapsed child markers
 var (
 	BarChildSuccessStyle = lipgloss.NewStyle().
 				Foreground(ColorGreenDim)
@@ -129,7 +145,6 @@ var (
 	BarChildDefaultStyle = lipgloss.NewStyle().
 				Foreground(ColorGrayDim)
 
-	// Selected variants (dimmed + selection background)
 	BarChildSuccessSelectedStyle = lipgloss.NewStyle().
 					Foreground(ColorGreenDim).
 					Background(ColorSelectionBg)
@@ -143,7 +158,7 @@ var (
 					Background(ColorSelectionBg)
 )
 
-// Timeline bar colors for selected state (dimmed but still show status, with selection background)
+// Timeline bar colors for selected state
 var (
 	BarSuccessSelectedStyle = lipgloss.NewStyle().
 				Foreground(ColorGreenDim).
@@ -180,21 +195,17 @@ var (
 	SearchBarStyle = lipgloss.NewStyle().
 			Foreground(ColorWhite)
 
-	// SearchRowStyle is the subtle background for the entire matching row
 	SearchRowStyle = lipgloss.NewStyle().
 			Background(ColorSearchRowBg)
 
-	// SearchRowBgStyle applies only the row background (no foreground override)
 	SearchRowBgStyle = lipgloss.NewStyle().
 				Background(ColorSearchRowBg)
 
-	// SearchCharStyle highlights the exact matching characters (stronger)
 	SearchCharStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(ColorPurple).
 			Background(ColorSearchCharBg)
 
-	// SearchCharSelectedStyle highlights matching chars when row is also selected
 	SearchCharSelectedStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(ColorPurple).
@@ -208,12 +219,12 @@ var (
 var (
 	ModalStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(ColorPurple).
+			BorderForeground(ColorGrayDim).
 			Padding(1, 2)
 
 	ModalTitleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(ColorPurple)
+			Foreground(ColorBlue)
 
 	ModalLabelStyle = lipgloss.NewStyle().
 			Foreground(ColorGray).
@@ -221,4 +232,39 @@ var (
 
 	ModalValueStyle = lipgloss.NewStyle().
 			Foreground(ColorWhite)
+
+	// Floating title badge rendered inline on modal border
+	ModalFloatingTitle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(ColorSurface0).
+				Background(ColorBlue).
+				Padding(0, 1)
+)
+
+// Statusline styles (LazyVim-style mode pill + segments)
+var (
+	StatusModePill = lipgloss.NewStyle().
+			Bold(true).
+			Padding(0, 1)
+
+	StatusSegment = lipgloss.NewStyle().
+			Foreground(ColorOffWhite).
+			Padding(0, 1)
+
+	StatusSegmentDim = lipgloss.NewStyle().
+				Foreground(ColorGray).
+				Padding(0, 1)
+
+	StatusSep = lipgloss.NewStyle().
+			Foreground(ColorGrayDim)
+
+	// Breadcrumb style
+	BreadcrumbStyle = lipgloss.NewStyle().
+			Foreground(ColorGray)
+
+	BreadcrumbActiveStyle = lipgloss.NewStyle().
+				Foreground(ColorBlue)
+
+	BreadcrumbSepStyle = lipgloss.NewStyle().
+				Foreground(ColorGrayDim)
 )

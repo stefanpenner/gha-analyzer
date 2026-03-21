@@ -82,6 +82,7 @@ type Model struct {
 	resultCh      chan ReloadResultMsg
 	// Focus state
 	isFocused           bool
+	focusedIDs          map[string]bool // IDs of items in focus (for dimming non-focused)
 	preFocusHiddenState map[string]bool
 	// Spans for export
 	spans []trace.ReadOnlySpan
@@ -1407,6 +1408,7 @@ func (m *Model) toggleFocus() {
 		// Unfocus: restore the previous hidden state
 		m.hiddenState = m.preFocusHiddenState
 		m.preFocusHiddenState = nil
+		m.focusedIDs = nil
 		m.isFocused = false
 	} else {
 		// Focus: save current hidden state and hide everything except selection
@@ -1423,9 +1425,14 @@ func (m *Model) toggleFocus() {
 			selectedIDs[item.ID] = true
 			// Include all descendants (children, grandchildren, etc.)
 			m.collectDescendantIDs(item.ID, selectedIDs)
+			// Include ancestors so parent chain is also focused
+			m.collectAncestorIDs(item.ParentID, selectedIDs)
 		}
 
-		// Hide everything except selected items and their descendants
+		// Track focused IDs for dimming (items not in this set get grayed out)
+		m.focusedIDs = selectedIDs
+
+		// Hide non-focused items from the timeline chart
 		var hideAll func(items []*TreeItem)
 		hideAll = func(items []*TreeItem) {
 			for _, item := range items {

@@ -13,14 +13,14 @@ import (
 var (
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#7D56F4"))
+			Foreground(lipgloss.Color("#7aa2f7"))
 	infoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#626262"))
+			Foreground(lipgloss.Color("#565f89"))
 	urlStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#25A065")).
+			Foreground(lipgloss.Color("#9ece6a")).
 			Underline(true)
 	phaseStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#4285F4"))
+			Foreground(lipgloss.Color("#7aa2f7"))
 )
 
 type Progress struct {

@@ -20,6 +20,7 @@ go_library(
         "@com_github_charmbracelet_bubbles//spinner",
         "@com_github_charmbracelet_bubbletea//:bubbletea",
         "@com_github_charmbracelet_lipgloss//:lipgloss",
+        "@com_github_charmbracelet_x_ansi//:ansi",
         "@io_opentelemetry_go_otel_sdk//trace",
     ],
 )

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 )
 
@@ -94,8 +95,14 @@ func (m Model) renderHeader() string {
 	numStyle := lipgloss.NewStyle().Foreground(ColorBlue)
 	sep := HeaderCountStyle.Render(" • ")
 
-	// Build borders
-	topBorder := BorderStyle.Render("╭" + strings.Repeat("─", max(0, totalWidth-2)) + "╮")
+	// Build top border with embedded title badge
+	titleBadge := ModalFloatingTitle.Render(" otel-analyzer ")
+	titleBadgeWidth := lipgloss.Width(titleBadge)
+	leftPad := 2 // chars after "╭"
+	rightPad := max(1, totalWidth-2-leftPad-titleBadgeWidth)
+	topBorder := BorderStyle.Render("╭"+strings.Repeat("─", leftPad)) +
+		titleBadge +
+		BorderStyle.Render(strings.Repeat("─", rightPad)+"╮")
 
 	// Helper to build a line with left content and optional right content
 	buildLine := func(left, leftPlain, right, rightPlain string) string {
@@ -118,8 +125,7 @@ func (m Model) renderHeader() string {
 		return BorderStyle.Render("│") + " " + content + strings.Repeat(" ", pad) + " " + BorderStyle.Render("│")
 	}
 
-	// Line 1: Title
-	line1 := buildLeftLine(HeaderStyle.Render("Trace Analyzer"), "Trace Analyzer")
+	// Line 1: Success rates (was line 2)
 
 	// Calculate rates
 	successRate := float64(0)
@@ -143,7 +149,7 @@ func (m Model) renderHeader() string {
 		sep + numStyle.Render(fmt.Sprintf("%d", m.displayedStepCount)) + HeaderCountStyle.Render(" leaves")
 	rightPlain := fmt.Sprintf("%d traces • %d spans • %d leaves", m.displayedSummary.TotalRuns, m.displayedSummary.TotalJobs, m.displayedStepCount)
 
-	line2 := buildLine(leftStyled, leftPlain, rightStyled, rightPlain)
+	line1 := buildLine(leftStyled, leftPlain, rightStyled, rightPlain)
 
 	// Line 3: Times (left) + Concurrency (right)
 	wallTime := utils.HumanizeTime(float64(m.displayedWallTimeMs) / 1000)
@@ -167,7 +173,7 @@ func (m Model) renderHeader() string {
 	rightStyled3 := HeaderCountStyle.Render("Concurrency: ") + numStyle.Render(fmt.Sprintf("%d", m.displayedSummary.MaxConcurrency))
 	rightPlain3 := fmt.Sprintf("Concurrency: %d", m.displayedSummary.MaxConcurrency)
 
-	line3 := buildLine(leftStyled3, leftPlain3, rightStyled3, rightPlain3)
+	line2 := buildLine(leftStyled3, leftPlain3, rightStyled3, rightPlain3)
 
 	// Line 4: Queue + Retry + Billable (conditional)
 	line4 := ""
@@ -220,7 +226,7 @@ func (m Model) renderHeader() string {
 		lineURL += "\n" + buildLeftLine(linkedURL, urlText)
 	}
 
-	return topBorder + "\n" + line1 + "\n" + line2 + "\n" + line3 + line4 + lineURL
+	return topBorder + "\n" + line1 + "\n" + line2 + line4 + lineURL
 }
 
 // renderTimeAxis renders the time axis row that sits above the timeline
@@ -380,7 +386,13 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	if item.ItemType == ItemTypeLeaf && indentDepth > 0 {
 		indentDepth = indentDepth - 1
 	}
-	indent := strings.Repeat("  ", indentDepth)
+	// Build indent with vertical guides
+	var indentBuf strings.Builder
+	for i := 0; i < indentDepth; i++ {
+		indentBuf.WriteString(IndentGuideStyle.Render("│"))
+		indentBuf.WriteString(" ")
+	}
+	indent := indentBuf.String()
 	indentWidth := indentDepth * 2
 
 	// Expand indicator
@@ -476,6 +488,9 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	// Check if item is hidden from chart
 	isHidden := m.hiddenState[item.ID]
 
+	// Check if item is dimmed (not in focus set)
+	isDimmedByFocus := m.isFocused && !m.focusedIDs[item.ID]
+
 	// Check if item is a search match for two-tone highlighting
 	isSearchMatch := m.searchMatchIDs[item.ID]
 
@@ -531,8 +546,8 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 			treePart += LogicalEndBadgeStyle.Background(ColorSearchRowBg).Render(" [end]")
 		}
 		treePart += row.Render(" ") + getStyledStatusIconWithBg(item, ColorSearchRowBg)
-	} else if isAfterEnd {
-		// After logical end: render in gray (dimmed)
+	} else if isAfterEnd || isDimmedByFocus {
+		// After logical end or not in focus: render in gray (dimmed)
 		styledDuration := ""
 		if durationStr != "" {
 			styledDuration = HiddenStyle.Render(durationStr)
@@ -619,12 +634,12 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 func getItemIcon(item TreeItem) string {
 	switch item.ItemType {
 	case ItemTypeURLGroup:
-		return "🔗" // width 2
+		return "◆ " // width 2
 	case ItemTypeActivityGroup:
 		if item.Hints.Icon != "" {
 			return item.Hints.Icon
 		}
-		return "📌" // width 2
+		return "◇ " // width 2
 	default:
 		if item.Hints.Icon != "" {
 			return item.Hints.Icon
@@ -686,10 +701,10 @@ func getStyledStatusIconWithBg(item TreeItem, bg lipgloss.Color) string {
 func getBadges(item TreeItem) string {
 	badges := ""
 	if item.Hints.IsRequired {
-		badges += " 🔒"
+		badges += " ●"
 	}
 	if item.IsBottleneck {
-		badges += " 🔥"
+		badges += " ★"
 	}
 	return badges
 }
@@ -704,18 +719,137 @@ func getBadgesWidth(badges string) int {
 	return width
 }
 
-// renderFooter renders the help footer with context-sensitive keybindings
+// renderBreadcrumb renders a path breadcrumb for the selected item
+func (m Model) renderBreadcrumb(totalWidth int) string {
+	if len(m.visibleItems) == 0 || m.cursor >= len(m.visibleItems) {
+		return ""
+	}
+
+	item := m.visibleItems[m.cursor]
+
+	// Build path from item's parent chain
+	var parts []string
+	parts = append(parts, item.DisplayName)
+
+	// Walk up parent IDs to build breadcrumb
+	current := item.ParentID
+	seen := make(map[string]bool)
+	for current != "" && !seen[current] {
+		seen[current] = true
+		found := false
+		for _, vi := range m.visibleItems {
+			if vi.ID == current {
+				parts = append([]string{vi.DisplayName}, parts...)
+				current = vi.ParentID
+				found = true
+				break
+			}
+		}
+		if !found {
+			break
+		}
+	}
+
+	// Render breadcrumb
+	contentWidth := totalWidth - 4 // borders + padding
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
+
+	var breadcrumb strings.Builder
+	for i, part := range parts {
+		if i > 0 {
+			breadcrumb.WriteString(BreadcrumbSepStyle.Render(" › "))
+		}
+		if i == len(parts)-1 {
+			breadcrumb.WriteString(BreadcrumbActiveStyle.Render(part))
+		} else {
+			breadcrumb.WriteString(BreadcrumbStyle.Render(part))
+		}
+	}
+
+	bc := breadcrumb.String()
+	bcWidth := lipgloss.Width(bc)
+	if bcWidth > contentWidth {
+		// Truncate from the left, keeping the rightmost parts
+		bc = BreadcrumbSepStyle.Render("…› ") + BreadcrumbActiveStyle.Render(parts[len(parts)-1])
+	}
+
+	pad := contentWidth - lipgloss.Width(bc)
+	if pad < 0 {
+		pad = 0
+	}
+
+	return BorderStyle.Render("│") + " " + bc + strings.Repeat(" ", pad) + " " + BorderStyle.Render("│")
+}
+
+// renderFooter renders a LazyVim-style statusline with mode pill and segments
 func (m Model) renderFooter() string {
 	width := m.width
 	if width < 40 {
 		width = 40
 	}
-	totalWidth := width - horizontalPad*2 // account for left/right padding
+	totalWidth := width - horizontalPad*2
 	if totalWidth < 1 {
 		totalWidth = 80
 	}
 
-	// Determine help mode
+	// Mode pill (left side)
+	var modePill string
+	var modePlain string
+	if m.isSearching {
+		modePill = StatusModePill.
+			Foreground(ColorStatusMode).
+			Background(ColorStatusModeS).
+			Render("SEARCH")
+		modePlain = " SEARCH "
+	} else if m.showDetailModal {
+		modePill = StatusModePill.
+			Foreground(ColorStatusMode).
+			Background(ColorStatusModeI).
+			Render("INSPECT")
+		modePlain = " INSPECT "
+	} else if m.isFocused {
+		modePill = StatusModePill.
+			Foreground(ColorStatusMode).
+			Background(ColorPurple).
+			Render("FOCUS")
+		modePlain = " FOCUS "
+	} else {
+		modePill = StatusModePill.
+			Foreground(ColorStatusMode).
+			Background(ColorStatusModeN).
+			Render("TREE")
+		modePlain = " TREE "
+	}
+
+	sep := StatusSep.Render("│")
+
+	// Center segments: contextual info
+	var segments []string
+	var segmentsPlain []string
+
+	if m.searchQuery != "" && !m.isSearching {
+		seg := StatusSegment.Foreground(ColorYellow).Render("/" + m.searchQuery)
+		segments = append(segments, seg)
+		segmentsPlain = append(segmentsPlain, " /"+m.searchQuery+" ")
+	}
+
+	if m.sortMode != SortByStartTime {
+		seg := StatusSegment.Render("sort:" + m.sortMode.String())
+		segments = append(segments, seg)
+		segmentsPlain = append(segmentsPlain, " sort:"+m.sortMode.String()+" ")
+	}
+
+	if m.treeWidth != defaultTreeWidth {
+		seg := StatusSegmentDim.Render(fmt.Sprintf("tree:%d", m.treeWidth))
+		segments = append(segments, seg)
+		segmentsPlain = append(segmentsPlain, fmt.Sprintf(" tree:%d ", m.treeWidth))
+	}
+
+	// Right side: help hint
+	var helpHint string
+	var helpHintPlain string
 	mode := HelpModeNormal
 	if m.isSearching {
 		mode = HelpModeSearch
@@ -724,48 +858,41 @@ func (m Model) renderFooter() string {
 	} else if m.showDetailModal {
 		mode = HelpModeModal
 	}
+	helpHint = StatusSegmentDim.Render(m.keys.ShortHelpForMode(mode))
+	helpHintPlain = " " + m.keys.ShortHelpForMode(mode) + " "
 
-	// Build left (help) and right (status indicators) content
-	help := m.keys.ShortHelpForMode(mode)
+	// Build the line
+	contentWidth := totalWidth - 2 // borders
 
-	// Build right-side status indicators
-	var indicators []string
-	if m.sortMode != SortByStartTime {
-		indicators = append(indicators, "sort:"+m.sortMode.String())
+	// Assemble left part
+	left := modePill
+	leftPlain := modePlain
+	for _, seg := range segments {
+		left += sep + seg
 	}
-	if m.treeWidth != defaultTreeWidth {
-		indicators = append(indicators, fmt.Sprintf("tree:%d", m.treeWidth))
-	}
-
-
-	right := ""
-	rightPlain := ""
-	if len(indicators) > 0 {
-		rightPlain = " " + strings.Join(indicators, " • ") + " "
-		right = " " + FooterStyle.Render(strings.Join(indicators, " • ")) + " "
-	}
-	rightWidth := lipgloss.Width(rightPlain)
-
-	helpWidth := lipgloss.Width(help)
-	contentWidth := totalWidth - 2 // account for "│" prefix and "│" suffix
-
-	// Center help text in remaining space
-	availableForHelp := contentWidth - rightWidth
-	leftPadding := (availableForHelp - helpWidth) / 2
-	if leftPadding < 0 {
-		leftPadding = 0
-	}
-	midPadding := availableForHelp - helpWidth - leftPadding
-	if midPadding < 0 {
-		midPadding = 0
+	for _, sp := range segmentsPlain {
+		leftPlain += "│" + sp
 	}
 
-	helpLine := BorderStyle.Render("│") + strings.Repeat(" ", leftPadding) + FooterStyle.Render(help) + strings.Repeat(" ", midPadding) + right + BorderStyle.Render("│")
+	leftWidth := lipgloss.Width(leftPlain)
+	rightWidth := lipgloss.Width(helpHintPlain)
 
-	// Bottom border is a simple continuous line with rounded corners
+	midPad := contentWidth - leftWidth - rightWidth
+	if midPad < 1 {
+		midPad = 1
+	}
+
+	statusLine := BorderStyle.Render("│") + left + strings.Repeat(" ", midPad) + helpHint + BorderStyle.Render("│")
+
+	// Breadcrumb line above status (only in normal mode with items)
+	breadcrumb := ""
+	if !m.isSearching && !m.showDetailModal && len(m.visibleItems) > 0 {
+		breadcrumb = m.renderBreadcrumb(totalWidth) + "\n"
+	}
+
 	bottomBorder := BorderStyle.Render("╰" + strings.Repeat("─", max(0, totalWidth-2)) + "╯")
 
-	return helpLine + "\n" + bottomBorder
+	return breadcrumb + statusLine + "\n" + bottomBorder
 }
 
 func max(a, b int) int {
@@ -838,8 +965,7 @@ func (m Model) renderHelpModal() string {
 	var b strings.Builder
 
 	// Title
-	b.WriteString(ModalTitleStyle.Render("Keyboard Shortcuts"))
-	b.WriteString("\n\n")
+	// Title is rendered as floating badge on border
 
 	// Key bindings
 	keyStyle := lipgloss.NewStyle().Foreground(ColorBlue).Width(12)
@@ -854,7 +980,8 @@ func (m Model) renderHelpModal() string {
 	b.WriteString("\n")
 	b.WriteString(FooterStyle.Render("Press Esc or ? to close"))
 
-	return ModalStyle.Render(b.String())
+	rendered := ModalStyle.Render(b.String())
+	return overlayFloatingTitle(rendered, " Keyboard Shortcuts ")
 }
 
 // renderDetailModal renders the detail modal for an item
@@ -872,9 +999,7 @@ func (m Model) renderDetailModal(maxHeight, maxWidth int) (string, int) {
 		lines = append(lines, ModalLabelStyle.Render(label)+ModalValueStyle.Render(value))
 	}
 
-	// Title
-	lines = append(lines, ModalTitleStyle.Render("Item Details"))
-	lines = append(lines, "")
+	// Title (rendered as floating badge on modal border, skip inline title)
 
 	// Core Fields
 	lines = append(lines, ModalTitleStyle.Render("── Core ──"))
@@ -1168,12 +1293,42 @@ func (m Model) renderDetailModal(maxHeight, maxWidth int) (string, int) {
 	content := b.String()
 	renderedModal := modalStyle.Render(content)
 
+	// Overlay floating title badge on the top border
+	renderedModal = overlayFloatingTitle(renderedModal, " Span Details ")
+
 	// Add scrollbar outside the modal border if needed
 	if showScrollbar {
 		renderedModal = addScrollbarToModal(renderedModal, scroll, maxScroll, visibleCount, totalLines)
 	}
 
 	return renderedModal, maxScroll
+}
+
+// overlayFloatingTitle replaces part of the first line of the modal
+// (the top border) with a styled title badge, giving a "floating window" look.
+func overlayFloatingTitle(modal, title string) string {
+	lines := strings.Split(modal, "\n")
+	if len(lines) == 0 {
+		return modal
+	}
+
+	badge := ModalFloatingTitle.Render(title)
+	badgeWidth := lipgloss.Width(badge)
+	topLine := lines[0]
+	topWidth := lipgloss.Width(topLine)
+
+	// Need room for corner + padding + badge + padding + corner
+	insertAt := 3
+	if insertAt+badgeWidth >= topWidth-1 {
+		return modal // too narrow, skip
+	}
+
+	// Use ANSI-aware truncation to splice the badge in
+	prefix := ansi.Truncate(topLine, insertAt, "")
+	suffix := ansi.TruncateLeft(topLine, insertAt+badgeWidth, "")
+	lines[0] = prefix + badge + suffix
+
+	return strings.Join(lines, "\n")
 }
 
 // addScrollbarToModal adds a scrollbar column to the right of the modal border

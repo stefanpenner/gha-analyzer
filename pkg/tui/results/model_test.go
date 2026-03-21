@@ -108,7 +108,7 @@ func TestModelView(t *testing.T) {
 		view := m.View()
 
 		assert.NotEmpty(t, view)
-		assert.Contains(t, view, "Trace Analyzer")
+		assert.Contains(t, view, "otel-analyzer")
 	})
 
 	t.Run("renders header with URL", func(t *testing.T) {
@@ -534,7 +534,7 @@ func TestRenderHeader(t *testing.T) {
 		m := createTestModel()
 		header := m.renderHeader()
 
-		assert.Contains(t, header, "Trace Analyzer")
+		assert.Contains(t, header, "otel-analyzer")
 	})
 
 	t.Run("renders header with input URLs", func(t *testing.T) {
