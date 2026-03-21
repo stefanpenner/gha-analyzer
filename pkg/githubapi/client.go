@@ -180,12 +180,15 @@ type Step struct {
 }
 
 type PullRequest struct {
-	Number   int       `json:"number"`
-	Title    string    `json:"title"`
-	Head     PRRef     `json:"head"`
-	Base     PRRef     `json:"base"`
-	MergedAt *string   `json:"merged_at"`
-	MergedBy *UserInfo `json:"merged_by"`
+	Number       int       `json:"number"`
+	Title        string    `json:"title"`
+	Head         PRRef     `json:"head"`
+	Base         PRRef     `json:"base"`
+	MergedAt     *string   `json:"merged_at"`
+	MergedBy     *UserInfo `json:"merged_by"`
+	ChangedFiles int       `json:"changed_files"`
+	Additions    int       `json:"additions"`
+	Deletions    int       `json:"deletions"`
 }
 
 type PRRef struct {
@@ -660,26 +663,6 @@ func (c *Client) FetchCommit(ctx context.Context, baseURL, sha string) (*CommitR
 		return nil, err
 	}
 	return &commit, nil
-}
-
-func (c *Client) FetchPRFiles(ctx context.Context, owner, repo, prNumber string) ([]CommitFile, error) {
-	ctx, span := getTracer().Start(ctx, "FetchPRFiles", trace.WithAttributes(
-		attribute.String("github.owner", owner),
-		attribute.String("github.repo", repo),
-		attribute.String("github.prNumber", prNumber),
-	))
-	defer span.End()
-
-	filesURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%s/files?per_page=100", owner, repo, prNumber)
-	resp, err := fetchWithAuth(ctx, c, filesURL, "")
-	if err != nil {
-		return nil, err
-	}
-	var files []CommitFile
-	if err := decodeJSON(resp, &files); err != nil {
-		return nil, err
-	}
-	return files, nil
 }
 
 func (c *Client) FetchPullRequest(ctx context.Context, baseURL, identifier string) (*PullRequest, error) {

@@ -86,11 +86,6 @@ func (m *mockGitHubProvider) FetchAnnotations(ctx context.Context, owner, repo s
 	return args.Get(0).([]githubapi.Annotation), args.Error(1)
 }
 
-func (m *mockGitHubProvider) FetchPRFiles(ctx context.Context, owner, repo, prNumber string) ([]githubapi.CommitFile, error) {
-	args := m.Called(ctx, owner, repo, prNumber)
-	return args.Get(0).([]githubapi.CommitFile), args.Error(1)
-}
-
 func (m *mockGitHubProvider) ListArtifacts(ctx context.Context, owner, repo string, runID int64) ([]githubapi.Artifact, error) {
 	args := m.Called(ctx, owner, repo, runID)
 	return args.Get(0).([]githubapi.Artifact), args.Error(1)
@@ -145,7 +140,7 @@ func TestWorkflowQueueTimeSpan(t *testing.T) {
 		_, traceEvents, _, _, err := processWorkflowRun(
 			context.Background(), run, 0, 1001, earliestTime,
 			"owner", "repo", "1", 0, "https://github.com/owner/repo/pull/1", "pr",
-			nil, nil, mockClient, nil, builder, NewTraceEmitter(builder), AnalyzeOptions{NoArtifacts: true},
+			nil, 0, 0, 0, mockClient, nil, builder, NewTraceEmitter(builder), AnalyzeOptions{NoArtifacts: true},
 		)
 		assert.NoError(t, err)
 
@@ -227,7 +222,7 @@ func TestWorkflowQueueTimeSpan(t *testing.T) {
 		_, traceEvents, _, _, err := processWorkflowRun(
 			context.Background(), run, 0, 1001, earliestTime,
 			"owner", "repo", "1", 0, "https://github.com/owner/repo/pull/1", "pr",
-			nil, nil, mockClient, nil, builder, NewTraceEmitter(builder), AnalyzeOptions{NoArtifacts: true},
+			nil, 0, 0, 0, mockClient, nil, builder, NewTraceEmitter(builder), AnalyzeOptions{NoArtifacts: true},
 		)
 		assert.NoError(t, err)
 
@@ -281,7 +276,7 @@ func TestWorkflowQueueTimeSpan(t *testing.T) {
 		_, traceEvents, _, _, err := processWorkflowRun(
 			context.Background(), run, 0, 1001, earliestTime,
 			"owner", "repo", "1", 0, "https://github.com/owner/repo/pull/1", "pr",
-			nil, nil, mockClient, nil, builder, NewTraceEmitter(builder), AnalyzeOptions{NoArtifacts: true},
+			nil, 0, 0, 0, mockClient, nil, builder, NewTraceEmitter(builder), AnalyzeOptions{NoArtifacts: true},
 		)
 		assert.NoError(t, err)
 
@@ -321,7 +316,7 @@ func TestSpanBuilderGeneration(t *testing.T) {
 			ReviewEvents: reviewEvents,
 		}, 0)
 
-		_, err := buildURLResult(context.Background(), parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, nil, nil, mockClient, nil, 0, builder, emitter, AnalyzeOptions{})
+		_, err := buildURLResult(context.Background(), parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, nil, 0, 0, 0, mockClient, nil, 0, builder, emitter, AnalyzeOptions{})
 		assert.NoError(t, err)
 
 		spans := builder.Spans()
@@ -360,7 +355,7 @@ func TestSpanBuilderGeneration(t *testing.T) {
 			CommitTimeMs: &commitTimeMs,
 		}, 0)
 
-		_, err := buildURLResult(context.Background(), parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, nil, nil, mockClient, nil, 0, builder, emitter, AnalyzeOptions{})
+		_, err := buildURLResult(context.Background(), parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, nil, 0, 0, 0, mockClient, nil, 0, builder, emitter, AnalyzeOptions{})
 		assert.NoError(t, err)
 
 		spans := builder.Spans()
