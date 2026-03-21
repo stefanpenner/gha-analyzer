@@ -804,12 +804,6 @@ func (m Model) renderFooter() string {
 	var segments []string
 	var segmentsPlain []string
 
-	if m.isFocused {
-		seg := StatusSegment.Foreground(ColorPurple).Render("focus")
-		segments = append(segments, seg)
-		segmentsPlain = append(segmentsPlain, " focus ")
-	}
-
 	if m.searchQuery != "" && !m.isSearching {
 		seg := StatusSegment.Foreground(ColorYellow).Render("/" + m.searchQuery)
 		segments = append(segments, seg)
