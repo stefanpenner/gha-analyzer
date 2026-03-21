@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/instrumentation"
+	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -55,9 +57,20 @@ func ParseProtobuf(r io.Reader) ([]sdktrace.ReadOnlySpan, error) {
 
 		// Convert each span to a SpanStub.
 		for _, rs := range td.ResourceSpans {
+			var res *resource.Resource
+			if rs.Resource != nil {
+				res = resource.NewSchemaless(convertProtobufAttrs(rs.Resource.Attributes)...)
+			}
 			for _, ss := range rs.ScopeSpans {
+				var scope instrumentation.Scope
+				if ss.Scope != nil {
+					scope = instrumentation.Scope{
+						Name:    ss.Scope.Name,
+						Version: ss.Scope.Version,
+					}
+				}
 				for _, span := range ss.Spans {
-					stub := convertProtobufSpan(span)
+					stub := convertProtobufSpan(span, res, scope)
 					stubs = append(stubs, stub)
 				}
 			}
@@ -68,7 +81,7 @@ func ParseProtobuf(r io.Reader) ([]sdktrace.ReadOnlySpan, error) {
 }
 
 // convertProtobufSpan converts a protobuf Span to a tracetest.SpanStub.
-func convertProtobufSpan(span *v1.Span) tracetest.SpanStub {
+func convertProtobufSpan(span *v1.Span, res *resource.Resource, scope instrumentation.Scope) tracetest.SpanStub {
 	var traceID trace.TraceID
 	var spanID trace.SpanID
 	var parentSpanID trace.SpanID
@@ -119,15 +132,17 @@ func convertProtobufSpan(span *v1.Span) tracetest.SpanStub {
 	spanKind := trace.SpanKind(span.Kind)
 
 	return tracetest.SpanStub{
-		Name:        span.Name,
-		SpanContext: sc,
-		Parent:      parent,
-		SpanKind:    spanKind,
-		StartTime:   startTime,
-		EndTime:     endTime,
-		Attributes:  attrs,
-		Events:      events,
-		Status:      status,
+		Name:                 span.Name,
+		SpanContext:          sc,
+		Parent:               parent,
+		SpanKind:             spanKind,
+		StartTime:            startTime,
+		EndTime:              endTime,
+		Attributes:           attrs,
+		Events:               events,
+		Status:               status,
+		Resource:             res,
+		InstrumentationScope: scope,
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -100,8 +101,10 @@ func convertZipkinToStub(zs zipkinSpan) (tracetest.SpanStub, error) {
 
 	// Convert tags to attributes.
 	var attrs []attribute.KeyValue
+	var res *resource.Resource
 	if zs.LocalEndpoint != nil && zs.LocalEndpoint.ServiceName != "" {
 		attrs = append(attrs, attribute.String("service.name", zs.LocalEndpoint.ServiceName))
+		res = resource.NewSchemaless(attribute.String("service.name", zs.LocalEndpoint.ServiceName))
 	}
 	for k, v := range zs.Tags {
 		attrs = append(attrs, attribute.String(k, v))
@@ -115,6 +118,7 @@ func convertZipkinToStub(zs zipkinSpan) (tracetest.SpanStub, error) {
 		StartTime:   startTime,
 		EndTime:     endTime,
 		Attributes:  attrs,
+		Resource:    res,
 	}, nil
 }
 

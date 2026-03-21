@@ -300,9 +300,27 @@ func convertNode(node *analyzer.TreeNode, parentID string, index, depth int, exp
 		item.Children = append(item.Children, childItem)
 	}
 
-	// Group artifact children under a synthetic node
+	// Group artifact children under a synthetic node labeled by source
 	if len(artifactChildren) > 0 {
-		groupLabel := fmt.Sprintf("Artifacts (%d)", len(artifactChildren))
+		// Collect unique artifact names and first download URL
+		seen := make(map[string]bool)
+		var names []string
+		var artifactURL string
+		for _, ac := range artifactChildren {
+			if n := ac.Attrs["github.artifact_name"]; n != "" && !seen[n] {
+				seen[n] = true
+				names = append(names, n)
+			}
+			if artifactURL == "" {
+				if u := ac.Attrs["github.artifact.download_url"]; u != "" {
+					artifactURL = u
+				}
+			}
+		}
+		groupLabel := "Embedded traces"
+		if len(names) > 0 {
+			groupLabel = strings.Join(names, ", ")
+		}
 		groupID := makeNodeID(id, "Artifacts", 0)
 
 		var earliest, latest time.Time
@@ -335,6 +353,7 @@ func convertNode(node *analyzer.TreeNode, parentID string, index, depth int, exp
 				Icon:     "◈ ",
 				BarChar:  "█",
 				Color:    "blue",
+				URL:      artifactURL,
 			},
 		}
 		item.Children = append(item.Children, artifactGroup)

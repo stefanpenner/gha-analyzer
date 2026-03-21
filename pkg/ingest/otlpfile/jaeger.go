@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -71,7 +72,15 @@ func ParseJaeger(r io.Reader) ([]sdktrace.ReadOnlySpan, error) {
 	var stubs tracetest.SpanStubs
 	for _, t := range resp.Data {
 		for _, span := range t.Spans {
-			stub, err := convertJaegerSpan(span)
+			var res *resource.Resource
+			if proc, ok := t.Processes[span.ProcessID]; ok {
+				attrs := []attribute.KeyValue{
+					attribute.String("service.name", proc.ServiceName),
+				}
+				attrs = append(attrs, convertJaegerTags(proc.Tags)...)
+				res = resource.NewSchemaless(attrs...)
+			}
+			stub, err := convertJaegerSpan(span, res)
 			if err != nil {
 				continue
 			}
@@ -82,7 +91,7 @@ func ParseJaeger(r io.Reader) ([]sdktrace.ReadOnlySpan, error) {
 	return stubs.Snapshots(), nil
 }
 
-func convertJaegerSpan(raw jaegerSpan) (tracetest.SpanStub, error) {
+func convertJaegerSpan(raw jaegerSpan, res *resource.Resource) (tracetest.SpanStub, error) {
 	traceID, err := trace.TraceIDFromHex(raw.TraceID)
 	if err != nil {
 		return tracetest.SpanStub{}, fmt.Errorf("invalid trace ID %q: %w", raw.TraceID, err)
@@ -163,6 +172,7 @@ func convertJaegerSpan(raw jaegerSpan) (tracetest.SpanStub, error) {
 		Attributes:  attrs,
 		Events:      events,
 		Status:      StatusFromCode(statusCode, statusMsg),
+		Resource:    res,
 	}, nil
 }
 

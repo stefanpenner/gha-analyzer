@@ -18,6 +18,8 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/instrumentation"
+	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -25,16 +27,26 @@ import (
 
 // stdoutSpan is the JSON structure emitted by stdouttrace exporter.
 type stdoutSpan struct {
-	Name        string          `json:"Name"`
-	SpanContext spanContextJSON `json:"SpanContext"`
-	Parent      spanContextJSON `json:"Parent"`
-	SpanKind    int             `json:"SpanKind"`
-	StartTime   time.Time       `json:"StartTime"`
-	EndTime     time.Time       `json:"EndTime"`
-	Attributes  []attrJSON      `json:"Attributes"`
-	Events      []eventJSON     `json:"Events"`
-	Links       []linkJSON      `json:"Links"`
-	Status      statusJSON      `json:"Status"`
+	Name                   string                       `json:"Name"`
+	SpanContext            spanContextJSON               `json:"SpanContext"`
+	Parent                 spanContextJSON               `json:"Parent"`
+	SpanKind               int                           `json:"SpanKind"`
+	StartTime              time.Time                     `json:"StartTime"`
+	EndTime                time.Time                     `json:"EndTime"`
+	Attributes             []attrJSON                    `json:"Attributes"`
+	Events                 []eventJSON                   `json:"Events"`
+	Links                  []linkJSON                    `json:"Links"`
+	Status                 statusJSON                    `json:"Status"`
+	Resource               []attrJSON                    `json:"Resource"`
+	InstrumentationScope   *stdoutInstrumentationScope   `json:"InstrumentationScope,omitempty"`
+}
+
+// stdoutInstrumentationScope mirrors the InstrumentationScope object
+// emitted by the stdouttrace exporter.
+type stdoutInstrumentationScope struct {
+	Name      string `json:"Name"`
+	Version   string `json:"Version"`
+	SchemaURL string `json:"SchemaURL"`
 }
 
 type spanContextJSON struct {
@@ -235,17 +247,35 @@ func convertToStub(raw stdoutSpan) (tracetest.SpanStub, error) {
 		})
 	}
 
+	// Build Resource from stdouttrace "Resource" field.
+	var res *resource.Resource
+	if len(raw.Resource) > 0 {
+		res = resource.NewSchemaless(convertAttrs(raw.Resource)...)
+	}
+
+	// Build InstrumentationScope from stdouttrace "InstrumentationScope" field.
+	var scope instrumentation.Scope
+	if raw.InstrumentationScope != nil {
+		scope = instrumentation.Scope{
+			Name:      raw.InstrumentationScope.Name,
+			Version:   raw.InstrumentationScope.Version,
+			SchemaURL: raw.InstrumentationScope.SchemaURL,
+		}
+	}
+
 	return tracetest.SpanStub{
-		Name:        raw.Name,
-		SpanContext: sc,
-		Parent:      parent,
-		SpanKind:    trace.SpanKind(raw.SpanKind),
-		StartTime:   raw.StartTime,
-		EndTime:     raw.EndTime,
-		Attributes:  attrs,
-		Events:      events,
-		Links:       links,
-		Status:      status,
+		Name:                 raw.Name,
+		SpanContext:          sc,
+		Parent:               parent,
+		SpanKind:             trace.SpanKind(raw.SpanKind),
+		StartTime:            raw.StartTime,
+		EndTime:              raw.EndTime,
+		Attributes:           attrs,
+		Events:               events,
+		Links:                links,
+		Status:               status,
+		Resource:             res,
+		InstrumentationScope: scope,
 	}, nil
 }
 
@@ -466,9 +496,15 @@ func convertFlatToStub(raw flatSpan) (tracetest.SpanStub, error) {
 
 	attrs := convertFlatAttrs(raw.Attributes)
 
-	// Add resource attributes with "resource." prefix.
-	for k, v := range raw.Resource {
-		attrs = append(attrs, flatAttr("resource."+k, v))
+	// Add resource attributes with "resource." prefix for backward compatibility.
+	var res *resource.Resource
+	if len(raw.Resource) > 0 {
+		var resAttrs []attribute.KeyValue
+		for k, v := range raw.Resource {
+			attrs = append(attrs, flatAttr("resource."+k, v))
+			resAttrs = append(resAttrs, flatAttr(k, v))
+		}
+		res = resource.NewSchemaless(resAttrs...)
 	}
 
 	status := StatusFromCode(raw.Status.Code, raw.Status.Description)
@@ -492,6 +528,7 @@ func convertFlatToStub(raw flatSpan) (tracetest.SpanStub, error) {
 		Attributes:  attrs,
 		Events:      events,
 		Status:      status,
+		Resource:    res,
 	}, nil
 }
 

@@ -59,6 +59,7 @@ func IngestTraceArtifacts(ctx context.Context, client githubapi.GitHubProvider, 
 			attrs := append(s.Attributes(),
 				attribute.Int("github.url_index", urlIndex),
 				attribute.String("github.artifact_name", artifact.Name),
+				attribute.String("github.artifact.download_url", artifact.ArchiveDownloadURL),
 			)
 
 			builder.Add(tracetest.SpanStub{

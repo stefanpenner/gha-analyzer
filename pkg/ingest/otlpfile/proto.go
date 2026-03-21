@@ -28,6 +28,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/sdk/instrumentation"
+	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -39,11 +41,22 @@ type exportRequest struct {
 }
 
 type resourceSpanJSON struct {
+	Resource   *resourceJSON   `json:"resource,omitempty"`
 	ScopeSpans []scopeSpanJSON `json:"scopeSpans"`
 }
 
 type scopeSpanJSON struct {
+	Scope *scopeJSON      `json:"scope,omitempty"`
 	Spans []protoSpanJSON `json:"spans"`
+}
+
+type resourceJSON struct {
+	Attributes []protoAttrJSON `json:"attributes"`
+}
+
+type scopeJSON struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
 }
 
 type protoSpanJSON struct {
@@ -114,9 +127,20 @@ func ParseProto(r io.Reader) ([]sdktrace.ReadOnlySpan, error) {
 
 	var stubs tracetest.SpanStubs
 	for _, rs := range req.ResourceSpans {
+		var res *resource.Resource
+		if rs.Resource != nil {
+			res = resource.NewSchemaless(convertProtoAttrs(rs.Resource.Attributes)...)
+		}
 		for _, ss := range rs.ScopeSpans {
+			var scope instrumentation.Scope
+			if ss.Scope != nil {
+				scope = instrumentation.Scope{
+					Name:    ss.Scope.Name,
+					Version: ss.Scope.Version,
+				}
+			}
 			for _, span := range ss.Spans {
-				stub, err := convertProtoSpan(span)
+				stub, err := convertProtoSpan(span, res, scope)
 				if err != nil {
 					continue
 				}
@@ -128,7 +152,7 @@ func ParseProto(r io.Reader) ([]sdktrace.ReadOnlySpan, error) {
 	return stubs.Snapshots(), nil
 }
 
-func convertProtoSpan(raw protoSpanJSON) (tracetest.SpanStub, error) {
+func convertProtoSpan(raw protoSpanJSON, res *resource.Resource, scope instrumentation.Scope) (tracetest.SpanStub, error) {
 	traceID, err := trace.TraceIDFromHex(raw.TraceID)
 	if err != nil {
 		return tracetest.SpanStub{}, fmt.Errorf("invalid trace ID %q: %w", raw.TraceID, err)
@@ -174,15 +198,17 @@ func convertProtoSpan(raw protoSpanJSON) (tracetest.SpanStub, error) {
 	status := protoStatusToSDK(raw.Status)
 
 	return tracetest.SpanStub{
-		Name:        raw.Name,
-		SpanContext: sc,
-		Parent:      parent,
-		SpanKind:    trace.SpanKind(raw.Kind),
-		StartTime:   startTime,
-		EndTime:     endTime,
-		Attributes:  attrs,
-		Events:      events,
-		Status:      status,
+		Name:                 raw.Name,
+		SpanContext:          sc,
+		Parent:               parent,
+		SpanKind:             trace.SpanKind(raw.Kind),
+		StartTime:            startTime,
+		EndTime:              endTime,
+		Attributes:           attrs,
+		Events:               events,
+		Status:               status,
+		Resource:             res,
+		InstrumentationScope: scope,
 	}, nil
 }
 
