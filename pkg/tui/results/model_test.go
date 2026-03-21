@@ -773,6 +773,35 @@ func TestFocusSingleURL(t *testing.T) {
 	})
 }
 
+func TestFocusZoomsChart(t *testing.T) {
+	t.Parallel()
+
+	m := createTestModel()
+	// Expand workflow so jobs are visible
+	m.expandedState["CI/0"] = true
+	m.rebuildItems()
+
+	// Chart initially spans full range
+	assert.Equal(t, m.globalStart, m.chartStart)
+	assert.Equal(t, m.globalEnd, m.chartEnd)
+
+	// Focus on "build" job (0-2min)
+	idx := findVisibleIndex(&m, "CI/0/build/0")
+	assert.GreaterOrEqual(t, idx, 0)
+	m.cursor = idx
+	m.toggleFocus()
+
+	// Chart should zoom to build's time range
+	assert.True(t, m.isFocused)
+	assert.Equal(t, m.globalStart, m.chartStart, "chart start should match build start")
+	assert.Equal(t, m.globalStart.Add(2*time.Minute), m.chartEnd, "chart end should match build end")
+
+	// Non-focused items should be dimmed (in focusedIDs check)
+	assert.True(t, m.focusedIDs["CI/0/build/0"], "build should be focused")
+	assert.False(t, m.focusedIDs["CI/0"], "workflow should NOT be focused")
+	assert.False(t, m.focusedIDs["CI/0/test/1"], "test should NOT be focused")
+}
+
 func TestFocusMultiURL(t *testing.T) {
 	t.Parallel()
 

@@ -82,9 +82,9 @@ var (
 	HiddenStyle = lipgloss.NewStyle().
 			Foreground(ColorGray)
 
-	// FocusDimStyle is lighter than HiddenStyle — for non-focused items during focus mode
+	// FocusDimStyle dims non-focused items during focus mode
 	FocusDimStyle = lipgloss.NewStyle().
-			Foreground(ColorGrayDim)
+			Foreground(ColorGray)
 
 	WorkflowStyle = lipgloss.NewStyle().
 			Foreground(ColorBlue)
