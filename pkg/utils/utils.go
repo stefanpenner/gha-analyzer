@@ -221,6 +221,25 @@ func OpenBrowser(url string) error {
 	return exec.Command(cmd, args...).Start()
 }
 
+// CopyToClipboard copies text to the system clipboard.
+func CopyToClipboard(text string) error {
+	var cmd string
+	var args []string
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = "clip"
+	case "darwin":
+		cmd = "pbcopy"
+	default:
+		cmd = "xclip"
+		args = []string{"-selection", "clipboard"}
+	}
+	c := exec.Command(cmd, args...)
+	c.Stdin = strings.NewReader(text)
+	return c.Run()
+}
+
 func StripANSI(str string) string {
 	var b strings.Builder
 	b.Grow(len(str))

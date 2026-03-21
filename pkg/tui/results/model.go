@@ -24,6 +24,18 @@ type ReloadResultMsg struct {
 	err         error
 }
 
+// clearCopyFeedbackMsg clears the "Copied!" message after a delay.
+type clearCopyFeedbackMsg struct{}
+
+// inspectorBreadcrumbEntry saves UI state when navigating into a child.
+type inspectorBreadcrumbEntry struct {
+	item        *TreeItem
+	sidebarIdx  int
+	cursor      int
+	scroll      int
+	focusLeft   bool
+}
+
 // LoadingProgressMsg updates loading progress display
 type LoadingProgressMsg struct {
 	Phase  string
@@ -68,10 +80,25 @@ type Model struct {
 	// Input URLs from CLI
 	inputURLs []string
 	// Modal state
-	showDetailModal bool
-	showHelpModal   bool
-	modalItem       *TreeItem
-	modalScroll     int
+	showDetailModal  bool
+	showHelpModal    bool
+	modalItem        *TreeItem
+	modalScroll      int
+	inspectorNodes   []*InspectorNode
+	inspectorFlat    []FlatInspectorEntry
+	inspectorCursor  int
+	// Two-pane inspector state
+	inspectorSidebarIdx  int  // 0-indexed into inspectorNodes
+	inspectorFocusLeft   bool // true = sidebar focused
+	// Inspector search
+	inspectorSearching   bool
+	inspectorSearchQuery string
+	inspectorSearchMatches []int // indices into inspectorFlat
+	inspectorSearchIdx   int    // current match index
+	// Inspector breadcrumb navigation (traverse into children)
+	inspectorBreadcrumb      []inspectorBreadcrumbEntry // stack of parent states
+	// Copy feedback
+	inspectorCopyMsg     string // transient "Copied!" message
 	// Reload state
 	isLoading     bool
 	reloadFunc    func(reporter LoadingReporter) ([]trace.ReadOnlySpan, time.Time, time.Time, error)
@@ -346,6 +373,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Continue listening for more progress updates
 		return m, m.listenForProgress()
 
+	case clearCopyFeedbackMsg:
+		m.inspectorCopyMsg = ""
+		return m, nil
+
 	case tea.KeyMsg:
 		// Ignore keys while loading (except quit)
 		if m.isLoading {
@@ -373,49 +404,243 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Handle detail modal
 		if m.showDetailModal {
+			// Inspector search input mode
+			if m.inspectorSearching {
+				switch msg.Type {
+				case tea.KeyEsc:
+					m.inspectorSearching = false
+					m.inspectorSearchQuery = ""
+					m.inspectorSearchMatches = nil
+					m.inspectorSearchIdx = -1
+					return m, nil
+				case tea.KeyEnter:
+					m.inspectorSearching = false
+					if len(m.inspectorSearchMatches) > 0 {
+						m.inspectorSearchIdx = 0
+						m.inspectorJumpToMatch()
+					}
+					return m, nil
+				case tea.KeyBackspace:
+					if len(m.inspectorSearchQuery) > 0 {
+						m.inspectorSearchQuery = m.inspectorSearchQuery[:len(m.inspectorSearchQuery)-1]
+						m.updateInspectorSearch()
+					}
+					return m, nil
+				default:
+					if msg.Type == tea.KeyRunes {
+						m.inspectorSearchQuery += string(msg.Runes)
+						m.updateInspectorSearch()
+						// Auto-jump to first match
+						if len(m.inspectorSearchMatches) > 0 {
+							m.inspectorSearchIdx = 0
+							m.inspectorJumpToMatch()
+						}
+					}
+					return m, nil
+				}
+			}
+
+			// Normal modal keys
 			switch msg.String() {
-			case "esc", "enter", "i", "q":
-				m.showDetailModal = false
-				m.modalItem = nil
-				m.modalScroll = 0
+			case "esc":
+				if m.inspectorSearchQuery != "" {
+					// Clear search
+					m.inspectorSearchQuery = ""
+					m.inspectorSearchMatches = nil
+					m.inspectorSearchIdx = -1
+					return m, nil
+				}
+				if m.inspectorNavigateBack() {
+					return m, nil
+				}
+				m.resetInspectorModal()
+				return m, nil
+			case "i", "q":
+				m.resetInspectorModal()
+				return m, nil
+			case "tab":
+				// Switch between sidebar and tree pane
+				m.inspectorFocusLeft = !m.inspectorFocusLeft
 				return m, nil
 			case "up", "k":
-				if m.modalScroll > 0 {
-					m.modalScroll--
+				if m.inspectorFocusLeft {
+					if m.inspectorSidebarIdx > 0 {
+						m.inspectorSidebarIdx--
+						m.rebuildInspectorFlat()
+					}
+				} else {
+					if m.inspectorCursor > 0 {
+						m.inspectorCursor--
+					}
 				}
 				return m, nil
 			case "down", "j":
-				m.modalScroll++
+				if m.inspectorFocusLeft {
+					if m.inspectorSidebarIdx < len(m.inspectorNodes)-1 {
+						m.inspectorSidebarIdx++
+						m.rebuildInspectorFlat()
+					}
+				} else {
+					if m.inspectorCursor < len(m.inspectorFlat)-1 {
+						m.inspectorCursor++
+					}
+				}
 				return m, nil
 			case "left", "h":
-				// Navigate to previous item
-				if m.cursor > 0 {
-					m.cursor--
-					m.modalScroll = 0
-					item := m.visibleItems[m.cursor]
-					m.modalItem = &item
+				if m.inspectorFocusLeft {
+					// No-op on sidebar
+					return m, nil
+				}
+				// Collapse current node, or move to parent
+				if m.inspectorCursor < len(m.inspectorFlat) {
+					entry := m.inspectorFlat[m.inspectorCursor]
+					if entry.Node.Expanded && len(entry.Node.Children) > 0 {
+						entry.Node.Expanded = false
+						m.rebuildInspectorFlat()
+					} else {
+						parentIdx := FindParentIndex(m.inspectorFlat, m.inspectorCursor)
+						if parentIdx >= 0 {
+							m.inspectorCursor = parentIdx
+						} else {
+							// At top level, switch to sidebar
+							m.inspectorFocusLeft = true
+						}
+					}
 				}
 				return m, nil
 			case "right", "l":
-				// Navigate to next item
+				if m.inspectorFocusLeft {
+					// Jump into the tree pane
+					m.inspectorFocusLeft = false
+					return m, nil
+				}
+				if m.inspectorCursor < len(m.inspectorFlat) {
+					entry := m.inspectorFlat[m.inspectorCursor]
+					if !entry.Node.Expanded && len(entry.Node.Children) > 0 {
+						entry.Node.Expanded = true
+						m.rebuildInspectorFlat()
+					}
+				}
+				return m, nil
+			case " ", "enter":
+				if m.inspectorFocusLeft {
+					// Select section and jump to tree
+					m.inspectorFocusLeft = false
+					m.inspectorCursor = 0
+					m.modalScroll = 0
+					return m, nil
+				}
+				if m.inspectorCursor < len(m.inspectorFlat) {
+					entry := m.inspectorFlat[m.inspectorCursor]
+					// Navigate into child span
+					if entry.Node.ChildItem != nil {
+						m.inspectorNavigateIntoChild(entry.Node.ChildItem)
+						return m, nil
+					}
+					if len(entry.Node.Children) > 0 {
+						entry.Node.Expanded = !entry.Node.Expanded
+						m.rebuildInspectorFlat()
+					}
+				}
+				return m, nil
+			case "]":
+				// Navigate to next item in main tree
 				if m.cursor < len(m.visibleItems)-1 {
 					m.cursor++
 					m.modalScroll = 0
 					item := m.visibleItems[m.cursor]
 					m.modalItem = &item
+					m.inspectorNodes = BuildInspectorTree(m.modalItem)
+					m.inspectorSidebarIdx = 0
+					m.rebuildInspectorFlat()
+					m.inspectorCursor = 0
+					m.inspectorBreadcrumb = nil
+				}
+				return m, nil
+			case "[":
+				// Navigate to previous item in main tree
+				if m.cursor > 0 {
+					m.cursor--
+					m.modalScroll = 0
+					item := m.visibleItems[m.cursor]
+					m.modalItem = &item
+					m.inspectorNodes = BuildInspectorTree(m.modalItem)
+					m.inspectorSidebarIdx = 0
+					m.rebuildInspectorFlat()
+					m.inspectorCursor = 0
+					m.inspectorBreadcrumb = nil
+				}
+				return m, nil
+			case "/":
+				m.inspectorSearching = true
+				m.inspectorSearchQuery = ""
+				m.inspectorSearchMatches = nil
+				m.inspectorSearchIdx = -1
+				return m, nil
+			case "n":
+				// Next search match
+				if len(m.inspectorSearchMatches) > 0 {
+					m.inspectorSearchIdx = (m.inspectorSearchIdx + 1) % len(m.inspectorSearchMatches)
+					m.inspectorJumpToMatch()
+				}
+				return m, nil
+			case "N":
+				// Previous search match
+				if len(m.inspectorSearchMatches) > 0 {
+					m.inspectorSearchIdx--
+					if m.inspectorSearchIdx < 0 {
+						m.inspectorSearchIdx = len(m.inspectorSearchMatches) - 1
+					}
+					m.inspectorJumpToMatch()
+				}
+				return m, nil
+			case "c":
+				cmd := m.inspectorCopyValue()
+				return m, cmd
+			case "o":
+				m.inspectorOpenValue()
+				return m, nil
+			case "backspace":
+				// Navigate back in breadcrumb
+				if m.inspectorNavigateBack() {
+					return m, nil
 				}
 				return m, nil
 			case "r":
-				// Close modal and trigger reload
-				m.showDetailModal = false
-				m.modalItem = nil
-				m.modalScroll = 0
+				m.resetInspectorModal()
 				if m.reloadFunc != nil {
 					m.isLoading = true
 					return m, tea.Batch(m.spinner.Tick, m.doReload())
 				}
 				return m, nil
+			case "p":
+				if m.openPerfettoFunc != nil {
+					m.openPerfettoFunc()
+				}
+				return m, nil
+			case "g":
+				if m.inspectorFocusLeft {
+					m.inspectorSidebarIdx = 0
+					m.rebuildInspectorFlat()
+				} else {
+					m.inspectorCursor = 0
+				}
+				return m, nil
+			case "G":
+				if m.inspectorFocusLeft {
+					m.inspectorSidebarIdx = len(m.inspectorNodes) - 1
+					m.rebuildInspectorFlat()
+				} else {
+					if len(m.inspectorFlat) > 0 {
+						m.inspectorCursor = len(m.inspectorFlat) - 1
+					}
+				}
+				return m, nil
 			}
+
+			// Handle Enter on a tree item to navigate into children (breadcrumb)
+			// This is handled via "enter" key above for expand/collapse
+
 			return m, nil
 		}
 
@@ -1319,6 +1544,147 @@ func (m *Model) openDetailModal() {
 	m.modalItem = &item
 	m.showDetailModal = true
 	m.modalScroll = 0
+	m.inspectorNodes = BuildInspectorTree(m.modalItem)
+	m.inspectorSidebarIdx = 0
+	m.inspectorCursor = 0
+	m.rebuildInspectorFlat()
+	m.inspectorFocusLeft = true
+	m.inspectorSearching = false
+	m.inspectorSearchQuery = ""
+	m.inspectorSearchMatches = nil
+	m.inspectorSearchIdx = -1
+	m.inspectorBreadcrumb = nil
+	m.inspectorCopyMsg = ""
+}
+
+// rebuildInspectorFlat rebuilds the flat list based on sidebar selection.
+func (m *Model) rebuildInspectorFlat() {
+	if m.inspectorSidebarIdx >= 0 && m.inspectorSidebarIdx < len(m.inspectorNodes) {
+		m.inspectorFlat = FlattenSingleSection(m.inspectorNodes[m.inspectorSidebarIdx])
+	} else {
+		m.inspectorFlat = nil
+	}
+	if m.inspectorCursor >= len(m.inspectorFlat) {
+		m.inspectorCursor = len(m.inspectorFlat) - 1
+	}
+	if m.inspectorCursor < 0 {
+		m.inspectorCursor = 0
+	}
+	m.updateInspectorSearch()
+}
+
+// updateInspectorSearch recomputes search matches for the current flat list.
+func (m *Model) updateInspectorSearch() {
+	if m.inspectorSearchQuery == "" {
+		m.inspectorSearchMatches = nil
+		m.inspectorSearchIdx = -1
+		return
+	}
+	m.inspectorSearchMatches = SearchInspectorNodes(m.inspectorFlat, m.inspectorSearchQuery)
+	if len(m.inspectorSearchMatches) > 0 {
+		if m.inspectorSearchIdx < 0 || m.inspectorSearchIdx >= len(m.inspectorSearchMatches) {
+			m.inspectorSearchIdx = 0
+		}
+	} else {
+		m.inspectorSearchIdx = -1
+	}
+}
+
+// inspectorJumpToMatch jumps the cursor to the current search match.
+func (m *Model) inspectorJumpToMatch() {
+	if m.inspectorSearchIdx >= 0 && m.inspectorSearchIdx < len(m.inspectorSearchMatches) {
+		m.inspectorCursor = m.inspectorSearchMatches[m.inspectorSearchIdx]
+	}
+}
+
+// inspectorCopyValue copies the currently selected node's value to clipboard.
+func (m *Model) inspectorCopyValue() tea.Cmd {
+	if m.inspectorCursor >= len(m.inspectorFlat) {
+		return nil
+	}
+	entry := m.inspectorFlat[m.inspectorCursor]
+	text := entry.Node.Value
+	if text == "" {
+		text = entry.Node.Label
+	}
+	if text == "" {
+		return nil
+	}
+	err := utils.CopyToClipboard(text)
+	if err != nil {
+		m.inspectorCopyMsg = "Copy failed"
+	} else {
+		m.inspectorCopyMsg = "Copied!"
+	}
+	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
+		return clearCopyFeedbackMsg{}
+	})
+}
+
+// inspectorOpenValue opens the value as a URL in the browser.
+func (m *Model) inspectorOpenValue() {
+	if m.inspectorCursor >= len(m.inspectorFlat) {
+		return
+	}
+	entry := m.inspectorFlat[m.inspectorCursor]
+	val := entry.Node.Value
+	if entry.Node.IsURL || IsURLValue(val) {
+		_ = utils.OpenBrowser(val)
+	}
+}
+
+// inspectorNavigateIntoChild traverses into a child TreeItem, saving current state.
+func (m *Model) inspectorNavigateIntoChild(childItem *TreeItem) {
+	m.inspectorBreadcrumb = append(m.inspectorBreadcrumb, inspectorBreadcrumbEntry{
+		item:       m.modalItem,
+		sidebarIdx: m.inspectorSidebarIdx,
+		cursor:     m.inspectorCursor,
+		scroll:     m.modalScroll,
+		focusLeft:  m.inspectorFocusLeft,
+	})
+	m.modalItem = childItem
+	m.inspectorNodes = BuildInspectorTree(m.modalItem)
+	m.inspectorSidebarIdx = 0
+	m.inspectorCursor = 0
+	m.modalScroll = 0
+	m.inspectorFocusLeft = true
+	m.rebuildInspectorFlat()
+}
+
+// inspectorNavigateBack goes back to the parent, restoring saved state.
+func (m *Model) inspectorNavigateBack() bool {
+	if len(m.inspectorBreadcrumb) == 0 {
+		return false
+	}
+	last := len(m.inspectorBreadcrumb) - 1
+	entry := m.inspectorBreadcrumb[last]
+	m.inspectorBreadcrumb = m.inspectorBreadcrumb[:last]
+	m.modalItem = entry.item
+	m.inspectorNodes = BuildInspectorTree(m.modalItem)
+	m.inspectorSidebarIdx = entry.sidebarIdx
+	m.rebuildInspectorFlat()
+	m.inspectorCursor = entry.cursor
+	m.modalScroll = entry.scroll
+	m.inspectorFocusLeft = entry.focusLeft
+	return true
+}
+
+// resetInspectorModal clears all inspector state.
+func (m *Model) resetInspectorModal() {
+	m.showDetailModal = false
+	m.modalItem = nil
+	m.modalScroll = 0
+	m.inspectorNodes = nil
+	m.inspectorFlat = nil
+	m.inspectorCursor = 0
+	m.inspectorSidebarIdx = 0
+	m.inspectorFocusLeft = false
+	m.inspectorSearching = false
+	m.inspectorSearchQuery = ""
+	m.inspectorSearchMatches = nil
+	m.inspectorSearchIdx = -1
+	m.inspectorBreadcrumb = nil
+	m.inspectorCopyMsg = ""
 }
 
 // channelReporter implements LoadingReporter and sends updates via a channel

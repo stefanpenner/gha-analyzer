@@ -249,6 +249,54 @@ var (
 				Foreground(ColorSurface0).
 				Background(ColorBlue).
 				Padding(0, 1)
+
+	// Inspector tree styles
+	ModalSelectedStyle = lipgloss.NewStyle().
+				Background(ColorSelectionBg)
+
+	ModalIndicatorStyle = lipgloss.NewStyle().
+				Foreground(ColorGray)
+
+	ModalGroupLabelStyle = lipgloss.NewStyle().
+				Foreground(ColorPurple)
+
+	// Two-pane sidebar styles
+	ModalSidebarSelectedStyle = lipgloss.NewStyle().
+					Background(ColorSelectionBg).
+					Foreground(ColorWhite).
+					Bold(true)
+
+	ModalSidebarDimStyle = lipgloss.NewStyle().
+				Foreground(ColorGray)
+
+	ModalSidebarFocusCursor = lipgloss.NewStyle().
+				Foreground(ColorBlue).
+				Bold(true)
+
+	// Inspector search styles
+	ModalSearchBarStyle = lipgloss.NewStyle().
+				Foreground(ColorWhite)
+
+	ModalSearchMatchStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(ColorPurple).
+				Background(ColorSearchCharBg)
+
+	// Copy feedback style
+	ModalCopyFeedbackStyle = lipgloss.NewStyle().
+				Foreground(ColorGreen).
+				Bold(true)
+
+	// Breadcrumb styles for inspector navigation
+	ModalBreadcrumbStyle = lipgloss.NewStyle().
+				Foreground(ColorGray)
+
+	ModalBreadcrumbActiveStyle = lipgloss.NewStyle().
+					Foreground(ColorBlue).
+					Bold(true)
+
+	ModalBreadcrumbSepStyle = lipgloss.NewStyle().
+				Foreground(ColorGrayDim)
 )
 
 // Statusline styles (LazyVim-style mode pill + segments)

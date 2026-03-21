@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -17,7 +18,7 @@ const cacheTTL = 5 * time.Minute
 
 // cacheVersion is incremented to invalidate all existing cached responses.
 // Bump this when response parsing or enrichment logic changes.
-const cacheVersion = "v2"
+const cacheVersion = "v3"
 
 // CachedTransport implements http.RoundTripper and caches GET requests to disk.
 type CachedTransport struct {
@@ -68,7 +69,14 @@ func (t *CachedTransport) getCacheKey(req *http.Request) string {
 	// Bumping cacheVersion invalidates all existing entries.
 	h := sha256.New()
 	h.Write([]byte(cacheVersion))
-	h.Write([]byte(req.URL.String()))
+	// Strip query params from signed blob URLs (e.g. Azure artifact downloads).
+	// GitHub redirects artifact downloads to signed URLs with expiring tokens,
+	// so the query string changes each request while the path stays the same.
+	u := req.URL.String()
+	if strings.Contains(req.URL.Host, "blob.core.windows.net") {
+		u = req.URL.Scheme + "://" + req.URL.Host + req.URL.Path
+	}
+	h.Write([]byte(u))
 	h.Write([]byte(req.Header.Get("Accept")))
 	return hex.EncodeToString(h.Sum(nil))
 }

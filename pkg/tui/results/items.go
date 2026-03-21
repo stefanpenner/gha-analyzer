@@ -481,6 +481,7 @@ func buildArtifactFolder(node *analyzer.TreeNode, parentID string, depth int, ar
 	type artifactMeta struct {
 		Name string
 		Size string
+		URL  string
 	}
 	var allArtifacts []artifactMeta
 	for i := 0; ; i++ {
@@ -489,7 +490,8 @@ func buildArtifactFolder(node *analyzer.TreeNode, parentID string, depth int, ar
 			break
 		}
 		size := node.Attrs[fmt.Sprintf("cicd.pipeline.artifact.%d.size", i)]
-		allArtifacts = append(allArtifacts, artifactMeta{Name: name, Size: size})
+		url := node.Attrs[fmt.Sprintf("cicd.pipeline.artifact.%d.url", i)]
+		allArtifacts = append(allArtifacts, artifactMeta{Name: name, Size: size, URL: url})
 	}
 
 	// Group trace spans by their source artifact name
@@ -533,6 +535,7 @@ func buildArtifactFolder(node *analyzer.TreeNode, parentID string, depth int, ar
 				Icon:     "  ",
 				Color:    "blue",
 				Category: "artifact",
+				URL:      meta.URL,
 			},
 		}
 
