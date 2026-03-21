@@ -217,6 +217,35 @@ func TestStripANSI(t *testing.T) {
 	}
 }
 
+func TestGlobMatch(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		pattern string
+		value   string
+		want    bool
+	}{
+		{"*", "anything", true},
+		{"*", "", true},
+		{"exact", "exact", true},
+		{"exact", "other", false},
+		{"prefix*", "prefix-something", true},
+		{"prefix*", "other", false},
+		{"*suffix", "something-suffix", true},
+		{"*suffix", "other", false},
+		{"*middle*", "has-middle-here", true},
+		{"*middle*", "no match", false},
+		{"5*", "503", true},
+		{"5*", "200", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.pattern+"_"+tc.value, func(t *testing.T) {
+			assert.Equal(t, tc.want, GlobMatch(tc.pattern, tc.value))
+		})
+	}
+}
+
 func TestColorFormatters(t *testing.T) {
 	t.Parallel()
 

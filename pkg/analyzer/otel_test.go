@@ -316,7 +316,7 @@ func TestSpanBuilderGeneration(t *testing.T) {
 			ReviewEvents: reviewEvents,
 		}, 0)
 
-		_, err := buildURLResult(context.Background(), parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, nil, mockClient, nil, 0, builder, AnalyzeOptions{})
+		_, err := buildURLResult(context.Background(), parsed, 0, "sha", "main", "PR 1", "url", reviewEvents, nil, nil, nil, 0, 0, nil, nil, mockClient, nil, 0, builder, emitter, AnalyzeOptions{})
 		assert.NoError(t, err)
 
 		spans := builder.Spans()
@@ -355,7 +355,7 @@ func TestSpanBuilderGeneration(t *testing.T) {
 			CommitTimeMs: &commitTimeMs,
 		}, 0)
 
-		_, err := buildURLResult(context.Background(), parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, nil, mockClient, nil, 0, builder, AnalyzeOptions{})
+		_, err := buildURLResult(context.Background(), parsed, 0, "sha123", "main", "Commit sha123", "url", nil, nil, &commitTimeMs, nil, 0, 0, nil, nil, mockClient, nil, 0, builder, emitter, AnalyzeOptions{})
 		assert.NoError(t, err)
 
 		spans := builder.Spans()

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -65,7 +66,9 @@ func (r *Receiver) Stop() {
 	if r.server != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		r.server.Shutdown(ctx)
+		if err := r.server.Shutdown(ctx); err != nil {
+			log.Printf("receiver shutdown error: %v", err)
+		}
 	}
 }
 
@@ -104,11 +107,19 @@ func (r *Receiver) handleTraces(w http.ResponseWriter, req *http.Request) {
 
 	switch {
 	case contentType == "application/x-protobuf":
-		// Binary protobuf OTLP
+		// Binary protobuf OTLP — fall back to JSON parser on failure
 		spans, err = otlpfile.ParseProtobuf(bytes.NewReader(body))
 		if err != nil || len(spans) == 0 {
-			// Fall back to generic parser
-			spans, err = otlpfile.Parse(bytes.NewReader(body))
+			var jsonErr error
+			spans, jsonErr = otlpfile.Parse(bytes.NewReader(body))
+			if jsonErr != nil {
+				// Report the original protobuf error since that was the intended format
+				if err == nil {
+					err = jsonErr
+				}
+			} else {
+				err = nil
+			}
 		}
 	default:
 		// JSON format (OTLP JSON or stdouttrace)
@@ -127,5 +138,7 @@ func (r *Receiver) handleTraces(w http.ResponseWriter, req *http.Request) {
 	// Return OTLP ExportTraceServiceResponse (empty JSON object)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{})
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{}); err != nil {
+		log.Printf("failed to write response: %v", err)
+	}
 }

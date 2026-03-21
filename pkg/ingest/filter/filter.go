@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -94,7 +95,7 @@ func (f *Filter) matches(s sdktrace.ReadOnlySpan) bool {
 
 	for _, cond := range f.conditions {
 		val, exists := attrs[cond.key]
-		matched := exists && globMatch(cond.value, val)
+		matched := exists && utils.GlobMatch(cond.value, val)
 		if cond.negate {
 			if matched {
 				return false
@@ -117,18 +118,3 @@ func ErrorsOnly() *Filter {
 	}
 }
 
-func globMatch(pattern, value string) bool {
-	if pattern == "*" {
-		return true
-	}
-	if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") {
-		return strings.Contains(value, pattern[1:len(pattern)-1])
-	}
-	if strings.HasPrefix(pattern, "*") {
-		return strings.HasSuffix(value, pattern[1:])
-	}
-	if strings.HasSuffix(pattern, "*") {
-		return strings.HasPrefix(value, pattern[:len(pattern)-1])
-	}
-	return pattern == value
-}

@@ -12,6 +12,9 @@ go_library(
     ],
     importpath = "github.com/stefanpenner/otel-analyzer/pkg/enrichment",
     visibility = ["//visibility:public"],
+    deps = [
+        "//pkg/utils",
+    ],
 )
 
 go_test(

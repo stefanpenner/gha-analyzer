@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
+
+	"github.com/stefanpenner/otel-analyzer/pkg/utils"
 )
 
 // RuleEnricher applies user-defined rules to classify spans.
@@ -88,14 +89,14 @@ func (e *RuleEnricher) Enrich(name string, attrs map[string]string, isZeroDurati
 // matchesRule checks if a span matches a rule's conditions.
 func matchesRule(match RuleMatch, name string, attrs map[string]string) bool {
 	// Check span name pattern
-	if match.SpanName != "" && !globMatch(match.SpanName, name) {
+	if match.SpanName != "" && !utils.GlobMatch(match.SpanName, name) {
 		return false
 	}
 
 	// Check all attribute patterns
 	for key, pattern := range match.Attributes {
 		val, ok := attrs[key]
-		if !ok || !globMatch(pattern, val) {
+		if !ok || !utils.GlobMatch(pattern, val) {
 			return false
 		}
 	}
@@ -104,20 +105,3 @@ func matchesRule(match RuleMatch, name string, attrs map[string]string) bool {
 	return match.SpanName != "" || len(match.Attributes) > 0
 }
 
-// globMatch performs simple glob matching: "*" matches everything,
-// "prefix*" matches prefix, "*suffix" matches suffix, exact match otherwise.
-func globMatch(pattern, value string) bool {
-	if pattern == "*" {
-		return true
-	}
-	if strings.HasPrefix(pattern, "*") && strings.HasSuffix(pattern, "*") {
-		return strings.Contains(value, pattern[1:len(pattern)-1])
-	}
-	if strings.HasPrefix(pattern, "*") {
-		return strings.HasSuffix(value, pattern[1:])
-	}
-	if strings.HasSuffix(pattern, "*") {
-		return strings.HasPrefix(value, pattern[:len(pattern)-1])
-	}
-	return pattern == value
-}

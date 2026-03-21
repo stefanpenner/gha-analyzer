@@ -6,6 +6,7 @@ go_library(
     importpath = "github.com/stefanpenner/otel-analyzer/pkg/ingest/filter",
     visibility = ["//visibility:public"],
     deps = [
+        "//pkg/utils",
         "@io_opentelemetry_go_otel_sdk//trace",
     ],
 )

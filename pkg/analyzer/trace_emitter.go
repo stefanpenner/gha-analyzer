@@ -37,8 +37,8 @@ func (e *TraceEmitter) EmitMarkers(data *RawData, urlIndex int) {
 	e.mu.Unlock()
 
 	for _, event := range data.ReviewEvents {
-		eventTime, err := utils.ParseTime(event.Time)
-		if err != nil {
+		eventTime, ok := utils.ParseTime(event.Time)
+		if !ok {
 			continue // skip events with unparseable timestamps
 		}
 		name := "Marker"
@@ -132,8 +132,8 @@ func (e *TraceEmitter) CollectEvents(urlIndex int, traceID trace.TraceID) []sdkt
 	var events []sdktrace.Event
 
 	for _, event := range data.ReviewEvents {
-		eventTime, err := utils.ParseTime(event.Time)
-		if err != nil {
+		eventTime, ok := utils.ParseTime(event.Time)
+		if !ok {
 			continue
 		}
 		user := firstNonEmpty(event.Reviewer, event.MergedBy)

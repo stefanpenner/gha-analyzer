@@ -15,6 +15,7 @@ func TestParse(t *testing.T) {
 		{"service.name=checkout,http.status_code=5*", false, 2},
 		{"!service.name=internal", false, 1},
 		{"http.status_code", false, 1}, // bare key = exists check
+		{"=value", true, 0},            // empty key
 	}
 
 	for _, tt := range tests {
@@ -42,27 +43,61 @@ func TestParse(t *testing.T) {
 	}
 }
 
-func TestGlobMatch(t *testing.T) {
-	tests := []struct {
-		pattern string
-		value   string
-		want    bool
-	}{
-		{"*", "anything", true},
-		{"exact", "exact", true},
-		{"exact", "other", false},
-		{"prefix*", "prefix-foo", true},
-		{"prefix*", "other", false},
-		{"*suffix", "foo-suffix", true},
-		{"*suffix", "other", false},
-		{"5*", "503", true},
-		{"5*", "200", false},
+func TestParse_Negation(t *testing.T) {
+	f, err := Parse("!service.name=internal")
+	if err != nil {
+		t.Fatal(err)
 	}
+	if len(f.conditions) != 1 {
+		t.Fatalf("expected 1 condition, got %d", len(f.conditions))
+	}
+	if !f.conditions[0].negate {
+		t.Error("expected negate=true")
+	}
+	if f.conditions[0].key != "service.name" {
+		t.Errorf("expected key 'service.name', got %q", f.conditions[0].key)
+	}
+	if f.conditions[0].value != "internal" {
+		t.Errorf("expected value 'internal', got %q", f.conditions[0].value)
+	}
+}
 
-	for _, tt := range tests {
-		got := globMatch(tt.pattern, tt.value)
-		if got != tt.want {
-			t.Errorf("globMatch(%q, %q) = %v, want %v", tt.pattern, tt.value, got, tt.want)
-		}
+func TestParse_BareKey(t *testing.T) {
+	f, err := Parse("http.status_code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.conditions[0].value != "*" {
+		t.Errorf("bare key should have wildcard value, got %q", f.conditions[0].value)
+	}
+}
+
+func TestErrorsOnly(t *testing.T) {
+	f := ErrorsOnly()
+	if len(f.conditions) != 1 {
+		t.Fatalf("expected 1 condition, got %d", len(f.conditions))
+	}
+	if f.conditions[0].key != "otel.status_code" {
+		t.Errorf("expected key 'otel.status_code', got %q", f.conditions[0].key)
+	}
+	if f.conditions[0].value != "ERROR" {
+		t.Errorf("expected value 'ERROR', got %q", f.conditions[0].value)
+	}
+}
+
+func TestApply_NilFilter(t *testing.T) {
+	var f *Filter
+	spans := f.Apply(nil)
+	if spans != nil {
+		t.Error("expected nil from nil filter")
+	}
+}
+
+func TestApply_EmptyFilter(t *testing.T) {
+	f := &Filter{}
+	// Empty filter should pass everything through
+	result := f.Apply(nil)
+	if result != nil {
+		t.Error("expected nil from empty filter on nil input")
 	}
 }
