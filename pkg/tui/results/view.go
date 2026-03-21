@@ -2,7 +2,6 @@ package results
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -1051,320 +1050,400 @@ func (m Model) renderHelpModal() string {
 	return overlayFloatingTitle(rendered, " Keyboard Shortcuts ")
 }
 
-// renderDetailModal renders the detail modal for an item
-// Returns the rendered modal and the maximum scroll value
+// renderInspectorLine renders a single inspector tree entry as a styled line.
+func renderInspectorLine(entry FlatInspectorEntry, isSelected bool, maxValueWidth int, searchQuery string) string {
+	indent := strings.Repeat("  ", entry.Depth)
+
+	var indicator string
+	if len(entry.Node.Children) > 0 {
+		if entry.Node.Expanded {
+			indicator = ModalIndicatorStyle.Render("▼ ")
+		} else {
+			childCount := countDescendants(entry.Node)
+			indicator = ModalIndicatorStyle.Render(fmt.Sprintf("▶ (%d) ", childCount))
+		}
+	} else {
+		indicator = "  "
+	}
+
+	var line string
+	if entry.Node.IsSection {
+		line = indent + indicator + ModalTitleStyle.Render("── "+entry.Node.Label+" ──")
+	} else if entry.Node.Value != "" && entry.Node.Label != "" {
+		label := ModalGroupLabelStyle.Render(entry.Node.Label)
+		value := entry.Node.Value
+		if entry.Node.IsURL {
+			value = hyperlink(value, value)
+		} else if len(value) > maxValueWidth && maxValueWidth > 3 {
+			value = value[:maxValueWidth-3] + "..."
+		}
+		line = indent + indicator + label + " " + ModalValueStyle.Render(value)
+	} else if entry.Node.Value != "" {
+		value := entry.Node.Value
+		if len(value) > maxValueWidth && maxValueWidth > 3 {
+			value = value[:maxValueWidth-3] + "..."
+		}
+		line = indent + indicator + ModalValueStyle.Render(value)
+	} else {
+		line = indent + indicator + ModalGroupLabelStyle.Render(entry.Node.Label)
+	}
+
+	if isSelected {
+		line = ModalSelectedStyle.Render(line)
+	}
+
+	return line
+}
+
+// countDescendants returns the total number of descendants (recursive) of a node.
+func countDescendants(n *InspectorNode) int {
+	count := len(n.Children)
+	for _, ch := range n.Children {
+		count += countDescendants(ch)
+	}
+	return count
+}
+
+// renderInspectorSidebar renders the left pane as vertical tabs.
+// The selected tab has a connected look: " ▎Label  " with no right border,
+// while unselected tabs are dimmed with a right border separator.
+func (m Model) renderInspectorSidebar(maxHeight int) string {
+	sidebarWidth := 20
+	var lines []string
+
+	for i, section := range m.inspectorNodes {
+		label := SectionLabel(section)
+		if len(label) > sidebarWidth-4 {
+			label = label[:sidebarWidth-7] + "..."
+		}
+
+		isSelected := i == m.inspectorSidebarIdx
+		if isSelected {
+			// Active tab: accent bar + bold label + open right edge
+			accent := ModalSidebarFocusCursor.Render("▎")
+			if m.inspectorFocusLeft {
+				lines = append(lines, accent+ModalSidebarSelectedStyle.Render(" "+label+" "))
+			} else {
+				lines = append(lines, accent+ModalValueStyle.Render(" "+label+" "))
+			}
+		} else {
+			lines = append(lines, " "+ModalSidebarDimStyle.Render(" "+label))
+		}
+	}
+
+	// Pad to fill height
+	for len(lines) < maxHeight {
+		lines = append(lines, "")
+	}
+	if len(lines) > maxHeight {
+		lines = lines[:maxHeight]
+	}
+
+	// Pad each line to sidebar width
+	var sb strings.Builder
+	for i, line := range lines {
+		w := lipgloss.Width(line)
+		sb.WriteString(line)
+		if w < sidebarWidth {
+			sb.WriteString(strings.Repeat(" ", sidebarWidth-w))
+		}
+		if i < len(lines)-1 {
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
+// renderInspectorBreadcrumb renders the breadcrumb trail for inspector navigation.
+func (m Model) renderInspectorBreadcrumb() string {
+	if len(m.inspectorBreadcrumb) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, entry := range m.inspectorBreadcrumb {
+		name := entry.item.DisplayName
+		if len(name) > 20 {
+			name = name[:17] + "..."
+		}
+		parts = append(parts, ModalBreadcrumbStyle.Render(name))
+	}
+	// Current item
+	curName := m.modalItem.DisplayName
+	if len(curName) > 20 {
+		curName = curName[:17] + "..."
+	}
+	parts = append(parts, ModalBreadcrumbActiveStyle.Render(curName))
+	sep := ModalBreadcrumbSepStyle.Render(" › ")
+	return strings.Join(parts, sep)
+}
+
+// renderInspectorHeader renders the header with name and summary info.
+func (m Model) renderInspectorHeader(maxWidth int) string {
+	item := m.modalItem
+	if item == nil {
+		return ""
+	}
+
+	// Name line
+	name := ModalTitleStyle.Render(item.DisplayName)
+
+	// Summary badges
+	var badges []string
+	if item.Hints.Outcome != "" {
+		var style lipgloss.Style
+		switch item.Hints.Outcome {
+		case "success":
+			style = SuccessStyle
+		case "failure":
+			style = FailureStyle
+		case "skipped":
+			style = SkippedStyle
+		default:
+			style = PendingStyle
+		}
+		badges = append(badges, style.Render(item.Hints.Outcome))
+	}
+	if !item.StartTime.IsZero() && !item.EndTime.IsZero() {
+		dur := item.EndTime.Sub(item.StartTime).Seconds()
+		if dur < 0 {
+			dur = 0
+		}
+		badges = append(badges, FooterStyle.Render(utils.HumanizeTime(dur)))
+	}
+	if item.ItemType != ItemTypeURLGroup {
+		badges = append(badges, FooterStyle.Render(item.ItemType.String()))
+	}
+	if item.Hints.ServiceName != "" {
+		badges = append(badges, FooterStyle.Render(item.Hints.ServiceName))
+	}
+	if item.ScopeName != "" && item.ScopeName != "github.com/stefanpenner/otel-analyzer/pkg/analyzer" {
+		badges = append(badges, FooterStyle.Render(item.ScopeName))
+	}
+	if item.SpanID != "" {
+		sid := item.SpanID
+		if len(sid) > 10 {
+			sid = sid[:10]
+		}
+		badges = append(badges, FooterStyle.Render(sid))
+	}
+
+	badgeLine := strings.Join(badges, FooterStyle.Render(" • "))
+
+	header := name
+	if badgeLine != "" {
+		header += "  " + badgeLine
+	}
+
+	// Truncate if too wide
+	if lipgloss.Width(header) > maxWidth-4 {
+		header = ansi.Truncate(header, maxWidth-4, "…")
+	}
+
+	// URL on second line (clickable)
+	if item.Hints.URL != "" {
+		urlText := item.Hints.URL
+		if lipgloss.Width(urlText) > maxWidth-4 {
+			urlText = urlText[:maxWidth-7] + "…"
+		}
+		urlLine := hyperlink(item.Hints.URL, FooterStyle.Render(urlText))
+		header += "\n" + urlLine
+	}
+
+	return header
+}
+
+// renderDetailModal renders the two-pane detail modal for an item.
+// Returns the rendered modal and the maximum scroll value.
 func (m Model) renderDetailModal(maxHeight, maxWidth int) (string, int) {
 	if m.modalItem == nil {
 		return "", 0
 	}
 
-	item := m.modalItem
-	var lines []string
+	flat := m.inspectorFlat
 
-	// Helper to add a row
-	addRow := func(label, value string) {
-		lines = append(lines, ModalLabelStyle.Render(label)+ModalValueStyle.Render(value))
-	}
-
-	// Title (rendered as floating badge on modal border, skip inline title)
-
-	// Core Fields
-	lines = append(lines, ModalTitleStyle.Render("── Core ──"))
-	addRow("Name:", item.DisplayName)
-	addRow("ID:", item.ID)
-	if item.ParentID != "" {
-		addRow("Parent ID:", item.ParentID)
-	}
-	addRow("Type:", item.ItemType.String())
-	lines = append(lines, "")
-
-	// Timing
-	lines = append(lines, ModalTitleStyle.Render("── Timing ──"))
-	if !item.StartTime.IsZero() {
-		addRow("Start Time:", item.StartTime.Format("2006-01-02 15:04:05"))
-	}
-	if !item.EndTime.IsZero() {
-		addRow("End Time:", item.EndTime.Format("2006-01-02 15:04:05"))
-	}
-	if !item.StartTime.IsZero() && !item.EndTime.IsZero() {
-		duration := item.EndTime.Sub(item.StartTime).Seconds()
-		if duration < 0 {
-			duration = 0
-		}
-		addRow("Duration:", utils.HumanizeTime(duration))
-	}
-	lines = append(lines, "")
-
-	// Status
-	lines = append(lines, ModalTitleStyle.Render("── Status ──"))
-	if item.Hints.Outcome != "" {
-		addRow("Outcome:", item.Hints.Outcome)
-	}
-	if item.Hints.IsRequired {
-		addRow("Is Required:", "Yes")
-	} else {
-		addRow("Is Required:", "No")
-	}
-	if item.IsBottleneck {
-		addRow("Is Bottleneck:", "Yes")
-	} else {
-		addRow("Is Bottleneck:", "No")
-	}
-	lines = append(lines, "")
-
-	// Links
-	if item.Hints.URL != "" {
-		lines = append(lines, ModalTitleStyle.Render("── Links ──"))
-		linkedURL := hyperlink(item.Hints.URL, item.Hints.URL)
-		lines = append(lines, ModalLabelStyle.Render("URL:")+linkedURL)
-		lines = append(lines, "")
-	}
-
-	// Marker-specific fields
-	if item.Hints.IsMarker {
-		lines = append(lines, ModalTitleStyle.Render("── Marker ──"))
-		if item.Hints.User != "" {
-			addRow("User:", item.Hints.User)
-		}
-		if item.Hints.EventType != "" {
-			addRow("Event Type:", item.Hints.EventType)
-		}
-		lines = append(lines, "")
-	}
-
-	// OTel Identity
-	if item.TraceID != "" || item.SpanID != "" {
-		lines = append(lines, ModalTitleStyle.Render("── Trace Identity ──"))
-		if item.TraceID != "" {
-			addRow("Trace ID:", item.TraceID)
-		}
-		if item.SpanID != "" {
-			addRow("Span ID:", item.SpanID)
-		}
-		lines = append(lines, "")
-	}
-
-	// Service context from enrichment
-	if item.Hints.ServiceName != "" || item.Hints.Environment != "" || item.Hints.Detail != "" {
-		lines = append(lines, ModalTitleStyle.Render("── Context ──"))
-		if item.Hints.ServiceName != "" {
-			addRow("Service:", item.Hints.ServiceName)
-		}
-		if item.Hints.Environment != "" {
-			addRow("Environment:", item.Hints.Environment)
-		}
-		if item.Hints.Detail != "" {
-			addRow("Detail:", item.Hints.Detail)
-		}
-		if item.Hints.VCSBranch != "" {
-			addRow("Branch:", item.Hints.VCSBranch)
-		}
-		if item.Hints.VCSRevision != "" {
-			rev := item.Hints.VCSRevision
-			if len(rev) > 12 {
-				rev = rev[:12]
-			}
-			addRow("Revision:", rev)
-		}
-		if item.Hints.RunID != "" {
-			addRow("Run ID:", item.Hints.RunID)
-		}
-		lines = append(lines, "")
-	}
-
-	// InstrumentationScope
-	if item.ScopeName != "" {
-		lines = append(lines, ModalTitleStyle.Render("── Instrumentation ──"))
-		addRow("Library:", item.ScopeName)
-		if item.ScopeVersion != "" {
-			addRow("Version:", item.ScopeVersion)
-		}
-		lines = append(lines, "")
-	}
-
-	// Span Events (exceptions, logs)
-	if len(item.Events) > 0 {
-		lines = append(lines, ModalTitleStyle.Render("── Events ──"))
-		for _, ev := range item.Events {
-			timeStr := ""
-			if !ev.Time.IsZero() {
-				timeStr = " @ " + ev.Time.Format("15:04:05")
-			}
-			lines = append(lines, ModalValueStyle.Render(fmt.Sprintf("  %s%s", ev.Name, timeStr)))
-			// Show exception details prominently
-			if exType := ev.Attrs["exception.type"]; exType != "" {
-				addRow("    Type:", exType)
-			}
-			if exMsg := ev.Attrs["exception.message"]; exMsg != "" {
-				msg := exMsg
-				if len(msg) > 120 {
-					msg = msg[:117] + "..."
-				}
-				addRow("    Message:", msg)
-			}
-			if stack := ev.Attrs["exception.stacktrace"]; stack != "" {
-				// Show first 3 lines of stacktrace
-				stackLines := strings.SplitN(stack, "\n", 4)
-				for i, sl := range stackLines {
-					if i >= 3 {
-						addRow("    ...", fmt.Sprintf("(%d more lines)", strings.Count(stack, "\n")-3))
-						break
-					}
-					if sl != "" {
-						addRow("   ", sl)
-					}
-				}
-			}
-			// Show other event attributes
-			for k, v := range ev.Attrs {
-				if k != "exception.type" && k != "exception.message" && k != "exception.stacktrace" && v != "" {
-					addRow("    "+k+":", v)
-				}
-			}
-		}
-		lines = append(lines, "")
-	}
-
-	// Span Links (cross-trace references)
-	if len(item.Links) > 0 {
-		lines = append(lines, ModalTitleStyle.Render("── Links ──"))
-		for i, link := range item.Links {
-			lines = append(lines, ModalValueStyle.Render(fmt.Sprintf("  Link %d:", i+1)))
-			addRow("    Trace ID:", link.TraceID)
-			addRow("    Span ID:", link.SpanID)
-			for k, v := range link.Attrs {
-				if v != "" {
-					addRow("    "+k+":", v)
-				}
-			}
-		}
-		lines = append(lines, "")
-	}
-
-	// Span Attributes (from source node)
-	if item.sourceNode != nil && len(item.sourceNode.Attrs) > 0 {
-		lines = append(lines, ModalTitleStyle.Render("── Attributes ──"))
-		// Sort keys for stable display
-		keys := make([]string, 0, len(item.sourceNode.Attrs))
-		for k := range item.sourceNode.Attrs {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			v := item.sourceNode.Attrs[k]
-			if v != "" {
-				addRow(k+":", v)
-			}
-		}
-		lines = append(lines, "")
-	}
-
-	// Resource Attributes
-	if len(item.ResourceAttrs) > 0 {
-		lines = append(lines, ModalTitleStyle.Render("── Resource ──"))
-		keys := make([]string, 0, len(item.ResourceAttrs))
-		for k := range item.ResourceAttrs {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			v := item.ResourceAttrs[k]
-			if v != "" {
-				addRow(k+":", v)
-			}
-		}
-		lines = append(lines, "")
-	}
-
-	// Tree Info
-	lines = append(lines, ModalTitleStyle.Render("── Tree ──"))
-	addRow("Depth:", fmt.Sprintf("%d", item.Depth))
-	addRow("Has Children:", fmt.Sprintf("%v", item.HasChildren))
-	if item.HasChildren {
-		addRow("Child Count:", fmt.Sprintf("%d", len(item.Children)))
-	}
-
-	// Calculate available height for content (account for border and padding)
-	// ModalStyle has Padding(1, 2) = 1 top, 1 bottom, 2 left, 2 right
-	// Plus 2 for the border itself
+	// Calculate available height for content
 	contentMaxHeight := maxHeight - 4 // 2 for border, 2 for padding
-
-	// Reserve 2 lines for footer
-	contentMaxHeight -= 2
-
+	contentMaxHeight -= 4 // header (name + badges + separator) + footer
+	if m.modalItem != nil && m.modalItem.Hints.URL != "" {
+		contentMaxHeight-- // URL line in header
+	}
+	hasBreadcrumb := len(m.inspectorBreadcrumb) > 0
+	if hasBreadcrumb {
+		contentMaxHeight-- // breadcrumb line
+	}
+	if m.inspectorSearching || m.inspectorSearchQuery != "" {
+		contentMaxHeight-- // search bar
+	}
 	if contentMaxHeight < 5 {
 		contentMaxHeight = 5
 	}
 
-	// Calculate max scroll
-	totalLines := len(lines)
+	// Build search match set for highlighting
+	searchMatchSet := make(map[int]bool)
+	for _, idx := range m.inspectorSearchMatches {
+		searchMatchSet[idx] = true
+	}
+
+	// -- Sidebar (vertical tabs) --
+	sidebarWidth := 22
+	sidebar := m.renderInspectorSidebar(contentMaxHeight)
+
+	// Separator column
+	var sepCol strings.Builder
+	for i := 0; i < contentMaxHeight; i++ {
+		sepCol.WriteString(SeparatorStyle.Render("│"))
+		if i < contentMaxHeight-1 {
+			sepCol.WriteString("\n")
+		}
+	}
+
+	// -- Right pane (tree) --
+	rightWidth := maxWidth - sidebarWidth - 7
+	if rightWidth < 30 {
+		rightWidth = 30
+	}
+
+	maxValueWidth := rightWidth - 10
+	if maxValueWidth < 30 {
+		maxValueWidth = 30
+	}
+
+	// Auto-scroll to keep cursor visible
+	totalLines := len(flat)
+	scroll := m.modalScroll
+	if !m.inspectorFocusLeft && totalLines > 0 {
+		if m.inspectorCursor < scroll {
+			scroll = m.inspectorCursor
+		}
+		if m.inspectorCursor >= scroll+contentMaxHeight {
+			scroll = m.inspectorCursor - contentMaxHeight + 1
+		}
+	}
 	maxScroll := totalLines - contentMaxHeight
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
-
-	// Apply scroll
-	scroll := m.modalScroll
 	if scroll > maxScroll {
 		scroll = maxScroll
 	}
 
-	// Calculate max content width from ALL lines (not just visible)
-	maxContentWidth := 0
-	for _, line := range lines {
-		w := lipgloss.Width(line)
-		if w > maxContentWidth {
-			maxContentWidth = w
+	// Render right pane lines
+	var rightLines []string
+	if totalLines == 0 {
+		rightLines = append(rightLines, ModalSidebarDimStyle.Render("  (empty)"))
+	}
+	for i, entry := range flat {
+		isSelected := !m.inspectorFocusLeft && i == m.inspectorCursor
+		line := renderInspectorLine(entry, isSelected, maxValueWidth, m.inspectorSearchQuery)
+
+		if searchMatchSet[i] && !isSelected {
+			line = ModalSearchMatchStyle.Render("│") + line
+		} else {
+			line = " " + line
 		}
+
+		rightLines = append(rightLines, line)
 	}
 
-	// Get visible lines
+	// Get visible right pane lines
 	endIdx := scroll + contentMaxHeight
-	if endIdx > totalLines {
-		endIdx = totalLines
+	if endIdx > len(rightLines) {
+		endIdx = len(rightLines)
 	}
-	visibleLines := lines[scroll:endIdx]
+	startIdx := scroll
+	if startIdx > len(rightLines) {
+		startIdx = len(rightLines)
+	}
+	visibleRight := rightLines[startIdx:endIdx]
 
-	// Build content without scrollbar (scrollbar added outside modal border)
-	var b strings.Builder
-	showScrollbar := maxScroll > 0
-	visibleCount := len(visibleLines)
+	for len(visibleRight) < contentMaxHeight {
+		visibleRight = append(visibleRight, "")
+	}
 
-	// Pad each visible line to max content width for consistent modal width
-	for _, line := range visibleLines {
-		lineWidth := lipgloss.Width(line)
-		b.WriteString(line)
-		if lineWidth < maxContentWidth {
-			b.WriteString(strings.Repeat(" ", maxContentWidth-lineWidth))
+	// Calculate max right pane width
+	maxRightWidth := 0
+	for _, line := range visibleRight {
+		w := lipgloss.Width(line)
+		if w > maxRightWidth {
+			maxRightWidth = w
 		}
-		b.WriteString("\n")
+	}
+	if maxRightWidth < rightWidth {
+		maxRightWidth = rightWidth
 	}
 
-	// Footer hint with scroll indicator (padded to match content width)
+	// Pad right lines to consistent width
+	var rightPane strings.Builder
+	for i, line := range visibleRight {
+		w := lipgloss.Width(line)
+		rightPane.WriteString(line)
+		if w < maxRightWidth {
+			rightPane.WriteString(strings.Repeat(" ", maxRightWidth-w))
+		}
+		if i < len(visibleRight)-1 {
+			rightPane.WriteString("\n")
+		}
+	}
+
+	// Join panes horizontally
+	content := lipgloss.JoinHorizontal(lipgloss.Top, sidebar, sepCol.String(), rightPane.String())
+	totalContentWidth := lipgloss.Width(content)
+
+	// Build full modal content
+	var b strings.Builder
+
+	// Breadcrumb (if navigated into children)
+	if hasBreadcrumb {
+		bc := m.renderInspectorBreadcrumb()
+		b.WriteString(bc + "\n")
+	}
+
+	// Header: name + summary badges
+	header := m.renderInspectorHeader(totalContentWidth)
+	b.WriteString(header + "\n")
+	// Separator between header and content
+	sepLine := strings.Repeat("─", totalContentWidth)
+	b.WriteString(SeparatorStyle.Render(sepLine) + "\n")
+
+	b.WriteString(content)
 	b.WriteString("\n")
-	var footerText string
-	if maxScroll > 0 {
-		scrollInfo := fmt.Sprintf("[%d/%d] ", scroll+1, maxScroll+1)
-		footerText = FooterStyle.Render(scrollInfo + "↑↓ scroll • ←→ prev/next • Esc close")
-	} else {
-		footerText = FooterStyle.Render("←→ prev/next • Esc/i close")
+
+	// Search bar
+	if m.inspectorSearching {
+		searchPrompt := ModalSearchBarStyle.Render("/ " + m.inspectorSearchQuery + "█")
+		if len(m.inspectorSearchMatches) > 0 {
+			searchPrompt += FooterStyle.Render(fmt.Sprintf("  %d matches", len(m.inspectorSearchMatches)))
+		}
+		b.WriteString("\n" + searchPrompt)
+	} else if m.inspectorSearchQuery != "" {
+		matchInfo := FooterStyle.Render(fmt.Sprintf("/%s  %d matches • n/N jump • Esc clear", m.inspectorSearchQuery, len(m.inspectorSearchMatches)))
+		b.WriteString("\n" + matchInfo)
 	}
-	footerWidth := lipgloss.Width(footerText)
+
+	// Footer
+	b.WriteString("\n")
+	var footerParts []string
+	if totalLines > 0 {
+		footerParts = append(footerParts, fmt.Sprintf("[%d/%d]", m.inspectorCursor+1, totalLines))
+	}
+	if m.inspectorCopyMsg != "" {
+		footerParts = append(footerParts, ModalCopyFeedbackStyle.Render(m.inspectorCopyMsg))
+	}
+	footerParts = append(footerParts, "Tab pane • ←→ expand • /search • c copy • o open • [/] item • Esc back")
+	footerText := FooterStyle.Render(strings.Join(footerParts, " "))
 	b.WriteString(footerText)
-	if footerWidth < maxContentWidth {
-		b.WriteString(strings.Repeat(" ", maxContentWidth-footerWidth))
-	}
 
-	// Apply max width constraint to the style
+	// Apply modal style
 	modalStyle := ModalStyle.MaxWidth(maxWidth)
-	content := b.String()
-	renderedModal := modalStyle.Render(content)
+	renderedModal := modalStyle.Render(b.String())
 
-	// Overlay floating title badge on the top border
-	renderedModal = overlayFloatingTitle(renderedModal, " Span Details ")
+	// Overlay floating title
+	title := " Span Details "
+	renderedModal = overlayFloatingTitle(renderedModal, title)
 
-	// Add scrollbar outside the modal border if needed
-	if showScrollbar {
+	// Add scrollbar for right pane
+	if maxScroll > 0 {
+		visibleCount := endIdx - startIdx
 		renderedModal = addScrollbarToModal(renderedModal, scroll, maxScroll, visibleCount, totalLines)
 	}
 

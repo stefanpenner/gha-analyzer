@@ -1446,124 +1446,176 @@ func TestLogicalEnd(t *testing.T) {
 func TestDetailModalNavigation(t *testing.T) {
 	t.Parallel()
 
-	t.Run("h/left navigates to previous item in modal", func(t *testing.T) {
-		m := createTestModel()
-		m.cursor = 1
-		m.openDetailModal()
-
-		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
-		m = newModel.(Model)
-
-		assert.Equal(t, 0, m.cursor)
-		assert.Equal(t, m.visibleItems[0].ID, m.modalItem.ID)
-		assert.Equal(t, 0, m.modalScroll)
-	})
-
-	t.Run("l/right navigates to next item in modal", func(t *testing.T) {
+	t.Run("] navigates to next item in modal", func(t *testing.T) {
 		m := createTestModel()
 		m.cursor = 0
 		m.openDetailModal()
 
-		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("]")})
 		m = newModel.(Model)
 
 		assert.Equal(t, 1, m.cursor)
 		assert.Equal(t, m.visibleItems[1].ID, m.modalItem.ID)
 		assert.Equal(t, 0, m.modalScroll)
+		assert.Equal(t, 0, m.inspectorCursor)
 	})
 
-	t.Run("left arrow navigates to previous item in modal", func(t *testing.T) {
+	t.Run("[ navigates to previous item in modal", func(t *testing.T) {
 		m := createTestModel()
 		m.cursor = 1
 		m.openDetailModal()
 
-		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("[")})
 		m = newModel.(Model)
 
 		assert.Equal(t, 0, m.cursor)
-		assert.NotNil(t, m.modalItem)
-	})
-
-	t.Run("right arrow navigates to next item in modal", func(t *testing.T) {
-		m := createTestModel()
-		m.cursor = 0
-		m.openDetailModal()
-
-		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRight})
-		m = newModel.(Model)
-
-		assert.Equal(t, 1, m.cursor)
-		assert.NotNil(t, m.modalItem)
-	})
-
-	t.Run("h at first item does not change cursor", func(t *testing.T) {
-		m := createTestModel()
-		m.cursor = 0
-		m.openDetailModal()
-
-		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
-		m = newModel.(Model)
-
-		assert.Equal(t, 0, m.cursor)
-	})
-
-	t.Run("l at last item does not change cursor", func(t *testing.T) {
-		m := createTestModel()
-		m.cursor = len(m.visibleItems) - 1
-		m.openDetailModal()
-		lastCursor := m.cursor
-
-		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-		m = newModel.(Model)
-
-		assert.Equal(t, lastCursor, m.cursor)
-	})
-
-	t.Run("modal scroll resets on h/l navigation", func(t *testing.T) {
-		m := createTestModel()
-		m.cursor = 1
-		m.openDetailModal()
-		m.modalScroll = 5
-
-		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
-		m = newModel.(Model)
-
+		assert.Equal(t, m.visibleItems[0].ID, m.modalItem.ID)
 		assert.Equal(t, 0, m.modalScroll)
+		assert.Equal(t, 0, m.inspectorCursor)
 	})
 
-	t.Run("j scrolls modal content down", func(t *testing.T) {
+	t.Run("opens with sidebar focused", func(t *testing.T) {
 		m := createTestModel()
 		m.cursor = 0
 		m.openDetailModal()
+		assert.True(t, m.inspectorFocusLeft, "modal should open with sidebar focused")
+	})
+
+	t.Run("tab switches focus between panes", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+		assert.True(t, m.inspectorFocusLeft) // starts on sidebar
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m = newModel.(Model)
+		assert.False(t, m.inspectorFocusLeft) // now on tree
+
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyTab})
+		m = newModel.(Model)
+		assert.True(t, m.inspectorFocusLeft) // back to sidebar
+	})
+
+	t.Run("h collapses expanded inspector node in tree pane", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+		m.inspectorFocusLeft = false // focus tree pane
+		// The flat list should have nodes from the first section
+		assert.True(t, len(m.inspectorFlat) > 0)
+
+		// Find a node with children to collapse
+		// In single-section mode, the section's children are directly shown
+		// We need to check if any has children
+		foundExpandable := false
+		for i, entry := range m.inspectorFlat {
+			if len(entry.Node.Children) > 0 && entry.Node.Expanded {
+				m.inspectorCursor = i
+				foundExpandable = true
+				break
+			}
+		}
+		if foundExpandable {
+			newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+			m = newModel.(Model)
+			// Node should be collapsed
+			assert.False(t, m.inspectorFlat[m.inspectorCursor].Node.Expanded)
+		}
+	})
+
+	t.Run("l expands collapsed inspector node in tree pane", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+		m.inspectorFocusLeft = false // focus tree pane
+
+		// Find a node with children and collapse it
+		for i, entry := range m.inspectorFlat {
+			if len(entry.Node.Children) > 0 {
+				entry.Node.Expanded = false
+				m.inspectorCursor = i
+				m.rebuildInspectorFlat()
+
+				newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+				m = newModel.(Model)
+				assert.True(t, m.inspectorFlat[m.inspectorCursor].Node.Expanded)
+				break
+			}
+		}
+	})
+
+	t.Run("j moves inspector cursor down in tree pane", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+		m.inspectorFocusLeft = false // focus tree pane
 
 		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 		m = newModel.(Model)
 
-		assert.Equal(t, 1, m.modalScroll)
+		assert.Equal(t, 1, m.inspectorCursor)
 	})
 
-	t.Run("k scrolls modal content up", func(t *testing.T) {
+	t.Run("k moves inspector cursor up in tree pane", func(t *testing.T) {
 		m := createTestModel()
 		m.cursor = 0
 		m.openDetailModal()
-		m.modalScroll = 3
+		m.inspectorFocusLeft = false // focus tree pane
+		m.inspectorCursor = 3
 
 		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
 		m = newModel.(Model)
 
-		assert.Equal(t, 2, m.modalScroll)
+		assert.Equal(t, 2, m.inspectorCursor)
 	})
 
-	t.Run("k does not scroll below zero", func(t *testing.T) {
+	t.Run("k does not go below zero in tree pane", func(t *testing.T) {
 		m := createTestModel()
 		m.cursor = 0
 		m.openDetailModal()
-		m.modalScroll = 0
+		m.inspectorFocusLeft = false
+		m.inspectorCursor = 0
 
 		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
 		m = newModel.(Model)
 
-		assert.Equal(t, 0, m.modalScroll)
+		assert.Equal(t, 0, m.inspectorCursor)
+	})
+
+	t.Run("j/k moves sidebar index when focused left", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+		assert.True(t, m.inspectorFocusLeft)
+		assert.Equal(t, 0, m.inspectorSidebarIdx)
+
+		newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		m = newModel.(Model)
+		assert.Equal(t, 1, m.inspectorSidebarIdx)
+
+		newModel, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+		m = newModel.(Model)
+		assert.Equal(t, 0, m.inspectorSidebarIdx)
+	})
+
+	t.Run("space in tree pane toggles expand/collapse", func(t *testing.T) {
+		m := createTestModel()
+		m.cursor = 0
+		m.openDetailModal()
+		m.inspectorFocusLeft = false // focus tree pane
+
+		// Find a node with children
+		for i, entry := range m.inspectorFlat {
+			if len(entry.Node.Children) > 0 {
+				m.inspectorCursor = i
+				wasExpanded := entry.Node.Expanded
+
+				newModel, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
+				m = newModel.(Model)
+				assert.NotEqual(t, wasExpanded, m.inspectorFlat[m.inspectorCursor].Node.Expanded)
+				break
+			}
+		}
 	})
 
 	t.Run("r in modal with reloadFunc closes modal and starts loading", func(t *testing.T) {
@@ -2421,7 +2473,9 @@ func TestDynamicHelp(t *testing.T) {
 	t.Run("modal mode shows modal keys", func(t *testing.T) {
 		km := DefaultKeyMap()
 		help := km.ShortHelpForMode(HelpModeModal)
-		assert.Contains(t, help, "scroll")
+		assert.Contains(t, help, "pane")
+		assert.Contains(t, help, "expand")
+		assert.Contains(t, help, "copy")
 		assert.Contains(t, help, "close")
 	})
 }

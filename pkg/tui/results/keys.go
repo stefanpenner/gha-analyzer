@@ -170,7 +170,7 @@ func (k KeyMap) ShortHelpForMode(mode HelpMode) string {
 	case HelpModeSearchActive:
 		return "↑↓ nav • enter/esc clear • / new search • n/N jump • s sort • ? help • q quit"
 	case HelpModeModal:
-		return "↑↓ scroll • ←→ prev/next • esc close"
+		return "Tab pane • ←→ expand • /search • c copy • o open • [/] item • esc close"
 	default:
 		return "↑↓ nav • ^u/^d page • n/N jump • s sort • [/] resize • / search • ? help"
 	}
