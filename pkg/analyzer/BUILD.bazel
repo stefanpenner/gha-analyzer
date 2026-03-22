@@ -45,6 +45,10 @@ go_test(
         "//pkg/utils",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//mock",
+        "@io_opentelemetry_go_otel//attribute",
         "@io_opentelemetry_go_otel//codes",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_sdk//trace/tracetest",
+        "@io_opentelemetry_go_otel_trace//:trace",
     ],
 )

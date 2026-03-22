@@ -6,7 +6,7 @@
 # Prerequisites:
 #   npm install -g svg-term-cli
 #
-# The Python driver creates a properly-sized pty, spawns otel-explorer,
+# The Go driver creates a properly-sized pty, spawns otel-explorer,
 # sends scripted keystrokes, and writes an asciinema v2 .cast file.
 # No asciinema binary needed.
 
@@ -25,7 +25,7 @@ if ! command -v "$BINARY" >/dev/null 2>&1; then
 fi
 
 echo "Recording demo..."
-python3 "${SCRIPT_DIR}/demo-driver.py" "$CAST_FILE"
+(cd "${SCRIPT_DIR}/.." && go run ./cmd/record-demo "$CAST_FILE")
 
 echo "Converting to SVG..."
 svg-term --in "$CAST_FILE" --out "$SVG_FILE" \
