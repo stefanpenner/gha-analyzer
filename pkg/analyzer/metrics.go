@@ -5,8 +5,8 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
-	"github.com/stefanpenner/otel-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-explorer/pkg/githubapi"
+	"github.com/stefanpenner/otel-explorer/pkg/utils"
 )
 
 func InitializeMetrics() Metrics {

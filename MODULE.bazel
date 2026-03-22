@@ -1,5 +1,5 @@
 module(
-    name = "otel-analyzer",
+    name = "otel-explorer",
     version = "0.0.0",
 )
 

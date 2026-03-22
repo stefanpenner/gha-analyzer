@@ -6,8 +6,8 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/errors"
-	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
-	"github.com/stefanpenner/otel-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-explorer/pkg/githubapi"
+	"github.com/stefanpenner/otel-explorer/pkg/utils"
 )
 
 // RawData contains all the raw data fetched from GitHub for a specific URL.

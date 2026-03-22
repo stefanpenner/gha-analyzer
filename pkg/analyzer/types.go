@@ -3,7 +3,7 @@ package analyzer
 import (
 	"sort"
 
-	"github.com/stefanpenner/otel-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-explorer/pkg/utils"
 )
 
 type Metrics struct {

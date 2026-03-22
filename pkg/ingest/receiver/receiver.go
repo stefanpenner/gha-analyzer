@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/stefanpenner/otel-analyzer/pkg/ingest/otlpfile"
+	"github.com/stefanpenner/otel-explorer/pkg/ingest/otlpfile"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 

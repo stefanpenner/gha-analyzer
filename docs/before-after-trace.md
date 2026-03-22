@@ -58,7 +58,7 @@ Reviews/merges were **separate zero-duration "marker" spans**:
   "Name": "CI",
   "SpanContext": {"TraceID": "a1b2c3...", "SpanID": "1111..."},
   "InstrumentationLibrary": {
-    "Name": "github.com/stefanpenner/otel-analyzer/pkg/analyzer"
+    "Name": "github.com/stefanpenner/otel-explorer/pkg/analyzer"
   },
   "Attributes": [
     {"Key": "cicd.pipeline.name", "Value": {"Type": "STRING", "Value": "CI"}},

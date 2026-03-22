@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
-	"github.com/stefanpenner/otel-analyzer/pkg/enrichment"
+	"github.com/stefanpenner/otel-explorer/pkg/analyzer"
+	"github.com/stefanpenner/otel-explorer/pkg/enrichment"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 

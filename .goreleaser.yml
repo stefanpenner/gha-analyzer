@@ -1,9 +1,9 @@
 version: 2
 
 builds:
-  - id: otel-analyzer
-    main: ./cmd/otel-analyzer
-    binary: otel-analyzer
+  - id: otel-explorer
+    main: ./cmd/otel-explorer
+    binary: otel-explorer
     env:
       - CGO_ENABLED=0
     goos:
@@ -16,8 +16,8 @@ builds:
       - -s -w
 
 archives:
-  - id: otel-analyzer
-    builds: [otel-analyzer]
+  - id: otel-explorer
+    builds: [otel-explorer]
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
     files:
@@ -30,7 +30,7 @@ checksum:
 release:
   github:
     owner: stefanpenner
-    name: otel-analyzer
+    name: otel-explorer
   draft: false
   prerelease: auto
 
@@ -45,15 +45,15 @@ changelog:
       - Merge branch
 
 brews:
-  - name: otel-analyzer
+  - name: otel-explorer
     repository:
       owner: stefanpenner
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    homepage: "https://github.com/stefanpenner/otel-analyzer"
+    homepage: "https://github.com/stefanpenner/otel-explorer"
     description: "Analyze OpenTelemetry traces to identify performance bottlenecks"
     license: ""
     install: |
-      bin.install "otel-analyzer"
+      bin.install "otel-explorer"
     test: |
-      system "#{bin}/otel-analyzer", "--help"
+      system "#{bin}/otel-explorer", "--help"

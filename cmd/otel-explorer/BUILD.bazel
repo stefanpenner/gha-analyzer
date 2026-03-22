@@ -1,9 +1,9 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 go_library(
-    name = "otel-analyzer_lib",
+    name = "otel-explorer_lib",
     srcs = ["main.go"],
-    importpath = "github.com/stefanpenner/otel-analyzer/cmd/otel-analyzer",
+    importpath = "github.com/stefanpenner/otel-explorer/cmd/otel-explorer",
     visibility = ["//visibility:private"],
     deps = [
         "//pkg/analyzer",
@@ -31,13 +31,13 @@ go_library(
 )
 
 go_binary(
-    name = "otel-analyzer",
-    embed = [":otel-analyzer_lib"],
+    name = "otel-explorer",
+    embed = [":otel-explorer_lib"],
     visibility = ["//visibility:public"],
 )
 
 go_test(
-    name = "otel-analyzer_test",
+    name = "otel-explorer_test",
     srcs = ["args_test.go"],
-    embed = [":otel-analyzer_lib"],
+    embed = [":otel-explorer_lib"],
 )

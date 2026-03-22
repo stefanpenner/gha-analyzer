@@ -1,4 +1,4 @@
-module github.com/stefanpenner/otel-analyzer
+module github.com/stefanpenner/otel-explorer
 
 go 1.25
 

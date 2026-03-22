@@ -6,7 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/stefanpenner/otel-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-explorer/pkg/utils"
 )
 
 const (
@@ -148,7 +148,7 @@ func (m Model) renderHeader() string {
 	sep := HeaderCountStyle.Render(" • ")
 
 	// Build top border with embedded title badge
-	titleBadge := ModalFloatingTitle.Render(" otel-analyzer ")
+	titleBadge := ModalFloatingTitle.Render(" otel-explorer ")
 	titleBadgeWidth := lipgloss.Width(titleBadge)
 	leftPad := 2 // chars after "╭"
 	rightPad := max(1, totalWidth-2-leftPad-titleBadgeWidth)
@@ -1216,7 +1216,7 @@ func (m Model) renderInspectorHeader(maxWidth int) string {
 	if item.Hints.ServiceName != "" {
 		badges = append(badges, FooterStyle.Render(item.Hints.ServiceName))
 	}
-	if item.ScopeName != "" && item.ScopeName != "github.com/stefanpenner/otel-analyzer/pkg/analyzer" {
+	if item.ScopeName != "" && item.ScopeName != "github.com/stefanpenner/otel-explorer/pkg/analyzer" {
 		badges = append(badges, FooterStyle.Render(item.ScopeName))
 	}
 	if item.SpanID != "" {

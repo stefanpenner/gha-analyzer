@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
-	"github.com/stefanpenner/otel-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-explorer/pkg/githubapi"
+	"github.com/stefanpenner/otel-explorer/pkg/utils"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -18,7 +18,7 @@ import (
 )
 
 // Instrumentation identity for all GHA-generated spans.
-const instrumentationName = "github.com/stefanpenner/otel-analyzer/pkg/analyzer"
+const instrumentationName = "github.com/stefanpenner/otel-explorer/pkg/analyzer"
 
 // SpanBuilder accumulates tracetest.SpanStubs and converts them to ReadOnlySpans.
 // Thread-safe for concurrent use by processWorkflowRun goroutines.

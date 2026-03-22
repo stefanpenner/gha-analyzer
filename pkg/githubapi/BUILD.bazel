@@ -8,7 +8,7 @@ go_library(
         "ids.go",
         "provider.go",
     ],
-    importpath = "github.com/stefanpenner/otel-analyzer/pkg/githubapi",
+    importpath = "github.com/stefanpenner/otel-explorer/pkg/githubapi",
     visibility = ["//visibility:public"],
     deps = [
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",

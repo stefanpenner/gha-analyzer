@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/stefanpenner/otel-analyzer/pkg/core"
-	otelexport "github.com/stefanpenner/otel-analyzer/pkg/export/otel"
-	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
+	"github.com/stefanpenner/otel-explorer/pkg/core"
+	otelexport "github.com/stefanpenner/otel-explorer/pkg/export/otel"
+	"github.com/stefanpenner/otel-explorer/pkg/githubapi"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -50,7 +50,7 @@ func main() {
 		Attributes: []attribute.KeyValue{
 			attribute.String("type", "workflow"),
 			attribute.String("github.conclusion", "success"),
-			attribute.String("github.repository", "stefanpenner/otel-analyzer"),
+			attribute.String("github.repository", "stefanpenner/otel-explorer"),
 			attribute.Int64("github.run_id", 123456789),
 		},
 	})
@@ -107,5 +107,5 @@ func main() {
 		fmt.Printf("Finalizing failed: %v\n", err)
 	}
 
-	fmt.Println("Simulation complete! Check Grafana at http://localhost:3000/d/otel-analyzer")
+	fmt.Println("Simulation complete! Check Grafana at http://localhost:3000/d/otel-explorer")
 }

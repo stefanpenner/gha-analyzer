@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "tui",
     srcs = ["progress.go"],
-    importpath = "github.com/stefanpenner/otel-analyzer/pkg/tui",
+    importpath = "github.com/stefanpenner/otel-explorer/pkg/tui",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_charmbracelet_bubbles//spinner",

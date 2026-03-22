@@ -1,60 +1,109 @@
 package perfetto
 
 import (
-	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 
 	"github.com/cockroachdb/errors"
-	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
-	"github.com/stefanpenner/otel-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-explorer/pkg/analyzer"
+	"github.com/stefanpenner/otel-explorer/pkg/utils"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 
-func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime int64, perfettoFile string, openInPerfetto bool, spans []trace.ReadOnlySpan) error {
-	traceTitle := fmt.Sprintf("GitHub Actions: Multi-URL Analysis (%d URLs)", len(urlResults))
-	traceMetadata := []analyzer.TraceEvent{
-		{
-			Name: "process_name",
-			Ph:   "M",
-			Pid:  0,
-			Args: map[string]interface{}{
-				"name":       traceTitle,
-				"url":        "https://perfetto.dev",
-				"github_url": "https://github.com",
-			},
-		},
-	}
+// trackKey identifies a track by its process/thread pair.
+type trackKey struct {
+	pid, tid int
+}
 
-	// Find the true earliest timestamp across all events
-	trueEarliest := globalEarliestTime
+// trackState holds descriptor info for a track being built.
+type trackState struct {
+	uuid       uint64
+	parentUUID uint64
+	name       string
+	isProcess  bool // true = ProcessDescriptor, false = ThreadDescriptor
+	pid, tid   int
+}
+
+func makeUUID(parts ...interface{}) uint64 {
+	h := fnv.New64a()
+	fmt.Fprint(h, parts...)
+	return h.Sum64()
+}
+
+// spanEvent holds the data needed to emit a TracePacket for one span or legacy event.
+type spanEvent struct {
+	trackUUID   uint64
+	startNs     uint64
+	endNs       uint64 // 0 for instants
+	name        string
+	annotations [][]byte
+	isInstant   bool
+}
+
+func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.CombinedMetrics, traceEvents []analyzer.TraceEvent, globalEarliestTime int64, perfettoFile string, openInPerfetto bool, spans []trace.ReadOnlySpan) error {
+	// Find earliest nanosecond timestamp across all sources
+	earliestNs := globalEarliestTime * 1_000_000
 	for _, s := range spans {
-		ms := s.StartTime().UnixMilli()
-		if ms < trueEarliest {
-			trueEarliest = ms
+		ns := s.StartTime().UnixNano()
+		if ns < earliestNs {
+			earliestNs = ns
 		}
 	}
 	for _, res := range urlResults {
-		if res.EarliestTime != 0 && res.EarliestTime < trueEarliest {
-			trueEarliest = res.EarliestTime
+		if res.EarliestTime != 0 {
+			ns := res.EarliestTime * 1_000_000
+			if ns < earliestNs {
+				earliestNs = ns
+			}
 		}
 	}
 
-	// Convert OTel spans to TraceEvents
-	otelEvents := []analyzer.TraceEvent{}
-	pidsSeen := make(map[int]bool)
-	tidsSeen := make(map[int]bool)
+	// Track registry: collect all tracks before emitting
+	processTracks := make(map[int]*trackState)  // pid -> state
+	threadTracks := make(map[trackKey]*trackState) // (pid,tid) -> state
+
+	getProcessTrack := func(pid int, name string) uint64 {
+		if t, ok := processTracks[pid]; ok {
+			if name != "" && t.name == "" {
+				t.name = name
+			}
+			return t.uuid
+		}
+		uuid := makeUUID("process", pid)
+		processTracks[pid] = &trackState{
+			uuid: uuid, name: name, isProcess: true, pid: pid,
+		}
+		return uuid
+	}
+
+	getThreadTrack := func(pid, tid int, name string) uint64 {
+		key := trackKey{pid, tid}
+		if t, ok := threadTracks[key]; ok {
+			if name != "" && t.name == "" {
+				t.name = name
+			}
+			return t.uuid
+		}
+		parentUUID := getProcessTrack(pid, "")
+		uuid := makeUUID("thread", pid, tid)
+		threadTracks[key] = &trackState{
+			uuid: uuid, parentUUID: parentUUID, name: name,
+			pid: pid, tid: tid,
+		}
+		return uuid
+	}
+
+	// First pass: collect events and register tracks
+	var events []spanEvent
 
 	for _, s := range spans {
-		// Only include relevant spans
-		isGHA := false
 		attrs := make(map[string]interface{})
 		for _, attr := range s.Attributes() {
 			val := attr.Value.AsInterface()
-			// Basic sanitization for Perfetto JSON
 			if str, ok := val.(string); ok {
 				val = utils.StripANSI(str)
 				if len(str) > 1000 {
@@ -62,143 +111,142 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 				}
 			}
 			attrs[string(attr.Key)] = val
-			if attr.Key == "github.url" {
-				attrs["url"] = val
-			}
-			if attr.Key == "type" && (attr.Value.AsString() == "workflow" || attr.Value.AsString() == "job" || attr.Value.AsString() == "step" || attr.Value.AsString() == "marker") {
-				isGHA = true
-			}
-		}
-		if !isGHA {
-			continue
 		}
 
-		ts := (s.StartTime().UnixMilli() - trueEarliest) * 1000
-		dur := s.EndTime().Sub(s.StartTime()).Microseconds()
-		if dur <= 0 && attrs["type"] != "marker" {
-			dur = 1000 // Ensure at least 1ms for visibility
+		startNs := s.StartTime().UnixNano() - earliestNs
+		endNs := s.EndTime().UnixNano() - earliestNs
+		if startNs < 0 {
+			startNs = 0
+		}
+		if endNs < startNs {
+			endNs = startNs
 		}
 
-		ph := "X"
-		sScope := ""
-		if attrs["type"] == "marker" {
-			ph = "i"
-			sScope = "p"
+		spanType, _ := attrs["type"].(string)
+		name := utils.StripANSI(s.Name())
+		isMarker := spanType == "marker"
+
+		if !isMarker && endNs <= startNs {
+			endNs = startNs + 1_000_000 // 1ms minimum
 		}
 
+		// Build debug annotations
+		var annotations [][]byte
+		for k, v := range attrs {
+			annotations = append(annotations, buildDebugAnnotation(k, v))
+		}
+
+		// Determine track (same pid/tid logic as before)
 		pid := 1
 		tid := 1
 		trackName := ""
 
-		if attrs["type"] == "workflow" {
+		switch spanType {
+		case "workflow":
 			if runID, ok := attrs["github.run_id"].(int64); ok {
 				pid = int(runID % 2147483647)
-				tid = 0
-				trackName = utils.StripANSI(s.Name())
+				tid = 0 // workflow spans go on process track
+				trackName = name
 			}
-		} else if attrs["type"] == "job" {
+		case "job":
 			if runID, ok := attrs["github.run_id"].(int64); ok {
 				pid = int(runID % 2147483647)
 			}
 			if jobID, ok := attrs["github.job_id"].(int64); ok {
 				tid = int(jobID % 2147483647)
-				trackName = "Job: " + utils.StripANSI(s.Name())
+				trackName = "Job: " + name
 			}
-		} else if attrs["type"] == "step" {
+		case "step":
 			if runID, ok := attrs["github.run_id"].(int64); ok {
 				pid = int(runID % 2147483647)
 			}
-			// Steps on the same track as their job
-			// Since we don't have the job ID easily, use the parent SpanID
 			parentID := s.Parent().SpanID()
 			var tidVal uint32
 			for i := 0; i < 8; i++ {
 				tidVal = (tidVal << 8) | uint32(parentID[i])
 			}
 			tid = int(tidVal % 2147483647)
-		} else if attrs["type"] == "marker" {
+		case "marker":
 			pid = 999
-			tid = 2 // Unified "GitHub PR Events" track
-			if !pidsSeen[pid] {
-				otelEvents = append(otelEvents, analyzer.TraceEvent{
-					Name: "process_name", Ph: "M", Pid: pid,
-					Args: map[string]interface{}{"name": "GitHub Events"},
-				})
-				pidsSeen[pid] = true
-			}
-			if !tidsSeen[tid] {
-				otelEvents = append(otelEvents, analyzer.TraceEvent{
-					Name: "thread_name", Ph: "M", Pid: pid, Tid: tid,
-					Args: map[string]interface{}{"name": "GitHub PR Events"},
-				})
-				tidsSeen[tid] = true
-			}
-		}
-
-		// Add metadata events for names if we haven't seen them
-		if trackName != "" {
-			if tid != 0 && !tidsSeen[tid] {
-				otelEvents = append(otelEvents, analyzer.TraceEvent{
-					Name: "thread_name", Ph: "M", Pid: pid, Tid: tid,
-					Args: map[string]interface{}{"name": trackName},
-				})
-				tidsSeen[tid] = true
-			} else if tid == 0 && !pidsSeen[pid] {
-				otelEvents = append(otelEvents, analyzer.TraceEvent{
-					Name: "process_name", Ph: "M", Pid: pid,
-					Args: map[string]interface{}{"name": trackName},
-				})
-				pidsSeen[pid] = true
+			tid = 2
+		default:
+			// Non-GHA spans (e.g. Bazel traces from artifacts)
+			pid = 998
+			parentID := s.Parent().SpanID()
+			if parentID.IsValid() {
+				var tidVal uint32
+				for i := 0; i < 8; i++ {
+					tidVal = (tidVal << 8) | uint32(parentID[i])
+				}
+				tid = int(tidVal % 2147483647)
+			} else {
+				spanID := s.SpanContext().SpanID()
+				var tidVal uint32
+				for i := 0; i < 8; i++ {
+					tidVal = (tidVal << 8) | uint32(spanID[i])
+				}
+				tid = int(tidVal % 2147483647)
+				trackName = name
 			}
 		}
 
-		otelEvents = append(otelEvents, analyzer.TraceEvent{
-			Name: utils.StripANSI(s.Name()),
-			Ph:   ph,
-			Ts:   ts,
-			Dur:  dur,
-			Pid:  pid,
-			Tid:  tid,
-			Cat:  fmt.Sprintf("%v", attrs["type"]),
-			Args: attrs,
-			S:    sScope,
+		// Register tracks with names
+		var trackUUID uint64
+		switch {
+		case spanType == "workflow" && tid == 0:
+			trackUUID = getProcessTrack(pid, trackName)
+		case isMarker:
+			getProcessTrack(999, "GitHub Events")
+			trackUUID = getThreadTrack(999, 2, "GitHub PR Events")
+		default:
+			if pid == 998 {
+				processName := "Trace Artifacts"
+				if n, ok := attrs["github.artifact_name"].(string); ok {
+					processName = n
+				}
+				getProcessTrack(pid, processName)
+			}
+			if trackName != "" {
+				trackUUID = getThreadTrack(pid, tid, trackName)
+			} else {
+				trackUUID = getThreadTrack(pid, tid, "")
+			}
+		}
+
+		events = append(events, spanEvent{
+			trackUUID:   trackUUID,
+			startNs:     uint64(startNs),
+			endNs:       uint64(endNs),
+			name:        name,
+			annotations: annotations,
+			isInstant:   isMarker,
 		})
 	}
 
-	allEvents := append(traceEvents, otelEvents...)
-
-	renormalized := make([]analyzer.TraceEvent, 0, len(allEvents))
-	for _, event := range allEvents {
-		// Clean up legacy events too
-		event.Name = utils.StripANSI(event.Name)
-		if event.Ph == "i" && event.S == "" {
-			event.S = "p"
-		}
-		if event.Args != nil {
-			for k, v := range event.Args {
-				if str, ok := v.(string); ok {
-					event.Args[k] = utils.StripANSI(str)
-				}
-			}
+	// Process legacy TraceEvents (skip metadata, convert data events)
+	for _, ev := range traceEvents {
+		if ev.Ph == "M" {
+			continue
 		}
 
-		// Only renormalize legacy events that have url_index
+		ev.Name = utils.StripANSI(ev.Name)
+
+		// Renormalize legacy events with url_index
 		isLegacy := false
-		if event.Args != nil {
-			if _, ok := event.Args["url_index"]; ok {
+		if ev.Args != nil {
+			if _, ok := ev.Args["url_index"]; ok {
 				isLegacy = true
 			}
 		}
-
-		if isLegacy && event.Ts != 0 {
+		if isLegacy && ev.Ts != 0 {
 			eventURLIndex := 1
-			if val, ok := event.Args["url_index"].(int); ok {
+			if val, ok := ev.Args["url_index"].(int); ok {
 				eventURLIndex = val
-			} else if valFloat, ok := event.Args["url_index"].(float64); ok {
+			} else if valFloat, ok := ev.Args["url_index"].(float64); ok {
 				eventURLIndex = int(valFloat)
 			}
 			eventSource := ""
-			if val, ok := event.Args["source_url"].(string); ok {
+			if val, ok := ev.Args["source_url"].(string); ok {
 				eventSource = val
 			}
 
@@ -211,91 +259,94 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 			}
 
 			if urlResult != nil {
-				absoluteTime := event.Ts/1000 + urlResult.EarliestTime
-				event.Ts = (absoluteTime - trueEarliest) * 1000
+				// ev.Ts is in microseconds relative to urlResult's earliestTime
+				absoluteMs := ev.Ts/1000 + urlResult.EarliestTime
+				ev.Ts = (absoluteMs - globalEarliestTime) * 1000
+			}
+		}
+		if ev.Ts < 0 {
+			ev.Ts = 0
+		}
+
+		// Convert microseconds to nanoseconds
+		startNs := uint64(ev.Ts * 1000)
+		endNs := startNs + uint64(ev.Dur*1000)
+
+		// Build annotations
+		var annotations [][]byte
+		if ev.Args != nil {
+			for k, v := range ev.Args {
+				if str, ok := v.(string); ok {
+					v = utils.StripANSI(str)
+				}
+				annotations = append(annotations, buildDebugAnnotation(k, v))
 			}
 		}
 
-		// Final check to prevent negative timestamps which Perfetto hates
-		if event.Ts < 0 {
-			event.Ts = 0
+		// Register track
+		if ev.Pid != 0 || ev.Tid != 0 {
+			getProcessTrack(ev.Pid, "")
 		}
+		trackUUID := getThreadTrack(ev.Pid, ev.Tid, "")
 
-		renormalized = append(renormalized, event)
-	}
-	analyzer.SortTraceEvents(renormalized)
-
-	output := map[string]interface{}{
-		"displayTimeUnit": "ms",
-		"traceEvents":     append(traceMetadata, renormalized...),
-		"otherData": map[string]interface{}{
-			"trace_title":  traceTitle,
-			"url_count":    len(urlResults),
-			"total_runs":   combined.TotalRuns,
-			"total_jobs":   combined.TotalJobs,
-			"success_rate": fmt.Sprintf("%s%%", combined.SuccessRate),
-			"total_events": len(renormalized),
-			"urls":         buildTraceURLData(urlResults),
-			"performance_analysis": map[string]interface{}{
-				"slowest_jobs": buildSlowJobsForTrace(combined.JobTimeline),
-			},
-		},
+		events = append(events, spanEvent{
+			trackUUID:   trackUUID,
+			startNs:     startNs,
+			endNs:       endNs,
+			name:        ev.Name,
+			annotations: annotations,
+			isInstant:   ev.Ph == "i",
+		})
 	}
 
-	data, err := json.MarshalIndent(output, "", "  ")
-	if err != nil {
+	// Build output: descriptors first, then events
+	seqID := uint32(1)
+	var traceData []byte
+
+	// Emit process track descriptors
+	for _, t := range processTracks {
+		proc := buildProcessDescriptor(int32(t.pid), t.name)
+		desc := buildTrackDescriptor(t.uuid, 0, t.name, proc, nil)
+		pkt := buildTracePacketDescriptor(seqID, desc)
+		traceData = append(traceData, wrapTracePacket(pkt)...)
+	}
+
+	// Emit thread track descriptors
+	for _, t := range threadTracks {
+		thread := buildThreadDescriptor(int32(t.pid), int32(t.tid), t.name)
+		desc := buildTrackDescriptor(t.uuid, t.parentUUID, t.name, nil, thread)
+		pkt := buildTracePacketDescriptor(seqID, desc)
+		traceData = append(traceData, wrapTracePacket(pkt)...)
+	}
+
+	// Emit events
+	for _, ev := range events {
+		if ev.isInstant {
+			te := buildTrackEvent(typeInstant, ev.trackUUID, ev.name, ev.annotations)
+			pkt := buildTracePacketEvent(ev.startNs, seqID, te)
+			traceData = append(traceData, wrapTracePacket(pkt)...)
+		} else {
+			// SLICE_BEGIN with name and annotations
+			te := buildTrackEvent(typeSliceBegin, ev.trackUUID, ev.name, ev.annotations)
+			pkt := buildTracePacketEvent(ev.startNs, seqID, te)
+			traceData = append(traceData, wrapTracePacket(pkt)...)
+
+			// SLICE_END (no name or annotations needed)
+			te = buildTrackEvent(typeSliceEnd, ev.trackUUID, "", nil)
+			pkt = buildTracePacketEvent(ev.endNs, seqID, te)
+			traceData = append(traceData, wrapTracePacket(pkt)...)
+		}
+	}
+
+	if err := os.WriteFile(perfettoFile, traceData, 0o644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(perfettoFile, data, 0o644); err != nil {
-		return err
-	}
-	fmt.Fprintf(w, "\n💾 Perfetto trace saved to: %s\n", perfettoFile)
+	fmt.Fprintf(w, "\n Perfetto trace saved to: %s\n", perfettoFile)
 
 	if openInPerfetto {
 		return openTraceInPerfetto(w, perfettoFile)
 	}
 	return nil
-}
-
-func buildTraceURLData(results []analyzer.URLResult) []map[string]interface{} {
-	data := make([]map[string]interface{}, 0, len(results))
-	for i, result := range results {
-		data = append(data, map[string]interface{}{
-			"index":        i + 1,
-			"owner":        result.Owner,
-			"repo":         result.Repo,
-			"type":         result.Type,
-			"identifier":   result.Identifier,
-			"display_name": result.DisplayName,
-			"display_url":  result.DisplayURL,
-			"total_runs":   result.Metrics.TotalRuns,
-			"total_jobs":   result.Metrics.TotalJobs,
-			"success_rate": result.Metrics.SuccessRate,
-		})
-	}
-	return data
-}
-
-func buildSlowJobsForTrace(jobs []analyzer.CombinedTimelineJob) []map[string]interface{} {
-	if len(jobs) == 0 {
-		return nil
-	}
-	sorted := append([]analyzer.CombinedTimelineJob{}, jobs...)
-	analyzer.SortCombinedJobsByDuration(sorted)
-	if len(sorted) > 10 {
-		sorted = sorted[:10]
-	}
-	output := []map[string]interface{}{}
-	for _, job := range sorted {
-		output = append(output, map[string]interface{}{
-			"name":             job.Name,
-			"duration_seconds": fmt.Sprintf("%.1f", float64(job.EndTime-job.StartTime)/1000),
-			"url":              job.URL,
-			"source_url":       job.SourceURL,
-			"source_name":      job.SourceName,
-		})
-	}
-	return output
 }
 
 func openTraceInPerfetto(w io.Writer, traceFile string) error {
@@ -304,8 +355,8 @@ func openTraceInPerfetto(w io.Writer, traceFile string) error {
 	scriptPath := filepath.Join(os.TempDir(), scriptName)
 
 	if _, err := os.Stat(scriptPath); err != nil {
-		fmt.Fprintln(w, "\n🚀 Opening trace in Perfetto UI...")
-		fmt.Fprintln(w, "📥 Downloading open_trace_in_ui from Perfetto...")
+		fmt.Fprintln(w, "\n Opening trace in Perfetto UI...")
+		fmt.Fprintln(w, " Downloading open_trace_in_ui from Perfetto...")
 		if err := exec.Command("curl", "-L", "-o", scriptPath, scriptURL).Run(); err != nil {
 			return errors.Wrapf(err, "failed to download %s", scriptName)
 		}
@@ -313,17 +364,17 @@ func openTraceInPerfetto(w io.Writer, traceFile string) error {
 			return errors.Wrapf(err, "failed to make %s executable", scriptName)
 		}
 	} else {
-		fmt.Fprintf(w, "\n📁 Using existing script: %s\n", scriptPath)
+		fmt.Fprintf(w, "\n Using existing script: %s\n", scriptPath)
 	}
 
-	fmt.Fprintf(w, "🔗 Opening %s in Perfetto UI...\n", traceFile)
+	fmt.Fprintf(w, " Opening %s in Perfetto UI...\n", traceFile)
 	cmd := exec.Command(scriptPath, traceFile)
 	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8")
 	cmd.Stdout = w
 	cmd.Stderr = w
 	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(w, "❌ Failed to open trace in Perfetto\n")
-		fmt.Fprintln(w, "💡 You can manually open the trace at: https://ui.perfetto.dev")
+		fmt.Fprintf(w, " Failed to open trace in Perfetto\n")
+		fmt.Fprintln(w, " You can manually open the trace at: https://ui.perfetto.dev")
 		fmt.Fprintf(w, "   Then click \"Open trace file\" and select: %s\n", traceFile)
 		return nil
 	}

@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "perfetto",
     srcs = ["perfetto.go"],
-    importpath = "github.com/stefanpenner/otel-analyzer/pkg/export/perfetto",
+    importpath = "github.com/stefanpenner/otel-explorer/pkg/export/perfetto",
     visibility = ["//visibility:public"],
     deps = ["@io_opentelemetry_go_otel_sdk//trace"],
 )

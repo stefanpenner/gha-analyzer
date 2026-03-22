@@ -1,10 +1,10 @@
 load("@gazelle//:def.bzl", "gazelle")
 
-# gazelle:prefix github.com/stefanpenner/otel-analyzer
+# gazelle:prefix github.com/stefanpenner/otel-explorer
 gazelle(name = "gazelle")
 
-# Convenience alias so `bazel run //:otel-analyzer` works from the repo root.
+# Convenience alias so `bazel run //:otel-explorer` works from the repo root.
 alias(
-    name = "otel-analyzer",
-    actual = "//cmd/otel-analyzer",
+    name = "otel-explorer",
+    actual = "//cmd/otel-explorer",
 )

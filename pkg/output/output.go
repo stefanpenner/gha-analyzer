@@ -1,7 +1,7 @@
 package output
 
 import (
-	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
+	"github.com/stefanpenner/otel-explorer/pkg/analyzer"
 )
 
 type PendingJobWithSource struct {

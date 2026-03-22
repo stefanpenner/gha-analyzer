@@ -11,7 +11,7 @@ go_library(
         "span.go",
         "zipkin.go",
     ],
-    importpath = "github.com/stefanpenner/otel-analyzer/pkg/ingest/otlpfile",
+    importpath = "github.com/stefanpenner/otel-explorer/pkg/ingest/otlpfile",
     visibility = ["//visibility:public"],
     deps = [
         "@com_github_klauspost_compress//zstd",
