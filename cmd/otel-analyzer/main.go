@@ -763,7 +763,7 @@ func main() {
 		}
 
 		// Create function to open in Perfetto from TUI
-		openPerfettoFunc := func() {
+		openPerfettoFunc := func(visibleSpans []sdktrace.ReadOnlySpan, activityHidden bool) {
 			// Create temp file for perfetto trace
 			tmpFile, err := os.CreateTemp("", "gha-trace-*.json")
 			if err != nil {
@@ -776,7 +776,18 @@ func main() {
 			for _, res := range results {
 				allTraceEvents = append(allTraceEvents, res.TraceEvents...)
 			}
-			_ = perfetto.WriteTrace(io.Discard, results, combined, allTraceEvents, globalEarliest, tmpFile.Name(), true, spans)
+			// Filter out legacy marker events if activity is hidden in the TUI
+			if activityHidden {
+				filtered := make([]analyzer.TraceEvent, 0, len(allTraceEvents))
+				for _, ev := range allTraceEvents {
+					if ev.Ph == "i" && ev.Pid == 999 {
+						continue // skip review/merge marker events
+					}
+					filtered = append(filtered, ev)
+				}
+				allTraceEvents = filtered
+			}
+			_ = perfetto.WriteTrace(io.Discard, results, combined, allTraceEvents, globalEarliest, tmpFile.Name(), true, visibleSpans)
 		}
 
 		// Build input sources: GitHub URLs + trace file basenames

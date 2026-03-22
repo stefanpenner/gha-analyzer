@@ -49,8 +49,6 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 	tidsSeen := make(map[int]bool)
 
 	for _, s := range spans {
-		// Only include relevant spans
-		isGHA := false
 		attrs := make(map[string]interface{})
 		for _, attr := range s.Attributes() {
 			val := attr.Value.AsInterface()
@@ -65,12 +63,6 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 			if attr.Key == "github.url" {
 				attrs["url"] = val
 			}
-			if attr.Key == "type" && (attr.Value.AsString() == "workflow" || attr.Value.AsString() == "job" || attr.Value.AsString() == "step" || attr.Value.AsString() == "marker") {
-				isGHA = true
-			}
-		}
-		if !isGHA {
-			continue
 		}
 
 		ts := (s.StartTime().UnixMilli() - trueEarliest) * 1000
@@ -132,6 +124,39 @@ func WriteTrace(w io.Writer, urlResults []analyzer.URLResult, combined analyzer.
 					Args: map[string]interface{}{"name": "GitHub PR Events"},
 				})
 				tidsSeen[tid] = true
+			}
+		} else {
+			// Non-GHA spans (e.g. Bazel traces from artifacts).
+			// Group by artifact name or scope, with each root span as a track.
+			pid = 998
+			// Use parent span ID for track grouping; root spans get their own track
+			parentID := s.Parent().SpanID()
+			if parentID.IsValid() {
+				var tidVal uint32
+				for i := 0; i < 8; i++ {
+					tidVal = (tidVal << 8) | uint32(parentID[i])
+				}
+				tid = int(tidVal % 2147483647)
+			} else {
+				// Root span — use own span ID as track
+				spanID := s.SpanContext().SpanID()
+				var tidVal uint32
+				for i := 0; i < 8; i++ {
+					tidVal = (tidVal << 8) | uint32(spanID[i])
+				}
+				tid = int(tidVal % 2147483647)
+				trackName = utils.StripANSI(s.Name())
+			}
+			if !pidsSeen[pid] {
+				processName := "Trace Artifacts"
+				if name, ok := attrs["github.artifact_name"].(string); ok {
+					processName = name
+				}
+				otelEvents = append(otelEvents, analyzer.TraceEvent{
+					Name: "process_name", Ph: "M", Pid: pid,
+					Args: map[string]interface{}{"name": processName},
+				})
+				pidsSeen[pid] = true
 			}
 		}
 
