@@ -17,7 +17,7 @@ CAST_FILE="${SCRIPT_DIR}/demo.cast"
 SVG_FILE="${SCRIPT_DIR}/demo.svg"
 BINARY="otel-explorer"
 COLS=120
-ROWS=35
+ROWS=45
 
 # Ensure binary is built
 if ! command -v "$BINARY" >/dev/null 2>&1; then

@@ -6,10 +6,16 @@ set timeout 60
 set env(TERM) xterm-256color
 
 # Set pty size before spawning — expect uses these for the slave pty
-set stty_init "columns 120 rows 35"
+set stty_init "columns 120 rows 45"
+
+# Suppress "spawn ..." output
+log_user 0
 
 # Launch otel-explorer against a real PR
 spawn otel-explorer https://github.com/stefanpenner/gha-analyzer/pull/44
+
+# Re-enable output so asciinema captures the TUI
+log_user 1
 
 # Wait for the TUI to load (look for the explorer title)
 expect {
@@ -18,97 +24,68 @@ expect {
 }
 
 # Let the user see the initial view
-sleep 3
+sleep 2
 
 # Navigate down through the tree
-send "j"
-sleep 0.4
-send "j"
-sleep 0.4
-send "j"
-sleep 0.4
+send "j"; sleep 0.2
+send "j"; sleep 0.2
+send "j"; sleep 0.2
 
 # Expand a node
-send "\r"
-sleep 1
+send "\r"; sleep 0.6
 
 # Navigate into children
-send "j"
-sleep 0.4
-send "j"
-sleep 0.4
-send "j"
-sleep 0.4
+send "j"; sleep 0.2
+send "j"; sleep 0.2
+send "j"; sleep 0.2
 
 # Expand another node
-send "\r"
-sleep 1
+send "\r"; sleep 0.6
 
 # Navigate down to see steps
-send "j"
-sleep 0.3
-send "j"
-sleep 0.3
-send "j"
-sleep 0.3
-send "j"
-sleep 0.3
+send "j"; sleep 0.2
+send "j"; sleep 0.2
+send "j"; sleep 0.2
+send "j"; sleep 0.2
 
 # Pause to show the tree + timeline
-sleep 2
+sleep 1.5
 
 # Open detail/inspector view on current item
-send "i"
-sleep 2
+send "i"; sleep 1.5
 
 # Navigate the inspector
-send "j"
-sleep 0.4
-send "j"
-sleep 0.4
-send "j"
-sleep 0.4
+send "j"; sleep 0.2
+send "j"; sleep 0.2
+send "j"; sleep 0.2
 
 # Expand an inspector section
-send "\r"
-sleep 1
+send "\r"; sleep 0.5
+send "j"; sleep 0.2
+send "j"; sleep 0.2
 
-send "j"
-sleep 0.3
-send "j"
-sleep 0.3
-
-# Show the detail view for a moment
-sleep 2
+# Show the detail view
+sleep 1.5
 
 # Close the inspector
-send "q"
-sleep 1
+send "q"; sleep 0.5
 
 # Demo search: type /build
-send "/"
-sleep 0.5
-send "b"
-sleep 0.15
-send "u"
-sleep 0.15
-send "i"
-sleep 0.15
-send "l"
-sleep 0.15
-send "d"
-sleep 1.5
+send "/"; sleep 0.3
+send "b"; sleep 0.1
+send "u"; sleep 0.1
+send "i"; sleep 0.1
+send "l"; sleep 0.1
+send "d"; sleep 1
 
 # Exit search with Escape, keeping filter
-send "\033"
-sleep 1.5
+send "\033"; sleep 1
 
 # Clear search with Escape
-send "\033"
-sleep 1
+send "\033"; sleep 0.5
 
 # Final pause on the full view
-sleep 2
+sleep 1.5
 
 # Quit
 send "q"
