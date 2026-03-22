@@ -23,6 +23,12 @@ An interactive terminal tool that turns OpenTelemetry traces and CI/CD runs into
 brew install stefanpenner/tap/otel-explorer
 ```
 
+Or install the latest binary with `curl` (macOS and Linux):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/stefanpenner/otel-explorer/main/install.sh | sh
+```
+
 Or with Go:
 
 ```bash
