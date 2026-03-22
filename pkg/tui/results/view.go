@@ -272,9 +272,9 @@ func (m Model) renderTimeAxis() string {
 		totalWidth = 80
 	}
 
-	// Match the structure of item rows: │ tree │ timeline │
+	// Match the structure of item rows: │ space tree │ timeline │
 	treeW := m.treeWidth
-	availableW := totalWidth - 3 // 3 border chars
+	availableW := totalWidth - 4 // 3 border chars + 1 left padding
 	timelineW := availableW - treeW
 	if timelineW < 10 {
 		timelineW = 10
@@ -286,7 +286,7 @@ func (m Model) renderTimeAxis() string {
 	// Build time axis for the timeline area
 	if m.chartStart.IsZero() || m.chartEnd.IsZero() {
 		// No time data, just return empty row
-		return BorderStyle.Render("│") + treePart + SeparatorStyle.Render("│") + strings.Repeat(" ", timelineW) + BorderStyle.Render("│")
+		return BorderStyle.Render("│") + " " + treePart + SeparatorStyle.Render("│") + strings.Repeat(" ", timelineW) + BorderStyle.Render("│")
 	}
 
 	startTime := m.chartStart.Format("15:04:05")
@@ -388,7 +388,7 @@ func (m Model) renderTimeAxis() string {
 		}
 	}
 
-	return BorderStyle.Render("│") + treePart + SeparatorStyle.Render("│") + timelineContent.String() + BorderStyle.Render("│")
+	return BorderStyle.Render("│") + " " + treePart + SeparatorStyle.Render("│") + timelineContent.String() + BorderStyle.Render("│")
 }
 
 // renderItem renders a single tree item with timeline bar
@@ -403,8 +403,8 @@ func (m Model) renderItem(item TreeItem, isSelected bool, itemIdx int) string {
 	}
 
 	// Calculate widths
-	// Line structure: │ + treePart + │ + timelineBar + │ = 3 border chars
-	availableWidth := totalWidth - 3 // 3 border characters
+	// Line structure: │ + space + treePart + │ + timelineBar + │ = 3 border chars + 1 padding
+	availableWidth := totalWidth - 4 // 3 border characters + 1 left padding
 	treeW := m.treeWidth
 	timelineW := availableWidth - treeW
 	if timelineW < 10 {
@@ -464,9 +464,9 @@ func (m Model) renderItem(item TreeItem, isSelected bool, itemIdx int) string {
 			selLabel := sel.Render(indent + item.Name)
 			selPad := SelectedBgStyle.Render(strings.Repeat(" ", pad))
 			selTimeline := SelectedBgStyle.Render(emptyTimeline)
-			return BorderStyle.Render("│") + selLabel + selPad + midSep + selTimeline + BorderStyle.Render("│")
+			return BorderStyle.Render("│") + " " + selLabel + selPad + midSep + selTimeline + BorderStyle.Render("│")
 		}
-		return BorderStyle.Render("│") + label + strings.Repeat(" ", pad) + midSep + emptyTimeline + BorderStyle.Render("│")
+		return BorderStyle.Render("│") + " " + label + strings.Repeat(" ", pad) + midSep + emptyTimeline + BorderStyle.Render("│")
 	}
 
 	// Build indent with tree connectors (├─ / └─ / │  /   )
@@ -739,24 +739,25 @@ func (m Model) renderItem(item TreeItem, isSelected bool, itemIdx int) string {
 
 	// Padding is rendered separately so that inner ANSI resets (from styled
 	// status icons, durations, etc.) don't kill the selection background.
+	lBorder := BorderStyle.Render("│") + " "
 	if isSelected && (isHidden || isAfterEnd) {
 		pad := SelectedBgStyle.Render(strings.Repeat(" ", treePadding))
-		return BorderStyle.Render("│") + treePart + pad + midSep + timelineBar + BorderStyle.Render("│")
+		return lBorder + treePart + pad + midSep + timelineBar + BorderStyle.Render("│")
 	} else if isSelected {
 		pad := SelectedBgStyle.Render(strings.Repeat(" ", treePadding))
-		return BorderStyle.Render("│") + treePart + pad + midSep + timelineBar + BorderStyle.Render("│")
+		return lBorder + treePart + pad + midSep + timelineBar + BorderStyle.Render("│")
 	} else if isSearchMatch {
 		pad := SearchRowBgStyle.Render(strings.Repeat(" ", treePadding))
-		return BorderStyle.Render("│") + treePart + pad + midSep + timelineBar + BorderStyle.Render("│")
+		return lBorder + treePart + pad + midSep + timelineBar + BorderStyle.Render("│")
 	} else if isHidden {
 		treePart += strings.Repeat(" ", treePadding)
-		return BorderStyle.Render("│") + HiddenStyle.Render(treePart) + midSep + timelineBar + BorderStyle.Render("│")
+		return lBorder + HiddenStyle.Render(treePart) + midSep + timelineBar + BorderStyle.Render("│")
 	} else if isAfterEnd {
 		treePart += strings.Repeat(" ", treePadding)
-		return BorderStyle.Render("│") + treePart + midSep + timelineBar + BorderStyle.Render("│")
+		return lBorder + treePart + midSep + timelineBar + BorderStyle.Render("│")
 	}
 	treePart += strings.Repeat(" ", treePadding)
-	return BorderStyle.Render("│") + treePart + midSep + timelineBar + BorderStyle.Render("│")
+	return lBorder + treePart + midSep + timelineBar + BorderStyle.Render("│")
 }
 
 // getItemIcon returns the icon for an item type.

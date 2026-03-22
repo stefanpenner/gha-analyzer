@@ -18,7 +18,7 @@ import termios
 import time
 
 COLS = 120
-ROWS = 45
+ROWS = 40
 BINARY = "otel-explorer"
 URL = "https://github.com/stefanpenner/gha-analyzer/pull/44"
 OUTPUT = sys.argv[1] if len(sys.argv) > 1 else "docs/demo.cast"

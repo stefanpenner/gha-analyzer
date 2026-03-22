@@ -6,7 +6,7 @@ set timeout 60
 set env(TERM) xterm-256color
 
 # Set pty size before spawning — expect uses these for the slave pty
-set stty_init "columns 120 rows 45"
+set stty_init "columns 120 rows 40"
 
 # Suppress "spawn ..." output
 log_user 0

@@ -1118,9 +1118,9 @@ func (m Model) View() string {
 		if padTotalWidth < 1 {
 			padTotalWidth = 80
 		}
-		// Match the structure: │ tree │ timeline │
+		// Match the structure: │ space tree │ timeline │
 		treeW := m.treeWidth
-		availableW := padTotalWidth - 3
+		availableW := padTotalWidth - 4 // 3 border chars + 1 left padding
 		timelineW := availableW - treeW
 		if timelineW < 10 {
 			timelineW = 10
@@ -1130,7 +1130,7 @@ func (m Model) View() string {
 		if endCol >= 0 {
 			timelinePad = overlayLogicalEndLine(timelinePad, endCol, timelineW, false)
 		}
-		b.WriteString(BorderStyle.Render("│") + strings.Repeat(" ", treeW) + SeparatorStyle.Render("│") + timelinePad + BorderStyle.Render("│"))
+		b.WriteString(BorderStyle.Render("│") + " " + strings.Repeat(" ", treeW) + SeparatorStyle.Render("│") + timelinePad + BorderStyle.Render("│"))
 
 		// Add scrollbar character for empty rows
 		if needsScroll {
