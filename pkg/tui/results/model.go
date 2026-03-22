@@ -115,7 +115,7 @@ type Model struct {
 	// Spans for export
 	spans []trace.ReadOnlySpan
 	// Perfetto open function
-	openPerfettoFunc func()
+	openPerfettoFunc func([]trace.ReadOnlySpan)
 	// Mouse mode state
 	mouseEnabled bool
 	// Vim-style two-key sequence state
@@ -154,8 +154,9 @@ type Model struct {
 // ReloadFunc is the function signature for reloading data
 type ReloadFunc func(reporter LoadingReporter) ([]trace.ReadOnlySpan, time.Time, time.Time, error)
 
-// OpenPerfettoFunc is the function signature for opening Perfetto
-type OpenPerfettoFunc func()
+// OpenPerfettoFunc is the function signature for opening Perfetto.
+// It receives the currently visible (non-hidden) spans.
+type OpenPerfettoFunc func([]trace.ReadOnlySpan)
 
 // NewModel creates a new TUI model from OTel spans
 func NewModel(spans []trace.ReadOnlySpan, globalStart, globalEnd time.Time, inputURLs []string, reloadFunc ReloadFunc, openPerfettoFunc OpenPerfettoFunc, enricher enrichment.Enricher) Model {
@@ -615,7 +616,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "p":
 				if m.openPerfettoFunc != nil {
-					m.openPerfettoFunc()
+					m.openPerfettoFunc(m.visibleSpans())
 				}
 				return m, nil
 			case "g":
@@ -800,7 +801,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case key.Matches(msg, m.keys.Perfetto):
 			if m.openPerfettoFunc != nil {
-				m.openPerfettoFunc()
+				m.openPerfettoFunc(m.visibleSpans())
 			}
 
 		case key.Matches(msg, m.keys.Mouse):
@@ -2164,6 +2165,34 @@ func (m Model) hasEnrichmentLine() bool {
 // IsHidden returns whether an item is hidden from the chart
 func (m *Model) IsHidden(id string) bool {
 	return m.hiddenState[id]
+}
+
+// visibleSpans returns the subset of spans not hidden in the TUI.
+func (m *Model) visibleSpans() []trace.ReadOnlySpan {
+	// Collect OTel span IDs of all hidden tree items
+	hiddenSpanIDs := make(map[string]bool)
+	var walk func([]*TreeItem)
+	walk = func(items []*TreeItem) {
+		for _, item := range items {
+			if m.hiddenState[item.ID] && item.SpanID != "" {
+				hiddenSpanIDs[item.SpanID] = true
+			}
+			walk(item.Children)
+		}
+	}
+	walk(m.treeItems)
+
+	if len(hiddenSpanIDs) == 0 {
+		return m.spans
+	}
+
+	filtered := make([]trace.ReadOnlySpan, 0, len(m.spans))
+	for _, s := range m.spans {
+		if !hiddenSpanIDs[s.SpanContext().SpanID().String()] {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered
 }
 
 // Run starts the TUI
