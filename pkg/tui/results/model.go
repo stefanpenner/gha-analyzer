@@ -10,9 +10,9 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
-	"github.com/stefanpenner/otel-analyzer/pkg/enrichment"
-	"github.com/stefanpenner/otel-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-explorer/pkg/analyzer"
+	"github.com/stefanpenner/otel-explorer/pkg/enrichment"
+	"github.com/stefanpenner/otel-explorer/pkg/utils"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/stefanpenner/otel-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-explorer/pkg/utils"
 )
 
 // RuleEnricher applies user-defined rules to classify spans.

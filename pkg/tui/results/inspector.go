@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
-	"github.com/stefanpenner/otel-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-explorer/pkg/analyzer"
+	"github.com/stefanpenner/otel-explorer/pkg/utils"
 )
 
 // InspectorNode represents a node in the collapsible inspector tree.

@@ -49,7 +49,7 @@ Trace (trace_id = hash(run_id, attempt))
 | Attribute | Value |
 |---|---|
 | `service.name` | `github-actions` |
-| `service.version` | otel-analyzer version |
+| `service.version` | otel-explorer version |
 | `cicd.pipeline.name` | workflow name |
 | `vcs.repository.url.full` | repo URL |
 
@@ -128,7 +128,7 @@ All spans emitted by the GHA ingestion carry:
 
 ```
 InstrumentationScope{
-    Name:    "github.com/stefanpenner/otel-analyzer/pkg/analyzer"
+    Name:    "github.com/stefanpenner/otel-explorer/pkg/analyzer"
     Version: "" (could be build version)
 }
 ```

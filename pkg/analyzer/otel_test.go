@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
-	"github.com/stefanpenner/otel-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-explorer/pkg/githubapi"
+	"github.com/stefanpenner/otel-explorer/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"context"

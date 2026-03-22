@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "receiver",
     srcs = ["receiver.go"],
-    importpath = "github.com/stefanpenner/otel-analyzer/pkg/ingest/receiver",
+    importpath = "github.com/stefanpenner/otel-explorer/pkg/ingest/receiver",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/ingest/otlpfile",

@@ -6,10 +6,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
-	"github.com/stefanpenner/otel-analyzer/pkg/enrichment"
-	"github.com/stefanpenner/otel-analyzer/pkg/perfetto"
-	"github.com/stefanpenner/otel-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-explorer/pkg/analyzer"
+	"github.com/stefanpenner/otel-explorer/pkg/enrichment"
+	"github.com/stefanpenner/otel-explorer/pkg/perfetto"
+	"github.com/stefanpenner/otel-explorer/pkg/utils"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 

@@ -11,24 +11,24 @@ import (
 	"strings"
 	"time"
 
-	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
-	"github.com/stefanpenner/otel-analyzer/pkg/core"
-	"github.com/stefanpenner/otel-analyzer/pkg/enrichment"
-	otelexport "github.com/stefanpenner/otel-analyzer/pkg/export/otel"
-	perfettoexport "github.com/stefanpenner/otel-analyzer/pkg/export/perfetto"
-	"github.com/stefanpenner/otel-analyzer/pkg/export/terminal"
-	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
-	"github.com/stefanpenner/otel-analyzer/pkg/ingest/filter"
-	"github.com/stefanpenner/otel-analyzer/pkg/ingest/otlpfile"
-	"github.com/stefanpenner/otel-analyzer/pkg/ingest/polling"
-	"github.com/stefanpenner/otel-analyzer/pkg/ingest/receiver"
-	"github.com/stefanpenner/otel-analyzer/pkg/ingest/traceapi"
-	"github.com/stefanpenner/otel-analyzer/pkg/ingest/webhook"
-	"github.com/stefanpenner/otel-analyzer/pkg/output"
-	"github.com/stefanpenner/otel-analyzer/pkg/perfetto"
-	"github.com/stefanpenner/otel-analyzer/pkg/tui"
-	tuiresults "github.com/stefanpenner/otel-analyzer/pkg/tui/results"
-	"github.com/stefanpenner/otel-analyzer/pkg/utils"
+	"github.com/stefanpenner/otel-explorer/pkg/analyzer"
+	"github.com/stefanpenner/otel-explorer/pkg/core"
+	"github.com/stefanpenner/otel-explorer/pkg/enrichment"
+	otelexport "github.com/stefanpenner/otel-explorer/pkg/export/otel"
+	perfettoexport "github.com/stefanpenner/otel-explorer/pkg/export/perfetto"
+	"github.com/stefanpenner/otel-explorer/pkg/export/terminal"
+	"github.com/stefanpenner/otel-explorer/pkg/githubapi"
+	"github.com/stefanpenner/otel-explorer/pkg/ingest/filter"
+	"github.com/stefanpenner/otel-explorer/pkg/ingest/otlpfile"
+	"github.com/stefanpenner/otel-explorer/pkg/ingest/polling"
+	"github.com/stefanpenner/otel-explorer/pkg/ingest/receiver"
+	"github.com/stefanpenner/otel-explorer/pkg/ingest/traceapi"
+	"github.com/stefanpenner/otel-explorer/pkg/ingest/webhook"
+	"github.com/stefanpenner/otel-explorer/pkg/output"
+	"github.com/stefanpenner/otel-explorer/pkg/perfetto"
+	"github.com/stefanpenner/otel-explorer/pkg/tui"
+	tuiresults "github.com/stefanpenner/otel-explorer/pkg/tui/results"
+	"github.com/stefanpenner/otel-explorer/pkg/utils"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -339,7 +339,7 @@ func main() {
 	// Handle trends mode
 	if cfg.trendsMode {
 		if cfg.trendsRepo == "" {
-			printErrorMsg("Trends mode requires a repository in format 'owner/repo'\n\n  Usage: otel-analyzer trends owner/repo [--days=30] [--format=terminal|json]\n\n  Run 'otel-analyzer --help' for more information.")
+			printErrorMsg("Trends mode requires a repository in format 'owner/repo'\n\n  Usage: otel-explorer trends owner/repo [--days=30] [--format=terminal|json]\n\n  Run 'otel-explorer --help' for more information.")
 			os.Exit(1)
 		}
 
@@ -505,7 +505,7 @@ func main() {
 	}
 
 	if len(args) == 0 && len(cfg.traceFiles) == 0 && !hasTraceBackend {
-		printErrorMsg("No GitHub URLs or trace files provided.\n\n  Usage: otel-analyzer <github_url> [flags]\n         otel-analyzer <trace_file.json> [flags]\n         otel-analyzer --tempo=<url> --trace-id=<id> [flags]\n         otel-analyzer --listen[=<addr>] [flags]\n\n  Run 'otel-analyzer --help' for more information.")
+		printErrorMsg("No GitHub URLs or trace files provided.\n\n  Usage: otel-explorer <github_url> [flags]\n         otel-explorer <trace_file.json> [flags]\n         otel-explorer --tempo=<url> --trace-id=<id> [flags]\n         otel-explorer --listen[=<addr>] [flags]\n\n  Run 'otel-explorer --help' for more information.")
 		os.Exit(1)
 	}
 
@@ -518,7 +518,7 @@ func main() {
 
 	// Auto-generate perfetto file if --open-in-perfetto is used without --perfetto
 	if cfg.openInPerfetto && perfettoFile == "" {
-		tmpFile, err := os.CreateTemp("", "gha-trace-*.json")
+		tmpFile, err := os.CreateTemp("", "gha-trace-*.pftrace")
 		if err == nil {
 			perfettoFile = tmpFile.Name()
 			tmpFile.Close()
@@ -765,7 +765,7 @@ func main() {
 		// Create function to open in Perfetto from TUI
 		openPerfettoFunc := func(visibleSpans []sdktrace.ReadOnlySpan, activityHidden bool) {
 			// Create temp file for perfetto trace
-			tmpFile, err := os.CreateTemp("", "gha-trace-*.json")
+			tmpFile, err := os.CreateTemp("", "gha-trace-*.pftrace")
 			if err != nil {
 				return
 			}
@@ -869,14 +869,14 @@ func tagSpansWithIndex(spans []sdktrace.ReadOnlySpan, urlIndex int) []sdktrace.R
 func printUsage() {
 	fmt.Println("OTel Analyzer")
 	fmt.Println("\nUsage:")
-	fmt.Println("  otel-analyzer <github_url1> [github_url2...] [token] [flags]")
-	fmt.Println("  otel-analyzer <trace_file.json> [flags]")
-	fmt.Println("  otel-analyzer trends <owner/repo> [flags]")
+	fmt.Println("  otel-explorer <github_url1> [github_url2...] [token] [flags]")
+	fmt.Println("  otel-explorer <trace_file.json> [flags]")
+	fmt.Println("  otel-explorer trends <owner/repo> [flags]")
 	fmt.Println("\nFlags:")
 	fmt.Println("  --tui                     Force interactive TUI mode (default when terminal is available)")
 	fmt.Println("  --no-tui                  Disable interactive TUI, use CLI output instead")
 	fmt.Println("  --output=<format>         Output format: 'stdout' (styled terminal) or 'markdown' (implies --no-tui)")
-	fmt.Println("  --perfetto=<file.json>    Save trace for Perfetto.dev analysis")
+	fmt.Println("  --perfetto=<file.pftrace> Save trace for Perfetto.dev analysis")
 	fmt.Println("  --open-in-perfetto        Automatically open the generated trace in Perfetto UI")
 	fmt.Println("  --otel                    Write OTel spans as JSON to stdout")
 	fmt.Println("  --otel=<endpoint>         Export traces via OTLP/HTTP (default port: 4318)")
@@ -906,25 +906,25 @@ func printUsage() {
 	fmt.Println("\nEnvironment Variables:")
 	fmt.Println("  GITHUB_TOKEN              GitHub PAT (alternatively pass as argument)")
 	fmt.Println("\nExamples:")
-	fmt.Println("  otel-analyzer https://github.com/owner/repo/pull/123")
-	fmt.Println("  otel-analyzer https://github.com/owner/repo/commit/sha --perfetto=trace.json")
-	fmt.Println("  otel-analyzer https://github.com/owner/repo/pull/123 --no-tui")
-	fmt.Println("  otel-analyzer https://github.com/owner/repo/pull/123 --output=stdout")
-	fmt.Println("  otel-analyzer https://github.com/owner/repo/pull/123 --output=markdown > report.md")
-	fmt.Println("  otel-analyzer trends owner/repo")
-	fmt.Println("  otel-analyzer trends owner/repo --days=7 --format=json")
-	fmt.Println("  otel-analyzer trends owner/repo --branch=main --workflow=post-merge.yaml")
-	fmt.Println("  otel-analyzer trace.json                      # auto-detects OTel or Chrome Tracing format")
-	fmt.Println("  otel-analyzer chrome-profile.json spans.json   # multiple trace files as args")
-	fmt.Println("  otel-analyzer --trace=spans.json https://github.com/owner/repo/pull/123")
-	fmt.Println("  otel-analyzer --tempo=http://localhost:3200 --trace-id=abc123def456")
-	fmt.Println("  otel-analyzer --jaeger=http://localhost:16686 --trace-id=abc123def456")
-	fmt.Println("  otel-analyzer --listen                       # accept OTLP traces on :4318")
-	fmt.Println("  otel-analyzer trace.json --filter=service.name=checkout")
-	fmt.Println("  otel-analyzer trace.json --errors-only       # only show error spans")
-	fmt.Println("  otel-analyzer trace.json --lint              # check semconv compliance")
-	fmt.Println("  otel-analyzer trace.json --enrichment=rules.json")
-	fmt.Println("  otel-analyzer --clear-cache")
+	fmt.Println("  otel-explorer https://github.com/owner/repo/pull/123")
+	fmt.Println("  otel-explorer https://github.com/owner/repo/commit/sha --perfetto=trace.pftrace")
+	fmt.Println("  otel-explorer https://github.com/owner/repo/pull/123 --no-tui")
+	fmt.Println("  otel-explorer https://github.com/owner/repo/pull/123 --output=stdout")
+	fmt.Println("  otel-explorer https://github.com/owner/repo/pull/123 --output=markdown > report.md")
+	fmt.Println("  otel-explorer trends owner/repo")
+	fmt.Println("  otel-explorer trends owner/repo --days=7 --format=json")
+	fmt.Println("  otel-explorer trends owner/repo --branch=main --workflow=post-merge.yaml")
+	fmt.Println("  otel-explorer trace.json                      # auto-detects OTel or Chrome Tracing format")
+	fmt.Println("  otel-explorer chrome-profile.json spans.json   # multiple trace files as args")
+	fmt.Println("  otel-explorer --trace=spans.json https://github.com/owner/repo/pull/123")
+	fmt.Println("  otel-explorer --tempo=http://localhost:3200 --trace-id=abc123def456")
+	fmt.Println("  otel-explorer --jaeger=http://localhost:16686 --trace-id=abc123def456")
+	fmt.Println("  otel-explorer --listen                       # accept OTLP traces on :4318")
+	fmt.Println("  otel-explorer trace.json --filter=service.name=checkout")
+	fmt.Println("  otel-explorer trace.json --errors-only       # only show error spans")
+	fmt.Println("  otel-explorer trace.json --lint              # check semconv compliance")
+	fmt.Println("  otel-explorer trace.json --enrichment=rules.json")
+	fmt.Println("  otel-explorer --clear-cache")
 }
 
 // resolveGitHubToken returns a GitHub token from GITHUB_TOKEN env var or gh CLI.

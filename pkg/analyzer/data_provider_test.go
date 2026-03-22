@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
+	"github.com/stefanpenner/otel-explorer/pkg/githubapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

@@ -10,7 +10,7 @@ go_library(
         "lint.go",
         "rules.go",
     ],
-    importpath = "github.com/stefanpenner/otel-analyzer/pkg/enrichment",
+    importpath = "github.com/stefanpenner/otel-explorer/pkg/enrichment",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/utils",

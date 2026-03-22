@@ -7,8 +7,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/stefanpenner/otel-analyzer/pkg/analyzer"
-	"github.com/stefanpenner/otel-analyzer/pkg/enrichment"
+	"github.com/stefanpenner/otel-explorer/pkg/analyzer"
+	"github.com/stefanpenner/otel-explorer/pkg/enrichment"
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
@@ -109,7 +109,7 @@ func TestModelView(t *testing.T) {
 		view := m.View()
 
 		assert.NotEmpty(t, view)
-		assert.Contains(t, view, "otel-analyzer")
+		assert.Contains(t, view, "otel-explorer")
 	})
 
 	t.Run("renders URL group in tree", func(t *testing.T) {
@@ -583,7 +583,7 @@ func TestRenderHeader(t *testing.T) {
 		m := createTestModel()
 		header := m.renderHeader()
 
-		assert.Contains(t, header, "otel-analyzer")
+		assert.Contains(t, header, "otel-explorer")
 	})
 
 	t.Run("header does not contain URLs (URLs are in tree)", func(t *testing.T) {

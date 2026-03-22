@@ -58,7 +58,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         # Use a public PR for testing
-        ./run.sh cli https://github.com/stefanpenner/otel-analyzer/pull/1
+        ./run.sh cli https://github.com/stefanpenner/otel-explorer/pull/1
 
     - name: Run E2E Simulation
       env:

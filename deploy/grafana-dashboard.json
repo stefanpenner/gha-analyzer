@@ -93,7 +93,7 @@
   "timepicker": {},
   "timezone": "",
   "title": "OTel Analyzer Dashboard",
-  "uid": "otel-analyzer",
+  "uid": "otel-explorer",
   "version": 1,
   "weekStart": ""
 }

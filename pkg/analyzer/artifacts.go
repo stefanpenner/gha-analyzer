@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/stefanpenner/otel-analyzer/pkg/githubapi"
-	"github.com/stefanpenner/otel-analyzer/pkg/ingest/otlpfile"
+	"github.com/stefanpenner/otel-explorer/pkg/githubapi"
+	"github.com/stefanpenner/otel-explorer/pkg/ingest/otlpfile"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"

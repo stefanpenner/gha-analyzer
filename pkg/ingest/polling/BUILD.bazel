@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library")
 go_library(
     name = "polling",
     srcs = ["polling.go"],
-    importpath = "github.com/stefanpenner/otel-analyzer/pkg/ingest/polling",
+    importpath = "github.com/stefanpenner/otel-explorer/pkg/ingest/polling",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/analyzer",
