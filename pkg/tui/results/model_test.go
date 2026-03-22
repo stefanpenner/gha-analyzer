@@ -498,7 +498,7 @@ func TestRenderItem(t *testing.T) {
 		m := createTestModel()
 		item := m.visibleItems[0]
 
-		result := m.renderItem(item, false)
+		result := m.renderItem(item, false, 0)
 
 		assert.Contains(t, result, item.DisplayName)
 		// Should contain hyperlink if item has URL
@@ -511,7 +511,7 @@ func TestRenderItem(t *testing.T) {
 		m := createTestModel()
 		item := m.visibleItems[0]
 
-		result := m.renderItem(item, true)
+		result := m.renderItem(item, true, 0)
 
 		assert.Contains(t, result, item.DisplayName)
 		// Selected items should still have hyperlinks
@@ -525,7 +525,7 @@ func TestRenderItem(t *testing.T) {
 		item := m.visibleItems[0]
 		m.hiddenState[item.ID] = true
 
-		result := m.renderItem(item, false)
+		result := m.renderItem(item, false, 0)
 
 		assert.Contains(t, result, item.DisplayName)
 	})
@@ -552,7 +552,7 @@ func TestRenderItemFocusDim(t *testing.T) {
 
 	// Render focused item — should NOT contain FocusDimStyle color code
 	focusedItem := m.visibleItems[findVisibleIndex(&m, "url-group/0/CI/0/build/0")]
-	focusedResult := m.renderItem(focusedItem, false)
+	focusedResult := m.renderItem(focusedItem, false, findVisibleIndex(&m, "url-group/0/CI/0/build/0"))
 	// FocusDimStyle uses ColorGray #565f89 → ANSI 38;2;86;95;137 or similar
 	// The focused item should NOT have this dim styling
 	t.Logf("focused render: %q", focusedResult)
@@ -561,7 +561,7 @@ func TestRenderItemFocusDim(t *testing.T) {
 	ciIdx := findVisibleIndex(&m, "url-group/0/CI/0")
 	if ciIdx >= 0 {
 		unfocusedItem := m.visibleItems[ciIdx]
-		unfocusedResult := m.renderItem(unfocusedItem, false)
+		unfocusedResult := m.renderItem(unfocusedItem, false, ciIdx)
 		// Dimmed items should NOT contain hyperlink sequences (plain text path)
 		assert.NotContains(t, unfocusedResult, "\x1b]8;", "non-focused item should not have hyperlinks (uses plain text dim path)")
 		assert.Contains(t, unfocusedResult, "CI")
@@ -570,7 +570,7 @@ func TestRenderItemFocusDim(t *testing.T) {
 	testIdx := findVisibleIndex(&m, "url-group/0/CI/0/test/1")
 	if testIdx >= 0 {
 		testItem := m.visibleItems[testIdx]
-		testResult := m.renderItem(testItem, false)
+		testResult := m.renderItem(testItem, false, testIdx)
 		assert.NotContains(t, testResult, "\x1b]8;", "non-focused item should not have hyperlinks")
 		assert.Contains(t, testResult, "test")
 	}
@@ -1310,7 +1310,7 @@ func TestSearchMode(t *testing.T) {
 
 		view := m.View()
 		assert.Contains(t, view, "build")
-		assert.Contains(t, view, "matches")
+		assert.Contains(t, view, "/") // N/M count format
 	})
 
 	t.Run("navigation keys ignored during search input", func(t *testing.T) {

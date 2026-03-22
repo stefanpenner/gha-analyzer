@@ -135,6 +135,10 @@ type Model struct {
 	treeWidth int
 	// Reload error
 	reloadError string
+	// Tree connector characters for each visible item (precomputed)
+	treeConnectors [][]rune
+	// Total visible items before search filter (for N/M display)
+	preFilterCount int
 	// Span index for O(1) lookups
 	spanIndex *SpanIndex
 	// Original time bounds per item (set once at build time, used to restore after toggle)
@@ -1090,7 +1094,7 @@ func (m Model) View() string {
 	for i := startIdx; i < endIdx; i++ {
 		item := m.visibleItems[i]
 		isSelected := m.isInSelection(i)
-		b.WriteString(m.renderItem(item, isSelected))
+		b.WriteString(m.renderItem(item, isSelected, i))
 
 		// Add scrollbar character
 		if needsScroll {
@@ -1347,11 +1351,15 @@ func (m *Model) isAfterLogicalEnd(item TreeItem) bool {
 // without rebuilding the tree from scratch.
 func (m *Model) rebuildVisibleItems() {
 	m.visibleItems = FlattenVisibleItems(m.treeItems, m.expandedState, m.sortMode)
+	m.preFilterCount = len(m.visibleItems)
 
 	// Apply search filter if active
 	if m.searchQuery != "" && (m.searchMatchIDs != nil || m.searchAncIDs != nil) {
 		m.visibleItems = FilterVisibleItems(m.visibleItems, m.searchMatchIDs, m.searchAncIDs)
 	}
+
+	// Precompute tree connector characters for the final visible items
+	m.precomputeTreeConnectors()
 
 	// Ensure cursor is valid
 	if m.cursor >= len(m.visibleItems) {
@@ -1359,6 +1367,76 @@ func (m *Model) rebuildVisibleItems() {
 	}
 	if m.cursor < 0 {
 		m.cursor = 0
+	}
+}
+
+// precomputeTreeConnectors builds connector runes for each visible item.
+// Each item gets a slice of runes (one per depth level) indicating what
+// connector character to draw:
+//
+//	'├' = branch (more siblings below)
+//	'└' = last branch (no more siblings)
+//	'│' = vertical continuation (ancestor has more siblings)
+//	' ' = blank (ancestor was the last child)
+func (m *Model) precomputeTreeConnectors() {
+	n := len(m.visibleItems)
+	m.treeConnectors = make([][]rune, n)
+	if n == 0 {
+		return
+	}
+
+	// Find the last visible child index for each parentID
+	lastChildOfParent := make(map[string]int)
+	for i, item := range m.visibleItems {
+		if item.ParentID != "" {
+			lastChildOfParent[item.ParentID] = i
+		}
+	}
+
+	// Find max depth for guide stack allocation
+	maxDepth := 0
+	for _, item := range m.visibleItems {
+		if item.Depth > maxDepth {
+			maxDepth = item.Depth
+		}
+	}
+
+	// guideActive[d] = true means draw │ at depth d (ancestor has more siblings)
+	guideActive := make([]bool, maxDepth+1)
+
+	for i, item := range m.visibleItems {
+		d := item.Depth
+		isLast := item.ParentID == "" || lastChildOfParent[item.ParentID] == i
+
+		// Build connector runes for this item
+		connectors := make([]rune, d)
+		for level := 0; level < d; level++ {
+			if level == d-1 {
+				// Item's own level: branch connector
+				if isLast {
+					connectors[level] = '└'
+				} else {
+					connectors[level] = '├'
+				}
+			} else {
+				// Ancestor levels: continuation or blank
+				if guideActive[level] {
+					connectors[level] = '│'
+				} else {
+					connectors[level] = ' '
+				}
+			}
+		}
+		m.treeConnectors[i] = connectors
+
+		// Update guide stack for subsequent items
+		if d > 0 {
+			guideActive[d-1] = !isLast
+		}
+		// Clear deeper levels (those scopes have ended)
+		for level := d; level <= maxDepth; level++ {
+			guideActive[level] = false
+		}
 	}
 }
 
@@ -1452,11 +1530,14 @@ func (m Model) renderSearchBar(contentWidth int) string {
 		cursor = SearchBarStyle.Render("█")
 	}
 
-	// Count matches
+	// Count matches as N/M (matching/total)
 	matchCount := len(m.searchMatchIDs)
+	totalCount := m.preFilterCount
 	countStr := ""
+	countPlain := ""
 	if m.searchQuery != "" {
-		countStr = SearchCountStyle.Render(fmt.Sprintf("%d matches ", matchCount))
+		countPlain = fmt.Sprintf("%d/%d ", matchCount, totalCount)
+		countStr = SearchCountStyle.Render(countPlain)
 	}
 
 	// Calculate padding
@@ -1466,16 +1547,7 @@ func (m Model) renderSearchBar(contentWidth int) string {
 	if m.isSearching {
 		cursorWidth = 1
 	}
-	countWidth := 0
-	if countStr != "" {
-		if matchCount >= 100 {
-			countWidth = 12 // "NNN matches "
-		} else if matchCount >= 10 {
-			countWidth = 11 // "NN matches "
-		} else {
-			countWidth = 10 // "N matches "
-		}
-	}
+	countWidth := len(countPlain)
 
 	padWidth := contentWidth - prefixWidth - queryWidth - cursorWidth - countWidth
 	if padWidth < 1 {

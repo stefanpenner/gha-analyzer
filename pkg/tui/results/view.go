@@ -392,7 +392,7 @@ func (m Model) renderTimeAxis() string {
 }
 
 // renderItem renders a single tree item with timeline bar
-func (m Model) renderItem(item TreeItem, isSelected bool) string {
+func (m Model) renderItem(item TreeItem, isSelected bool, itemIdx int) string {
 	width := m.width
 	if width < 40 {
 		width = 40
@@ -414,8 +414,28 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 	// Info items: colored metadata line with hyperlink, no timeline bar
 	if item.ItemType == ItemTypeInfo {
 		var indentBuf strings.Builder
+		var infoConn []rune
+		if itemIdx >= 0 && itemIdx < len(m.treeConnectors) {
+			infoConn = m.treeConnectors[itemIdx]
+		}
 		for i := 0; i < item.Depth; i++ {
-			indentBuf.WriteString("  ")
+			var ch rune
+			if i < len(infoConn) {
+				ch = infoConn[i]
+			} else {
+				ch = ' '
+			}
+			switch ch {
+			case '├':
+				indentBuf.WriteString(IndentGuideStyle.Render("├─"))
+			case '└':
+				indentBuf.WriteString(IndentGuideStyle.Render("└─"))
+			case '│':
+				indentBuf.WriteString(IndentGuideStyle.Render("│"))
+				indentBuf.WriteString(" ")
+			default:
+				indentBuf.WriteString("  ")
+			}
 		}
 		indent := indentBuf.String() + "  "
 
@@ -449,19 +469,36 @@ func (m Model) renderItem(item TreeItem, isSelected bool) string {
 		return BorderStyle.Render("│") + label + strings.Repeat(" ", pad) + midSep + emptyTimeline + BorderStyle.Render("│")
 	}
 
-	// Build indent
-	// Steps align under their parent job icon, so use parent's depth
+	// Build indent with tree connectors (├─ / └─ / │  /   )
 	indentDepth := item.Depth
-	if item.ItemType == ItemTypeLeaf && indentDepth > 0 {
-		indentDepth = indentDepth - 1
-	}
-	// Build indent with vertical guides
 	var indentBuf strings.Builder
 	var indentPlainBuf strings.Builder
+	var connectors []rune
+	if itemIdx >= 0 && itemIdx < len(m.treeConnectors) {
+		connectors = m.treeConnectors[itemIdx]
+	}
 	for i := 0; i < indentDepth; i++ {
-		indentBuf.WriteString(IndentGuideStyle.Render("│"))
-		indentBuf.WriteString(" ")
-		indentPlainBuf.WriteString("│ ")
+		var ch rune
+		if i < len(connectors) {
+			ch = connectors[i]
+		} else {
+			ch = '│' // fallback
+		}
+		switch ch {
+		case '├':
+			indentBuf.WriteString(IndentGuideStyle.Render("├─"))
+			indentPlainBuf.WriteString("├─")
+		case '└':
+			indentBuf.WriteString(IndentGuideStyle.Render("└─"))
+			indentPlainBuf.WriteString("└─")
+		case '│':
+			indentBuf.WriteString(IndentGuideStyle.Render("│"))
+			indentBuf.WriteString(" ")
+			indentPlainBuf.WriteString("│ ")
+		default: // ' '
+			indentBuf.WriteString("  ")
+			indentPlainBuf.WriteString("  ")
+		}
 	}
 	indent := indentBuf.String()
 	indentPlain := indentPlainBuf.String()
