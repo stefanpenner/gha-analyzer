@@ -1,14 +1,14 @@
 #!/bin/sh
-# Records an asciinema demo of otel-explorer and converts to SVG.
+# Records a demo of otel-explorer and converts to SVG.
 #
 # Usage: ./docs/record-demo.sh
 #
 # Prerequisites:
-#   brew install asciinema
 #   npm install -g svg-term-cli
 #
-# The script uses expect(1) to drive the TUI with timed keystrokes,
-# producing a deterministic recording every time.
+# The Python driver creates a properly-sized pty, spawns otel-explorer,
+# sends scripted keystrokes, and writes an asciinema v2 .cast file.
+# No asciinema binary needed.
 
 set -e
 
@@ -16,8 +16,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CAST_FILE="${SCRIPT_DIR}/demo.cast"
 SVG_FILE="${SCRIPT_DIR}/demo.svg"
 BINARY="otel-explorer"
-COLS=120
-ROWS=45
 
 # Ensure binary is built
 if ! command -v "$BINARY" >/dev/null 2>&1; then
@@ -27,25 +25,7 @@ if ! command -v "$BINARY" >/dev/null 2>&1; then
 fi
 
 echo "Recording demo..."
-asciinema rec "$CAST_FILE" \
-  --overwrite \
-  --cols "$COLS" \
-  --rows "$ROWS" \
-  --output-format asciicast-v2 \
-  --command "expect -f ${SCRIPT_DIR}/demo-driver.exp"
-
-# Patch header dimensions — asciinema headless mode forces 80x24 in the header
-# but expect's stty_init creates the pty at the correct size, so the content
-# is rendered correctly. We just need the header to match.
-python3 -c "
-import json, sys
-lines = open('$CAST_FILE').readlines()
-header = json.loads(lines[0])
-header['width'] = $COLS
-header['height'] = $ROWS
-lines[0] = json.dumps(header) + '\n'
-open('$CAST_FILE', 'w').writelines(lines)
-"
+python3 "${SCRIPT_DIR}/demo-driver.py" "$CAST_FILE"
 
 echo "Converting to SVG..."
 svg-term --in "$CAST_FILE" --out "$SVG_FILE" \
