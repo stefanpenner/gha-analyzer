@@ -1,0 +1,115 @@
+#!/usr/bin/expect -f
+# Expect script that drives otel-explorer for demo recording.
+# Launched by record-demo.sh inside an asciinema session.
+
+set timeout 60
+set env(TERM) xterm-256color
+
+# Set pty size before spawning — expect uses these for the slave pty
+set stty_init "columns 120 rows 35"
+
+# Launch otel-explorer against a real PR
+spawn otel-explorer https://github.com/stefanpenner/gha-analyzer/pull/44
+
+# Wait for the TUI to load (look for the explorer title)
+expect {
+    "otel-explorer" { }
+    timeout { puts "Timed out waiting for TUI"; exit 1 }
+}
+
+# Let the user see the initial view
+sleep 3
+
+# Navigate down through the tree
+send "j"
+sleep 0.4
+send "j"
+sleep 0.4
+send "j"
+sleep 0.4
+
+# Expand a node
+send "\r"
+sleep 1
+
+# Navigate into children
+send "j"
+sleep 0.4
+send "j"
+sleep 0.4
+send "j"
+sleep 0.4
+
+# Expand another node
+send "\r"
+sleep 1
+
+# Navigate down to see steps
+send "j"
+sleep 0.3
+send "j"
+sleep 0.3
+send "j"
+sleep 0.3
+send "j"
+sleep 0.3
+
+# Pause to show the tree + timeline
+sleep 2
+
+# Open detail/inspector view on current item
+send "i"
+sleep 2
+
+# Navigate the inspector
+send "j"
+sleep 0.4
+send "j"
+sleep 0.4
+send "j"
+sleep 0.4
+
+# Expand an inspector section
+send "\r"
+sleep 1
+
+send "j"
+sleep 0.3
+send "j"
+sleep 0.3
+
+# Show the detail view for a moment
+sleep 2
+
+# Close the inspector
+send "q"
+sleep 1
+
+# Demo search: type /build
+send "/"
+sleep 0.5
+send "b"
+sleep 0.15
+send "u"
+sleep 0.15
+send "i"
+sleep 0.15
+send "l"
+sleep 0.15
+send "d"
+sleep 1.5
+
+# Exit search with Escape, keeping filter
+send "\033"
+sleep 1.5
+
+# Clear search with Escape
+send "\033"
+sleep 1
+
+# Final pause on the full view
+sleep 2
+
+# Quit
+send "q"
+expect eof

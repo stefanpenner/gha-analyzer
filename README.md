@@ -15,7 +15,7 @@
 
 An interactive terminal tool that turns OpenTelemetry traces and CI/CD runs into navigable timelines — so you can find the slow jobs, the flaky tests, and the queue-time bottlenecks. Works with GitHub Actions, Jenkins, GitLab CI, Buildkite, Dagger, and any system that emits OTel traces.
 
-![Interactive TUI with timeline visualization](docs/tui-screenshot.jpeg)
+![Interactive TUI with timeline visualization](docs/demo.svg)
 
 ## Install
 
