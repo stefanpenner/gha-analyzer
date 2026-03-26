@@ -111,6 +111,8 @@ type config struct {
 	trendsConfidence float64
 	trendsMargin     float64
 	noArtifacts      bool
+	convertMode      bool
+	convertFiles     []string
 	// OTel alignment features
 	filterExpr     string // --filter=<expr>
 	errorsOnly     bool   // --errors-only
@@ -126,6 +128,21 @@ func parseArgs(args []string, terminal bool) (config, error) {
 		trendsFormat:     "terminal",
 		trendsConfidence: 0.95,
 		trendsMargin:     0.10,
+	}
+
+	// Check if first arg is "convert" subcommand
+	if len(args) > 0 && args[0] == "convert" {
+		cfg.convertMode = true
+		args = args[1:] // consume the "convert" subcommand
+		// Remaining non-flag args are files to convert
+		for _, a := range args {
+			if a == "help" || a == "--help" || a == "-h" {
+				cfg.showHelp = true
+			} else if !strings.HasPrefix(a, "-") {
+				cfg.convertFiles = append(cfg.convertFiles, a)
+			}
+		}
+		return cfg, nil
 	}
 
 	// Check if first arg is "trends" subcommand
@@ -383,6 +400,58 @@ func main() {
 		// Output results
 		if err := output.OutputTrends(os.Stderr, analysis, cfg.trendsFormat); err != nil {
 			printError(err, "output failed")
+			os.Exit(1)
+		}
+
+		return
+	}
+
+	// Handle convert mode
+	if cfg.convertMode {
+		if cfg.showHelp {
+			printUsage()
+			os.Exit(0)
+		}
+
+		var allSpans []sdktrace.ReadOnlySpan
+
+		if len(cfg.convertFiles) == 0 {
+			// Read from stdin
+			spans, err := otlpfile.Parse(os.Stdin)
+			if err != nil {
+				printError(err, "parsing stdin")
+				os.Exit(1)
+			}
+			allSpans = append(allSpans, spans...)
+		} else {
+			for _, f := range cfg.convertFiles {
+				spans, err := otlpfile.ParseFile(f)
+				if err != nil {
+					printError(err, fmt.Sprintf("parsing %s", f))
+					os.Exit(1)
+				}
+				allSpans = append(allSpans, spans...)
+			}
+		}
+
+		if len(allSpans) == 0 {
+			fmt.Fprintln(os.Stderr, "No spans found in input.")
+			os.Exit(0)
+		}
+
+		exporter, err := otelexport.NewStdoutExporter(os.Stdout)
+		if err != nil {
+			printError(err, "creating stdout exporter")
+			os.Exit(1)
+		}
+
+		ctx := context.Background()
+		if err := exporter.Export(ctx, allSpans); err != nil {
+			printError(err, "exporting spans")
+			os.Exit(1)
+		}
+		if err := exporter.Finish(ctx); err != nil {
+			printError(err, "finishing export")
 			os.Exit(1)
 		}
 
@@ -871,6 +940,7 @@ func printUsage() {
 	fmt.Println("\nUsage:")
 	fmt.Println("  otel-explorer <github_url1> [github_url2...] [token] [flags]")
 	fmt.Println("  otel-explorer <trace_file.json> [flags]")
+	fmt.Println("  otel-explorer convert <file1> [file2...] [flags]")
 	fmt.Println("  otel-explorer trends <owner/repo> [flags]")
 	fmt.Println("\nFlags:")
 	fmt.Println("  --tui                     Force interactive TUI mode (default when terminal is available)")
@@ -903,10 +973,14 @@ func printUsage() {
 	fmt.Println("  --no-sample               Fetch job details for all runs (disables statistical sampling)")
 	fmt.Println("  --confidence=<0-1>        Confidence level for sampling (default: 0.95)")
 	fmt.Println("  --margin=<0-1>            Margin of error for sampling (default: 0.10)")
+	fmt.Println("\nConvert Mode:")
+	fmt.Println("  Converts any supported trace format to OTel JSON on stdout.")
+	fmt.Println("  Supported formats: Chrome Tracing, Jaeger, Zipkin, OTLP proto-JSON, stdouttrace, binary protobuf.")
 	fmt.Println("\nEnvironment Variables:")
 	fmt.Println("  GITHUB_TOKEN              GitHub PAT (alternatively pass as argument)")
 	fmt.Println("\nExamples:")
 	fmt.Println("  otel-explorer https://github.com/owner/repo/pull/123")
+	fmt.Println("  otel-explorer https://github.com/owner/repo/actions/runs/12345")
 	fmt.Println("  otel-explorer https://github.com/owner/repo/commit/sha --perfetto=trace.pftrace")
 	fmt.Println("  otel-explorer https://github.com/owner/repo/pull/123 --no-tui")
 	fmt.Println("  otel-explorer https://github.com/owner/repo/pull/123 --output=stdout")
@@ -924,6 +998,10 @@ func printUsage() {
 	fmt.Println("  otel-explorer trace.json --errors-only       # only show error spans")
 	fmt.Println("  otel-explorer trace.json --lint              # check semconv compliance")
 	fmt.Println("  otel-explorer trace.json --enrichment=rules.json")
+	fmt.Println("  otel-explorer convert chrome-profile.json      # Chrome Tracing → OTel JSON")
+	fmt.Println("  otel-explorer convert spans.json                # any format → OTel JSON")
+	fmt.Println("  otel-explorer convert file1.json file2.json     # multiple files")
+	fmt.Println("  cat trace.json | otel-explorer convert          # stdin → OTel JSON")
 	fmt.Println("  otel-explorer --clear-cache")
 }
 

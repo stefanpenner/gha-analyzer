@@ -3,6 +3,7 @@ package analyzer
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 
 	"github.com/cockroachdb/errors"
@@ -143,6 +144,24 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 		}
 		// Track target branch for branch protection lookup (base branch of PR)
 		protectionTargetBranch = prData.Base.Ref
+	} else if parsed.Type == "run" {
+		runID, err := strconv.ParseInt(parsed.Identifier, 10, 64)
+		if err != nil {
+			return nil, errors.Newf("invalid run ID %q: %w", parsed.Identifier, err)
+		}
+		if reporter != nil {
+			reporter.SetPhase("Fetching workflow run")
+			reporter.SetDetail(parsed.Identifier)
+		}
+		run, err := p.client.FetchWorkflowRun(ctx, parsed.Owner, parsed.Repo, runID)
+		if err != nil {
+			return nil, err
+		}
+		headSHA = run.HeadSHA
+		branchName = run.HeadBranch
+		displayName = fmt.Sprintf("run %s", parsed.Identifier)
+		displayURL = fmt.Sprintf("https://github.com/%s/%s/actions/runs/%s", parsed.Owner, parsed.Repo, parsed.Identifier)
+		runs = []githubapi.WorkflowRun{*run}
 	} else {
 		analyzingCommitURL := fmt.Sprintf("https://github.com/%s/%s/commit/%s", parsed.Owner, parsed.Repo, parsed.Identifier)
 		headSHA = parsed.Identifier

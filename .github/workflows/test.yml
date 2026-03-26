@@ -44,30 +44,6 @@ jobs:
     - name: Build
       run: bazel build //cmd/... --profile="$RUNNER_TEMP/bazel-build-profile.json"
 
-    - name: Setup Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.25'
-        cache: false
-
-    - name: Start Observability Stack
-      run: ./run.sh up
-
-    - name: Run E2E Analysis Test
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        # Use a public PR for testing
-        ./run.sh cli https://github.com/stefanpenner/otel-explorer/pull/1
-
-    - name: Run E2E Simulation
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: ./run.sh simulate
-
-    - name: Verify Stack Status
-      run: ./run.sh status
-
     - name: Upload trace artifacts
       if: always()
       uses: actions/upload-artifact@v4

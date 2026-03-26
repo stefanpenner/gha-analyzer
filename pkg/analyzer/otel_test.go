@@ -96,6 +96,14 @@ func (m *mockGitHubProvider) DownloadArtifact(ctx context.Context, url string) (
 	return args.Get(0).([]byte), args.Error(1)
 }
 
+func (m *mockGitHubProvider) FetchWorkflowRun(ctx context.Context, owner, repo string, runID int64) (*githubapi.WorkflowRun, error) {
+	args := m.Called(ctx, owner, repo, runID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*githubapi.WorkflowRun), args.Error(1)
+}
+
 func TestWorkflowQueueTimeSpan(t *testing.T) {
 	t.Run("emits workflow queue span when RunStartedAt is after CreatedAt", func(t *testing.T) {
 		mockClient := new(mockGitHubProvider)

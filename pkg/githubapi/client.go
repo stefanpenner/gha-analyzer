@@ -560,6 +560,26 @@ func (c *Client) FetchWorkflowRuns(ctx context.Context, baseURL, headSHA string,
 	return fetchWorkflowRunsPaginated(ctx, c, runsURL, nil)
 }
 
+func (c *Client) FetchWorkflowRun(ctx context.Context, owner, repo string, runID int64) (*WorkflowRun, error) {
+	ctx, span := getTracer().Start(ctx, "FetchWorkflowRun", trace.WithAttributes(
+		attribute.String("github.owner", owner),
+		attribute.String("github.repo", repo),
+		attribute.Int64("github.run_id", runID),
+	))
+	defer span.End()
+
+	endpoint := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs/%d", owner, repo, runID)
+	resp, err := fetchWithAuth(ctx, c, endpoint, "")
+	if err != nil {
+		return nil, err
+	}
+	var run WorkflowRun
+	if err := decodeJSON(resp, &run); err != nil {
+		return nil, err
+	}
+	return &run, nil
+}
+
 // FetchRecentWorkflowRuns fetches workflow runs for a repository from the last N days.
 // The optional onPage callback is called after each page with (fetchedSoFar, totalCount).
 func (c *Client) FetchRecentWorkflowRuns(ctx context.Context, owner, repo string, days int, branch, workflow string, onPage func(fetched, total int)) ([]WorkflowRun, error) {
