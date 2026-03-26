@@ -56,7 +56,7 @@ func ParseGitHubURL(raw string) (ParsedGitHubURL, error) {
 
 	parsed, err := url.Parse(input)
 	if err != nil || (parsed.Host != "github.com" && parsed.Host != "www.github.com") {
-		return ParsedGitHubURL{}, fmt.Errorf("Invalid GitHub URL: %s. Expected format: PR: https://github.com/owner/repo/pull/123 or Commit: https://github.com/owner/repo/commit/abc123...", raw)
+		return ParsedGitHubURL{}, fmt.Errorf("Invalid GitHub URL: %s. Expected format: PR: https://github.com/owner/repo/pull/123, Commit: https://github.com/owner/repo/commit/abc123, or Run: https://github.com/owner/repo/actions/runs/12345", raw)
 	}
 
 	parts := strings.FieldsFunc(parsed.Path, func(r rune) bool { return r == '/' })
@@ -66,8 +66,11 @@ func ParseGitHubURL(raw string) (ParsedGitHubURL, error) {
 	if len(parts) == 4 && parts[2] == "commit" {
 		return ParsedGitHubURL{Owner: parts[0], Repo: parts[1], Type: "commit", Identifier: parts[3]}, nil
 	}
+	if len(parts) >= 5 && parts[2] == "actions" && parts[3] == "runs" {
+		return ParsedGitHubURL{Owner: parts[0], Repo: parts[1], Type: "run", Identifier: parts[4]}, nil
+	}
 
-	return ParsedGitHubURL{}, fmt.Errorf("Invalid GitHub URL: %s. Expected format: PR: https://github.com/owner/repo/pull/123 or Commit: https://github.com/owner/repo/commit/abc123...", raw)
+	return ParsedGitHubURL{}, fmt.Errorf("Invalid GitHub URL: %s. Expected format: PR: https://github.com/owner/repo/pull/123, Commit: https://github.com/owner/repo/commit/abc123, or Run: https://github.com/owner/repo/actions/runs/12345", raw)
 }
 
 // ExpandGitHubURL ensures a GitHub URL has the full https://github.com/ prefix.

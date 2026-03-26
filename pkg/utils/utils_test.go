@@ -22,6 +22,9 @@ func TestParseGitHubURL(t *testing.T) {
 		{name: "short pr url", url: "owner/repo/pull/123", expectType: "pr", expectID: "123"},
 		{name: "short commit url", url: "owner/repo/commit/abc123def", expectType: "commit", expectID: "abc123def"},
 		{name: "github.com pr url", url: "github.com/owner/repo/pull/123", expectType: "pr", expectID: "123"},
+		{name: "run url", url: "https://github.com/owner/repo/actions/runs/12345", expectType: "run", expectID: "12345"},
+		{name: "run url with job suffix", url: "https://github.com/owner/repo/actions/runs/12345/job/67890", expectType: "run", expectID: "12345"},
+		{name: "short run url", url: "owner/repo/actions/runs/12345", expectType: "run", expectID: "12345"},
 		{name: "invalid url", url: "https://github.com/owner/repo/issues/123", wantError: true},
 		{name: "completely invalid", url: "not-a-url", wantError: true},
 	}
