@@ -286,9 +286,30 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 		return metrics, traceEvents, jobStartTimes, jobEndTimes, err
 	}
 
+	// Fetch and process previous retry attempts.
+	// The default /jobs endpoint only returns the latest attempt's jobs,
+	// so we must fetch each previous attempt explicitly.
+	if run.RunAttempt > 1 {
+		for attempt := int64(1); attempt < run.RunAttempt; attempt++ {
+			attemptJobsURL := fmt.Sprintf("%s/actions/runs/%d/attempts/%d/jobs?per_page=100", baseURL, run.ID, attempt)
+			attemptJobs, err := client.FetchJobsPaginated(ctx, attemptJobsURL)
+			if err != nil {
+				continue // best-effort: skip attempts we can't fetch
+			}
+			processPreviousAttempt(attempt, attemptJobs, run, processID, earliestTime, owner, repo, identifier, urlIndex, displayURL, sourceType, requiredContexts, builder, &traceEvents, &metrics, &jobStartTimes, &jobEndTimes)
+		}
+	}
+
 	runStart, ok := utils.ParseTime(run.CreatedAt)
 	if !ok {
 		return metrics, traceEvents, jobStartTimes, jobEndTimes, nil
+	}
+	// For retried runs, CreatedAt is from the original attempt. Use RunStartedAt
+	// as the effective start of this attempt so timing reflects this attempt only.
+	if run.RunAttempt > 1 && run.RunStartedAt != "" {
+		if retryStart, ok := utils.ParseTime(run.RunStartedAt); ok {
+			runStart = retryStart
+		}
 	}
 	runEnd, ok := utils.ParseTime(run.UpdatedAt)
 	if !ok {
@@ -296,6 +317,9 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 	}
 
 	workflowURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID)
+	if run.RunAttempt > 1 {
+		workflowURL = fmt.Sprintf("%s/attempts/%d", workflowURL, run.RunAttempt)
+	}
 
 	tid := githubapi.NewTraceID(run.ID, run.RunAttempt)
 	wfSID := githubapi.NewSpanID(run.ID)
@@ -372,7 +396,6 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 	workflowThreadID := 1
 	AddThreadMetadata(&traceEvents, processID, workflowThreadID, "📋 Workflow Overview", intPtr(0))
 
-	workflowURL = fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID)
 	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%s", owner, repo, identifier)
 
 	normalizedRunStart := (runStartTs - earliestTime) * 1000
@@ -557,7 +580,7 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 	var wfLinks []sdktrace.Link
 	if run.RunAttempt > 1 {
 		prevTID := githubapi.NewTraceID(run.ID, run.RunAttempt-1)
-		prevWfSID := githubapi.NewSpanID(run.ID)
+		prevWfSID := previousAttemptSpanID(run.ID, run.RunAttempt-1)
 		wfLinks = append(wfLinks, sdktrace.Link{
 			SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
 				TraceID:    prevTID,
@@ -571,8 +594,13 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 		})
 	}
 
+	wfName := defaultRunName(run)
+	if run.RunAttempt > 1 {
+		wfName = fmt.Sprintf("#%d %s", run.RunAttempt, wfName)
+	}
+
 	builder.Add(tracetest.SpanStub{
-		Name:        defaultRunName(run),
+		Name:        wfName,
 		SpanContext: wfSC,
 		StartTime:   runStart,
 		EndTime:     runEnd,
@@ -583,6 +611,100 @@ func processWorkflowRun(ctx context.Context, run githubapi.WorkflowRun, runIndex
 	})
 
 	return metrics, traceEvents, jobStartTimes, jobEndTimes, nil
+}
+
+// processPreviousAttempt creates a synthetic workflow span and job spans for a previous
+// retry attempt. This surfaces the full retry history in the trace tree.
+func processPreviousAttempt(attempt int64, jobs []githubapi.Job, run githubapi.WorkflowRun, processID int, earliestTime int64, owner, repo, identifier string, urlIndex int, displayURL, sourceType string, requiredContexts []string, builder *SpanBuilder, traceEvents *[]TraceEvent, metrics *Metrics, jobStartTimes, jobEndTimes *[]JobEvent) {
+	if len(jobs) == 0 {
+		return
+	}
+
+	tid := githubapi.NewTraceID(run.ID, attempt)
+	wfSID := previousAttemptSpanID(run.ID, attempt)
+	wfSC := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    tid,
+		SpanID:     wfSID,
+		TraceFlags: trace.FlagsSampled,
+	})
+
+	// Derive workflow timing and conclusion from jobs
+	var wfStart, wfEnd time.Time
+	conclusion := "success"
+	for _, job := range jobs {
+		if t, ok := utils.ParseTime(job.CreatedAt); ok && (wfStart.IsZero() || t.Before(wfStart)) {
+			wfStart = t
+		}
+		if t, ok := utils.ParseTime(job.CompletedAt); ok && (wfEnd.IsZero() || t.After(wfEnd)) {
+			wfEnd = t
+		}
+		if job.Conclusion == "failure" {
+			conclusion = "failure"
+		} else if job.Conclusion == "cancelled" && conclusion != "failure" {
+			conclusion = "cancelled"
+		}
+	}
+	if wfStart.IsZero() {
+		return
+	}
+	if wfEnd.IsZero() {
+		wfEnd = wfStart.Add(time.Millisecond)
+	}
+
+	workflowURL := fmt.Sprintf("https://github.com/%s/%s/actions/runs/%d/attempts/%d", run.Repository.Owner.Login, run.Repository.Name, run.ID, attempt)
+	attemptName := fmt.Sprintf("#%d %s", attempt, defaultRunName(run))
+
+	wfAttrs := []attribute.KeyValue{
+		attribute.String("cicd.pipeline.name", attemptName),
+		attribute.String("cicd.pipeline.run.id", fmt.Sprintf("%d", run.ID)),
+		attribute.String("cicd.pipeline.run.url.full", workflowURL),
+		attribute.String("vcs.repository.url.full", fmt.Sprintf("https://github.com/%s/%s", owner, repo)),
+		attribute.String("type", "workflow"),
+		attribute.Int64("github.run_id", run.ID),
+		attribute.String("github.status", "completed"),
+		attribute.String("github.conclusion", conclusion),
+		attribute.String("github.repo", fmt.Sprintf("%s/%s", owner, repo)),
+		attribute.String("github.url", workflowURL),
+		attribute.Int("github.url_index", urlIndex),
+		attribute.Int64("github.run_attempt", attempt),
+		attribute.String("cicd.pipeline.run.result", ghConclusionToResult(conclusion)),
+		attribute.String("cicd.pipeline.definition", run.Path),
+	}
+
+	// Span link to previous attempt
+	var wfLinks []sdktrace.Link
+	if attempt > 1 {
+		prevTID := githubapi.NewTraceID(run.ID, attempt-1)
+		prevWfSID := previousAttemptSpanID(run.ID, attempt-1)
+		wfLinks = append(wfLinks, sdktrace.Link{
+			SpanContext: trace.NewSpanContext(trace.SpanContextConfig{
+				TraceID:    prevTID,
+				SpanID:     prevWfSID,
+				TraceFlags: trace.FlagsSampled,
+			}),
+			Attributes: []attribute.KeyValue{
+				attribute.String("link.type", "retry"),
+				attribute.Int64("github.previous_attempt", attempt-1),
+			},
+		})
+	}
+
+	builder.Add(tracetest.SpanStub{
+		Name:        attemptName,
+		SpanContext: wfSC,
+		StartTime:   wfStart,
+		EndTime:     wfEnd,
+		Attributes:  wfAttrs,
+		Links:       wfLinks,
+		Status:      ghConclusionToStatus(conclusion),
+	})
+
+	// Process each job under this attempt's workflow span
+	prURL := fmt.Sprintf("https://github.com/%s/%s/pull/%s", owner, repo, identifier)
+	for jobIndex, job := range jobs {
+		jobThreadID := jobIndex + 10
+		processJob(job, jobIndex, run, jobThreadID, processID, earliestTime, metrics, traceEvents, jobStartTimes, jobEndTimes, prURL, urlIndex, displayURL, sourceType, identifier, requiredContexts, builder, tid, wfSC, nil)
+	}
 }
 
 func processJob(job githubapi.Job, jobIndex int, run githubapi.WorkflowRun, jobThreadID, processID int, earliestTime int64, metrics *Metrics, traceEvents *[]TraceEvent, jobStartTimes, jobEndTimes *[]JobEvent, prURL string, urlIndex int, displayURL, sourceType, identifier string, requiredContexts []string, builder *SpanBuilder, traceID trace.TraceID, parentSC trace.SpanContext, annotations []githubapi.Annotation) {
@@ -1010,6 +1132,13 @@ func truncateString(value string, max int) string {
 		return value
 	}
 	return value[:max]
+}
+
+// previousAttemptSpanID returns a deterministic span ID for a previous retry attempt's
+// workflow span. Must differ from NewSpanID(runID) so tree.go's spanID-keyed map
+// doesn't collide with the current attempt.
+func previousAttemptSpanID(runID, attempt int64) trace.SpanID {
+	return githubapi.NewSpanIDFromString(fmt.Sprintf("wf-attempt-%d-%d", runID, attempt))
 }
 
 func defaultRunName(run githubapi.WorkflowRun) string {

@@ -1,6 +1,8 @@
 package analyzer
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -8,7 +10,8 @@ import (
 	"github.com/stefanpenner/otel-explorer/pkg/utils"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"context"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type mockGitHubProvider struct {
@@ -293,6 +296,146 @@ func TestWorkflowQueueTimeSpan(t *testing.T) {
 				t.Fatal("Should not emit workflow queue span when RunStartedAt is empty")
 			}
 		}
+	})
+}
+
+func TestRetriedRun(t *testing.T) {
+	// Shared test fixtures
+	makeRun := func(attempt int64) githubapi.WorkflowRun {
+		return githubapi.WorkflowRun{
+			ID:           300,
+			RunAttempt:   attempt,
+			Name:         "CI",
+			Path:         ".github/workflows/ci.yml",
+			Status:       "completed",
+			Conclusion:   "success",
+			CreatedAt:    "2026-03-18T17:00:00Z",
+			RunStartedAt: "2026-03-18T18:00:00Z",
+			UpdatedAt:    "2026-03-18T19:00:00Z",
+			HeadSHA:      "abc123",
+			Repository: githubapi.RepoRef{
+				Owner: githubapi.RepoOwner{Login: "owner"},
+				Name:  "repo",
+			},
+		}
+	}
+	attempt1Job := githubapi.Job{
+		ID: 401, RunAttempt: 1, Name: "Build", Status: "completed", Conclusion: "failure",
+		CreatedAt: "2026-03-18T17:00:00Z", StartedAt: "2026-03-18T17:05:00Z", CompletedAt: "2026-03-18T17:30:00Z",
+		RunnerName: "runner-1",
+	}
+	attempt2Job := githubapi.Job{
+		ID: 402, RunAttempt: 2, Name: "Build", Status: "completed", Conclusion: "success",
+		CreatedAt: "2026-03-18T18:00:00Z", StartedAt: "2026-03-18T18:05:00Z", CompletedAt: "2026-03-18T18:30:00Z",
+		RunnerName: "runner-2",
+	}
+
+	setupMock := func(run githubapi.WorkflowRun) *mockGitHubProvider {
+		m := new(mockGitHubProvider)
+		jobsURL := "https://api.github.com/repos/owner/repo/actions/runs/300/jobs?per_page=100"
+		m.On("FetchJobsPaginated", mock.Anything, jobsURL).Return([]githubapi.Job{attempt2Job}, nil)
+		if run.RunAttempt > 1 {
+			for a := int64(1); a < run.RunAttempt; a++ {
+				url := fmt.Sprintf("https://api.github.com/repos/owner/repo/actions/runs/300/attempts/%d/jobs?per_page=100", a)
+				m.On("FetchJobsPaginated", mock.Anything, url).Return([]githubapi.Job{attempt1Job}, nil)
+			}
+		}
+		m.On("FetchCheckRunsForCommit", mock.Anything, "owner", "repo", "abc123").Return([]githubapi.CheckRun{}, nil)
+		m.On("FetchRunTiming", mock.Anything, "owner", "repo", int64(300)).Return((*githubapi.RunTiming)(nil), nil)
+		m.On("ListArtifacts", mock.Anything, "owner", "repo", int64(300)).Return([]githubapi.Artifact{}, nil)
+		return m
+	}
+
+	callProcess := func(run githubapi.WorkflowRun, mock *mockGitHubProvider, builder *SpanBuilder) error {
+		createdAt, _ := utils.ParseTime(run.CreatedAt)
+		_, _, _, _, err := processWorkflowRun(
+			context.Background(), run, 0, 1001, createdAt.UnixMilli(),
+			"owner", "repo", "1", 0, "https://github.com/owner/repo/pull/1", "pr",
+			nil, 0, 0, 0, mock, nil, builder, NewTraceEmitter(builder), AnalyzeOptions{NoArtifacts: true},
+		)
+		return err
+	}
+
+	// Helper to extract workflow spans keyed by trace ID
+	type wfInfo struct {
+		name, conclusion, url string
+	}
+	workflowSpans := func(spans []sdktrace.ReadOnlySpan) map[trace.TraceID]wfInfo {
+		result := map[trace.TraceID]wfInfo{}
+		for _, s := range spans {
+			attrs := map[string]interface{}{}
+			for _, a := range s.Attributes() {
+				attrs[string(a.Key)] = a.Value.AsInterface()
+			}
+			if attrs["type"] == "workflow" {
+				result[s.SpanContext().TraceID()] = wfInfo{
+					name:       s.Name(),
+					conclusion: attrs["github.conclusion"].(string),
+					url:        attrs["github.url"].(string),
+				}
+			}
+		}
+		return result
+	}
+
+	t.Run("fetches previous attempts as separate workflow spans", func(t *testing.T) {
+		run := makeRun(2)
+		mock := setupMock(run)
+		builder := &SpanBuilder{}
+		assert.NoError(t, callProcess(run, mock, builder))
+
+		wfs := workflowSpans(builder.Spans())
+		assert.Len(t, wfs, 2)
+
+		a1 := wfs[githubapi.NewTraceID(300, 1)]
+		assert.Equal(t, "#1 CI", a1.name)
+		assert.Equal(t, "failure", a1.conclusion)
+		assert.Contains(t, a1.url, "/attempts/1")
+
+		a2 := wfs[githubapi.NewTraceID(300, 2)]
+		assert.Equal(t, "#2 CI", a2.name)
+		assert.Equal(t, "success", a2.conclusion)
+		assert.Contains(t, a2.url, "/attempts/2")
+	})
+
+	t.Run("current attempt uses RunStartedAt not CreatedAt", func(t *testing.T) {
+		run := makeRun(2)
+		mock := setupMock(run)
+		builder := &SpanBuilder{}
+		assert.NoError(t, callProcess(run, mock, builder))
+
+		for _, s := range builder.Spans() {
+			if s.SpanContext().TraceID() == githubapi.NewTraceID(300, 2) {
+				attrs := map[string]interface{}{}
+				for _, a := range s.Attributes() {
+					attrs[string(a.Key)] = a.Value.AsInterface()
+				}
+				if attrs["type"] == "workflow" {
+					// RunStartedAt is 18:00, CreatedAt is 17:00
+					// Workflow span should start at RunStartedAt for retries
+					expected, _ := utils.ParseTime("2026-03-18T18:00:00Z")
+					assert.Equal(t, expected, s.StartTime(), "retried run should start at RunStartedAt")
+				}
+			}
+		}
+	})
+
+	t.Run("non-retried run has no attempt prefix", func(t *testing.T) {
+		run := makeRun(1)
+		m := new(mockGitHubProvider)
+		jobsURL := "https://api.github.com/repos/owner/repo/actions/runs/300/jobs?per_page=100"
+		m.On("FetchJobsPaginated", mock.Anything, jobsURL).Return([]githubapi.Job{attempt2Job}, nil)
+		m.On("FetchCheckRunsForCommit", mock.Anything, "owner", "repo", "abc123").Return([]githubapi.CheckRun{}, nil)
+		m.On("FetchRunTiming", mock.Anything, "owner", "repo", int64(300)).Return((*githubapi.RunTiming)(nil), nil)
+		m.On("ListArtifacts", mock.Anything, "owner", "repo", int64(300)).Return([]githubapi.Artifact{}, nil)
+		builder := &SpanBuilder{}
+		assert.NoError(t, callProcess(run, m, builder))
+
+		wfs := workflowSpans(builder.Spans())
+		assert.Len(t, wfs, 1)
+		wf := wfs[githubapi.NewTraceID(300, 1)]
+		assert.Equal(t, "CI", wf.name, "non-retried run should have no #N prefix")
+		assert.NotContains(t, wf.url, "/attempts/", "non-retried run should not have attempt URL")
 	})
 }
 

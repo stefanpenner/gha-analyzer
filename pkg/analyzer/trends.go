@@ -568,6 +568,10 @@ func fetchJobsForRuns(ctx context.Context, client githubapi.GitHubProvider, runD
 			continue
 		}
 		for _, job := range jobs {
+			// Skip jobs from previous retry attempts to avoid double-counting
+			if job.RunAttempt != 0 && job.RunAttempt != run.RunAttempt {
+				continue
+			}
 			createdAt, _ := utils.ParseTime(job.CreatedAt)
 			startedAt, _ := utils.ParseTime(job.StartedAt)
 			completedAt, _ := utils.ParseTime(job.CompletedAt)

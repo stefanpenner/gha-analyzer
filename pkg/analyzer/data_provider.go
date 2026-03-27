@@ -325,8 +325,16 @@ func (p *DataProvider) Fetch(ctx context.Context, githubURL string, urlIndex int
 					return
 				}
 
+				currentAttempt := r.RunAttempt
+				if currentAttempt == 0 {
+					currentAttempt = 1
+				}
 				var runCompute int64
 				for _, job := range jobs {
+					// Skip jobs from previous retry attempts to avoid double-counting
+					if job.RunAttempt != 0 && job.RunAttempt != currentAttempt {
+						continue
+					}
 					if start, ok := utils.ParseTime(job.StartedAt); ok {
 						if end, ok := utils.ParseTime(job.CompletedAt); ok {
 							if end.After(start) {
