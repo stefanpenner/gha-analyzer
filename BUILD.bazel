@@ -1,7 +1,15 @@
+load("@bazel_env.bzl", "bazel_env")
 load("@gazelle//:def.bzl", "gazelle")
 
 # gazelle:prefix github.com/stefanpenner/otel-explorer
 gazelle(name = "gazelle")
+
+bazel_env(
+    name = "bazel_env",
+    tools = {
+        "go": "@rules_go//go",
+    },
+)
 
 # Convenience alias so `bazel run //:otel-explorer` works from the repo root.
 alias(
